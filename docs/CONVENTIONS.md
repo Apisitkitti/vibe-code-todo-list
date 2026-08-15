@@ -14,6 +14,70 @@ existing code or from your own habits.
 | Route segment | kebab-case | `src/app/sign-in/page.tsx`, `/todo-list` |
 | Function / variable | camelCase | `getTodoList` |
 
+## Import order
+
+Three groups, in this order, separated by exactly one blank line:
+
+1. **React** — `react`, `react-dom`
+2. **Libraries** — everything from `node_modules`: HeroUI, next, zod,
+   react-hook-form, axios, dayjs…
+3. **Ours** — `@/…` aliases first, then relative `./…` paths
+
+```tsx
+import { useEffect, useState } from "react";
+
+import { Button, Card, toast } from "@heroui/react";
+import { useRouter } from "next/navigation";
+
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { getErrorMessage } from "@/lib/getErrorMessage";
+
+import { TodoRow } from "./TodoRow";
+```
+
+Type-only imports sit in the group they belong to — a type from a library
+goes in the library group, not in a fourth group of its own.
+
+## Component body order
+
+Inside a component, top to bottom:
+
+1. **State** — `useState`, `useRef`, `useOverlayState`, and any other hook
+   that holds state. All of it together, at the very top.
+2. **Variables** — derived values, destructuring, constants computed from
+   props or state.
+3. **Functions** — handlers and local helpers.
+4. **`useEffect`** — kept next to the early returns and the `return`, at the
+   bottom of the body.
+
+```tsx
+export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
+  // 1. state
+  const [todoList, setTodoList] = useState<TodoItemData[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // 2. variables
+  const { status, priority } = filters;
+  const hasTodos = todoList.length > 0;
+
+  // 3. functions
+  const reload = () => { … };
+  const handleDelete = async () => { … };
+
+  // 4. effects, sitting with the returns
+  useEffect(() => { … }, [status, priority]);
+
+  if (isLoading) return <TodoListSkeleton />;
+
+  return ( … );
+};
+```
+
+The point of putting effects last is that an effect is about *what happens
+around the render*, so it reads next to the render rather than buried among
+the handlers. Everything an effect calls is already defined above it, which
+also keeps arrow consts (not hoisted) in a valid order.
+
 ## Arrow functions everywhere
 
 **Every function in this app is an arrow function.** No `function` keyword

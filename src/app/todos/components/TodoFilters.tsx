@@ -42,10 +42,11 @@ export interface TodoFiltersProps {
  * needs to read the search params itself.
  */
 export const TodoFilters = ({ filters }: TodoFiltersProps) => {
-  const router = useRouter();
-  const [, startTransition] = useTransition();
   const [query, setQuery] = useState(filters.query);
   const [lastAppliedQuery, setLastAppliedQuery] = useState(filters.query);
+  const [, startTransition] = useTransition();
+
+  const router = useRouter();
 
   // Adjusting state during render rather than in an effect: the search box
   // follows the URL when navigation changes it from outside this component.
