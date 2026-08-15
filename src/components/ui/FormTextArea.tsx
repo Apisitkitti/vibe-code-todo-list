@@ -1,0 +1,48 @@
+"use client";
+
+import { Description, FieldError, Label, TextArea, TextField } from "@heroui/react";
+
+export interface FormTextAreaProps {
+  name: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onBlur?: () => void;
+  placeholder?: string;
+  description?: string;
+  rows?: number;
+  isDisabled?: boolean;
+}
+
+/**
+ * The multi-line counterpart to `FormTextField`. `TextArea` is a standalone
+ * input element in HeroUI v3, so it composes *inside* `TextField` rather than
+ * replacing it.
+ */
+export const FormTextArea = ({
+  name,
+  label,
+  value,
+  onChange,
+  onBlur,
+  placeholder,
+  description,
+  rows = 3,
+  isDisabled = false,
+}: FormTextAreaProps) => {
+  return (
+    <TextField
+      name={name}
+      value={value}
+      onChange={onChange}
+      onBlur={onBlur}
+      isDisabled={isDisabled}
+      className="flex flex-col gap-1.5"
+    >
+      <Label>{label}</Label>
+      <TextArea rows={rows} placeholder={placeholder} />
+      {description ? <Description>{description}</Description> : null}
+      <FieldError />
+    </TextField>
+  );
+};
