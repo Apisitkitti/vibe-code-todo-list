@@ -193,6 +193,10 @@ As a new signed-in user with no todos, I want a clear empty state, so that I kno
 - Toggle complete/incomplete.
 - Delete with a confirmation dialog.
 - Filter by status (all/active/completed) and by priority (all/low/medium/high), combinable, reflected in the URL.
+- Text search over the todo list, combinable with the filters and reflected in the URL.
+- Undo on the completion toggle, offered from its toast. Toggling is the one
+  mutation with no confirmation dialog, so undo is what makes it reversible;
+  it re-runs the same scoped endpoint rather than taking a shortcut.
 - Empty state and no-results state.
 - Responsive mobile-first layout, dark mode, keyboard accessibility.
 
@@ -207,9 +211,9 @@ As a new signed-in user with no todos, I want a clear empty state, so that I kno
 - File or image attachments.
 - Email verification flow, password reset / forgot password, and account deletion.
 - Profile editing (name, avatar, password change).
-- Search, sorting controls, drag-and-drop reordering, and pagination or infinite scroll.
+- Sorting controls, drag-and-drop reordering, and pagination or infinite scroll.
 - Bulk actions (complete all, delete all, clear completed).
-- Undo / trash / archive / soft delete.
+- Trash / archive / soft delete.
 - Offline support, PWA install, native apps.
 - Calendar view, analytics, streaks, or any reporting.
 - Public API, data import/export, third-party integrations.
