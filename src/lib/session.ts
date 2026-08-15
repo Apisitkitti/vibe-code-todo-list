@@ -1,6 +1,7 @@
+import { cache } from "react";
+
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { cache } from "react";
 
 import { auth } from "@/lib/auth";
 import { PATHNAME_HEADER, signInPathWithNext } from "@/lib/routes";
