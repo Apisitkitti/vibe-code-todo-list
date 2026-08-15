@@ -65,11 +65,32 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
   const [serverFieldErrors, setServerFieldErrors] =
     useState<TodoFieldErrors | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const [wasOpen, setWasOpen] = useState(state.isOpen);
+
+  // Escape and the close trigger go through `state` directly rather than
+  // `closeForm`, so the reset is anchored to the dialog actually closing.
+  // Adjusted during render rather than in an effect, the same way
+  // `TodoFilters` follows the URL.
+  if (wasOpen !== state.isOpen) {
+    setWasOpen(state.isOpen);
+
+    if (!state.isOpen) setServerFieldErrors(null);
+  }
 
   const closeConfirm = () => {
     if (isPending) return;
 
     setPendingValues(null);
+  };
+
+  /**
+   * This component stays mounted between openings, and two consecutive creates
+   * share the same `key`, so a stale `serverFieldErrors` would render on the
+   * next brand-new form as though it had already been submitted (review m-1).
+   */
+  const closeForm = () => {
+    setServerFieldErrors(null);
+    state.close();
   };
 
   const handleConfirm = async () => {
@@ -91,8 +112,7 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
       );
 
       setPendingValues(null);
-      setServerFieldErrors(null);
-      state.close();
+      closeForm();
       onSaved();
     } catch (error) {
       const fieldErrors = readFieldErrors(error);
@@ -151,7 +171,7 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
                   variant="tertiary"
                   className="min-h-11 w-full sm:w-auto"
                   isDisabled={isPending}
-                  onPress={state.close}
+                  onPress={closeForm}
                 >
                   {CANCEL_LABEL}
                 </Button>

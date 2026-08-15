@@ -58,6 +58,21 @@ export type TodoFormInput = z.input<typeof todoFormSchema>;
 /** Server-reported errors, keyed by field name so `Form` can wire them up. */
 export type TodoFieldErrors = Partial<Record<keyof TodoFormValues, string>>;
 
+/**
+ * The form's field names, in one place so the server's error mapping and the
+ * client's error reading cannot drift apart. Typed against the schema, so
+ * renaming a field here is a compile error rather than a silent mismatch.
+ */
+export const TODO_FIELD_NAMES = [
+  "title",
+  "note",
+  "priority",
+  "dueAt",
+] as const satisfies readonly (keyof TodoFormValues)[];
+
+export const isTodoFieldName = (value: string): value is keyof TodoFormValues =>
+  (TODO_FIELD_NAMES as readonly string[]).includes(value);
+
 export const DEFAULT_TODO_FORM_VALUES: TodoFormValues = {
   title: "",
   note: "",
