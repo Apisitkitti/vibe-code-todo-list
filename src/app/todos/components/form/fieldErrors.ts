@@ -1,9 +1,8 @@
 import { isAxiosError } from "axios";
 
-import type { TodoFieldErrors } from "./schema";
+import { TODO_FIELD_NAMES, type TodoFieldErrors } from "./schema";
 
 const BAD_REQUEST_STATUS = 400;
-const FIELD_NAMES = ["title", "note", "priority", "dueAt"] as const;
 
 /**
  * Validation failures arrive as a `400` body rather than a return value now
@@ -24,7 +23,7 @@ export const readFieldErrors = (error: unknown): TodoFieldErrors | null => {
   const source = body.fieldErrors as Record<string, unknown>;
   const fieldErrors: TodoFieldErrors = {};
 
-  for (const field of FIELD_NAMES) {
+  for (const field of TODO_FIELD_NAMES) {
     const message = source[field];
 
     if (typeof message === "string" && message !== "") {

@@ -3,7 +3,10 @@ import type { ZodError } from "zod";
 
 import { NextResponse } from "next/server";
 
-import type { TodoFieldErrors } from "@/app/todos/components/form";
+import {
+  isTodoFieldName,
+  type TodoFieldErrors,
+} from "@/app/todos/components/form";
 import { TODO_NOT_FOUND_MESSAGE, type TodoItemData } from "@/lib/todo";
 
 /**
@@ -24,16 +27,24 @@ export const toTodoItemData = (todo: Todo): TodoItemData => {
   };
 };
 
-/** First message per field, so each input shows one error. */
+/**
+ * First message per field, so each input shows one error.
+ *
+ * Fields are matched against the form's own list rather than cast into it —
+ * a zod path the form does not know about (the toggle's `completed`, or a
+ * renamed field) is dropped here instead of being typed as a form error and
+ * discovered by the client (review m-6).
+ */
 export const toFieldErrors = (error: ZodError): TodoFieldErrors => {
   const fieldErrors: TodoFieldErrors = {};
 
   for (const issue of error.issues) {
     const field = issue.path[0];
 
-    if (typeof field === "string" && !(field in fieldErrors)) {
-      fieldErrors[field as keyof TodoFieldErrors] = issue.message;
-    }
+    if (typeof field !== "string" || !isTodoFieldName(field)) continue;
+    if (field in fieldErrors) continue;
+
+    fieldErrors[field] = issue.message;
   }
 
   return fieldErrors;

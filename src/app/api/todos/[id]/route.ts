@@ -15,11 +15,19 @@ import {
   unauthorizedResponse,
 } from "../response";
 
-/** The toggle sends only this; it must never touch the other fields. */
-const todoToggleSchema = z.object({ completed: z.boolean() });
+/**
+ * The toggle sends only this; it must never touch the other fields.
+ *
+ * `strict()` matters: dispatching on the mere presence of `completed` meant a
+ * body that mixed toggle and form fields was treated as a toggle and its other
+ * fields were silently dropped — a 200 that looked like a successful save
+ * (review m-5). Mixed bodies now fail parsing and fall through to the form
+ * branch, which rejects them properly.
+ */
+const todoToggleSchema = z.object({ completed: z.boolean() }).strict();
 
 const isToggleBody = (body: unknown): boolean => {
-  return typeof body === "object" && body !== null && "completed" in body;
+  return todoToggleSchema.safeParse(body).success;
 };
 
 /**
