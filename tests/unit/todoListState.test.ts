@@ -2,7 +2,11 @@ import { describe, expect, test } from "vitest";
 
 import type { TodoItemData, TodoListResult } from "@/lib/todo";
 import { groupTodos } from "@/lib/todoGroups";
-import { replaceTodo, setTodoCompleted } from "@/lib/todoListState";
+import {
+  applyCompletion,
+  replaceTodo,
+  todoMatchesStatusFilter,
+} from "@/lib/todoListState";
 
 /**
  * The optimistic toggle's local half (review m-7, PM backlog #3).
@@ -10,8 +14,8 @@ import { replaceTodo, setTodoCompleted } from "@/lib/todoListState";
  * `docs/REVIEW.md` E-2 is explicit about why this file exists: *"optimistic
  * state has exactly one failure mode — the revert — and QA has no fault
  * injection. The moment we apply changes locally, we have a correctness
- * property with no verifier."* Playwright now injects the 500 and checks what
- * the user is left looking at; this file checks the thing a browser cannot be
+ * property with no verifier."* Playwright injects the 500 and checks what the
+ * user is left looking at; this file checks the things a browser cannot be
  * asked about — that the rollback restores the exact value, the exact count
  * and the exact section, and that it is safe to run when there is nothing to
  * roll back.
@@ -61,11 +65,28 @@ const sectionOf = (result: TodoListResult, id: string) =>
     group.todos.some((item) => item.id === id),
   )?.id;
 
-describe("setTodoCompleted — the flip", () => {
+describe("todoMatchesStatusFilter", () => {
+  test("the All filter shows both", () => {
+    expect(todoMatchesStatusFilter(true, "all")).toBe(true);
+    expect(todoMatchesStatusFilter(false, "all")).toBe(true);
+  });
+
+  test("Active shows only incomplete todos", () => {
+    expect(todoMatchesStatusFilter(false, "active")).toBe(true);
+    expect(todoMatchesStatusFilter(true, "active")).toBe(false);
+  });
+
+  test("Completed shows only complete todos", () => {
+    expect(todoMatchesStatusFilter(true, "completed")).toBe(true);
+    expect(todoMatchesStatusFilter(false, "completed")).toBe(false);
+  });
+});
+
+describe("applyCompletion — the flip", () => {
   test("marks the row complete without waiting for anything", () => {
     const before = listOf([todo({ id: "a" }), todo({ id: "b" })]);
 
-    const after = setTodoCompleted(before, "a", true);
+    const after = applyCompletion(before, "a", true, "all");
 
     expect(completedOf(after, "a")).toBe(true);
     expect(completedOf(after, "b")).toBe(false);
@@ -74,19 +95,19 @@ describe("setTodoCompleted — the flip", () => {
   test("moves the completed count with the box, so the header agrees", () => {
     const before = listOf([todo({ id: "a" }), todo({ id: "b" })]);
 
-    expect(setTodoCompleted(before, "a", true).completedCount).toBe(1);
+    expect(applyCompletion(before, "a", true, "all").completedCount).toBe(1);
   });
 
   test("un-completing takes the count back down", () => {
     const before = listOf([todo({ id: "a", completed: true })]);
 
-    expect(setTodoCompleted(before, "a", false).completedCount).toBe(0);
+    expect(applyCompletion(before, "a", false, "all").completedCount).toBe(0);
   });
 
   test("never touches the total — a toggle creates and destroys nothing", () => {
     const before = listOf([todo({ id: "a" }), todo({ id: "b" })]);
 
-    expect(setTodoCompleted(before, "a", true).totalCount).toBe(2);
+    expect(applyCompletion(before, "a", true, "all").totalCount).toBe(2);
   });
 
   test("leaves every row where the server put it", () => {
@@ -98,13 +119,17 @@ describe("setTodoCompleted — the flip", () => {
 
     // Ordering is the server's (`TODO_LIST_ORDER_BY`); the client only cuts
     // sections. A flip must not re-sequence the page under the user.
-    expect(idsOf(setTodoCompleted(before, "b", true))).toEqual(["a", "b", "c"]);
+    expect(idsOf(applyCompletion(before, "b", true, "all"))).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
   });
 
   test("does not mutate the result it was given", () => {
     const before = listOf([todo({ id: "a" })]);
 
-    setTodoCompleted(before, "a", true);
+    applyCompletion(before, "a", true, "all");
 
     expect(before.completedCount).toBe(0);
     expect(before.todos[0].completed).toBe(false);
@@ -114,17 +139,115 @@ describe("setTodoCompleted — the flip", () => {
     const before = listOf([todo({ id: "a" })]);
 
     // Identity, not equality: a filtered-out row must not re-render the list.
-    expect(setTodoCompleted(before, "missing", true)).toBe(before);
+    expect(applyCompletion(before, "missing", true, "all")).toBe(before);
   });
 
   test("writing the value a row already holds is a no-op", () => {
     const before = listOf([todo({ id: "a", completed: true })]);
 
-    expect(setTodoCompleted(before, "a", true)).toBe(before);
+    expect(applyCompletion(before, "a", true, "all")).toBe(before);
   });
 });
 
-describe("setTodoCompleted — the revert", () => {
+describe("applyCompletion — under a status filter", () => {
+  /*
+    `docs/PRD.md` US-07 (ruling) and US-10. A list under `Active` shows only
+    active todos at *every moment*, not only after a reload — a row kept on
+    screen because the viewer just pressed it makes one filter mean two
+    different things for two users looking at the same data.
+  */
+
+  test("completing a todo under Active drops it from the list at once", () => {
+    const before = listOf([todo({ id: "a" }), todo({ id: "b" })]);
+
+    const after = applyCompletion(before, "a", true, "active");
+
+    expect(idsOf(after)).toEqual(["b"]);
+  });
+
+  test("un-completing a todo under Completed drops it from the list at once", () => {
+    const before = listOf([
+      todo({ id: "a", completed: true }),
+      todo({ id: "b", completed: true }),
+    ]);
+
+    expect(idsOf(applyCompletion(before, "a", false, "completed"))).toEqual([
+      "b",
+    ]);
+  });
+
+  test("the counts still move, because they describe the account not the page", () => {
+    const before = listOf([todo({ id: "a" }), todo({ id: "b" })]);
+
+    const after = applyCompletion(before, "a", true, "active");
+
+    // The row is gone from a filtered page whose counts were never about that
+    // page: `GET /api/todos` counts without the filter clauses.
+    expect(after.completedCount).toBe(1);
+    expect(after.totalCount).toBe(2);
+  });
+
+  test("no other row moves when one is removed", () => {
+    const before = listOf([
+      todo({ id: "a" }),
+      todo({ id: "b" }),
+      todo({ id: "c" }),
+    ]);
+
+    expect(idsOf(applyCompletion(before, "b", true, "active"))).toEqual([
+      "a",
+      "c",
+    ]);
+  });
+
+  test("the row leaves no section behind under Active", () => {
+    const before = listOf([
+      todo({ id: "overdue", dueAt: dueAt("2026-08-13") }),
+      todo({ id: "undated" }),
+    ]);
+
+    const after = applyCompletion(before, "overdue", true, "active");
+
+    // US-10: under Active the `Completed` heading never appears at any point.
+    expect(groupTodos(after.todos, NOW).map((group) => group.id)).toEqual([
+      "no-date",
+    ]);
+  });
+
+  test("emptying the list under Active leaves an empty page, not a zeroed account", () => {
+    const before = listOf([todo({ id: "a" })]);
+
+    const after = applyCompletion(before, "a", true, "active");
+
+    // `totalCount` is what decides between "Nothing here yet" and
+    // "All caught up" (US-11 / US-10), so it must survive the removal.
+    expect(after.todos).toEqual([]);
+    expect(after.totalCount).toBe(1);
+    expect(after.completedCount).toBe(1);
+  });
+
+  test("a row the filter still wants stays in place", () => {
+    const before = listOf([todo({ id: "a", completed: true })]);
+
+    // Only reachable as the in-place revert of a flip under `Completed`.
+    const after = applyCompletion(before, "a", true, "completed");
+
+    expect(after).toBe(before);
+  });
+
+  test("a row already gone cannot be put back by this function", () => {
+    const before = listOf([todo({ id: "b" })]);
+
+    /*
+      Invariant 2. Only the server knows the §2 place a row returns to, so
+      `TodoListScreen` refetches for that; silently appending it here would put
+      it at an index no ordering rule chose.
+    */
+    expect(applyCompletion(before, "a", false, "active")).toBe(before);
+  });
+});
+
+describe("applyCompletion — the revert", () => {
   /*
     The reason the whole design is allowed to be optimistic. Each test below
     presses, then rolls back, and asserts the list is indistinguishable from
@@ -134,8 +257,8 @@ describe("setTodoCompleted — the revert", () => {
   test("a refused completion puts the box back and the count back", () => {
     const before = listOf([todo({ id: "a" }), todo({ id: "b" })]);
 
-    const optimistic = setTodoCompleted(before, "a", true);
-    const reverted = setTodoCompleted(optimistic, "a", false);
+    const optimistic = applyCompletion(before, "a", true, "all");
+    const reverted = applyCompletion(optimistic, "a", false, "all");
 
     expect(completedOf(reverted, "a")).toBe(false);
     expect(reverted.completedCount).toBe(before.completedCount);
@@ -145,8 +268,8 @@ describe("setTodoCompleted — the revert", () => {
   test("a refused un-completion puts the tick back", () => {
     const before = listOf([todo({ id: "a", completed: true })]);
 
-    const optimistic = setTodoCompleted(before, "a", false);
-    const reverted = setTodoCompleted(optimistic, "a", true);
+    const optimistic = applyCompletion(before, "a", false, "all");
+    const reverted = applyCompletion(optimistic, "a", true, "all");
 
     expect(completedOf(reverted, "a")).toBe(true);
     expect(reverted.completedCount).toBe(1);
@@ -158,10 +281,11 @@ describe("setTodoCompleted — the revert", () => {
       todo({ id: "b", completed: true }),
     ]);
 
-    const reverted = setTodoCompleted(
-      setTodoCompleted(before, "a", true),
+    const reverted = applyCompletion(
+      applyCompletion(before, "a", true, "all"),
       "a",
       false,
+      "all",
     );
 
     // Not just `completed`: a rollback that quietly dropped the note or the
@@ -172,17 +296,16 @@ describe("setTodoCompleted — the revert", () => {
   test("reverting something that never applied is harmless", () => {
     const before = listOf([todo({ id: "a" })]);
 
-    // `runToggle` reverts unconditionally in `catch`, including when the
-    // request failed before the flip could matter. That must not double-count.
-    expect(setTodoCompleted(before, "a", false)).toBe(before);
-    expect(setTodoCompleted(before, "a", false).completedCount).toBe(0);
+    // `runToggle` reverts in `catch` without checking whether the flip landed.
+    // That must not double-count.
+    expect(applyCompletion(before, "a", false, "all")).toBe(before);
   });
 
   test("reverting twice does not drive the count below zero", () => {
     const before = listOf([todo({ id: "a", completed: true })]);
 
-    const once = setTodoCompleted(before, "a", false);
-    const twice = setTodoCompleted(once, "a", false);
+    const once = applyCompletion(before, "a", false, "all");
+    const twice = applyCompletion(once, "a", false, "all");
 
     expect(twice.completedCount).toBe(0);
   });
@@ -202,16 +325,32 @@ describe("setTodoCompleted — the revert", () => {
 
     expect(sectionOf(before, "overdue")).toBe("overdue");
 
-    const optimistic = setTodoCompleted(before, "overdue", true);
+    const optimistic = applyCompletion(before, "overdue", true, "all");
 
     expect(sectionOf(optimistic, "overdue")).toBe("completed");
 
-    const reverted = setTodoCompleted(optimistic, "overdue", false);
+    const reverted = applyCompletion(optimistic, "overdue", false, "all");
 
     expect(sectionOf(reverted, "overdue")).toBe("overdue");
     expect(groupTodos(reverted.todos, NOW).map((group) => group.id)).toEqual(
       groupTodos(before.todos, NOW).map((group) => group.id),
     );
+  });
+
+  test("a row removed by a filter is not restored locally — that is a refetch", () => {
+    const before = listOf([todo({ id: "a" }), todo({ id: "b" })]);
+
+    const optimistic = applyCompletion(before, "a", true, "active");
+    const attempted = applyCompletion(optimistic, "a", false, "active");
+
+    /*
+      Deliberate, and the reason `runToggle` calls `reloadSilently()` on this
+      path: putting the row back at index 0 because that is where it used to be
+      would be a guess at §2's answer. The count also stays optimistic here —
+      the refetch corrects both together.
+    */
+    expect(attempted).toBe(optimistic);
+    expect(idsOf(attempted)).toEqual(["b"]);
   });
 });
 
@@ -220,7 +359,7 @@ describe("replaceTodo — reconciling with the server", () => {
     const before = listOf([todo({ id: "a", title: "stale" }), todo({ id: "b" })]);
     const saved = todo({ id: "a", title: "authoritative", completed: true });
 
-    const after = replaceTodo(setTodoCompleted(before, "a", true), saved);
+    const after = replaceTodo(applyCompletion(before, "a", true, "all"), saved);
 
     expect(after.todos[0]).toEqual(saved);
     expect(idsOf(after)).toEqual(["a", "b"]);
@@ -230,14 +369,22 @@ describe("replaceTodo — reconciling with the server", () => {
     const before = listOf([todo({ id: "a" })]);
 
     const after = replaceTodo(
-      setTodoCompleted(before, "a", true),
+      applyCompletion(before, "a", true, "all"),
       todo({ id: "a", completed: true }),
     );
 
     expect(after.completedCount).toBe(1);
   });
 
-  test("corrects the count when the server disagrees with the guess", () => {
+  /*
+    The correction below is `replaceTodo`'s reason for existing, and review
+    MA-3 found it under-tested: zeroing the delta reddened one case out of
+    nineteen, against four for the equivalent break in `applyCompletion`. The
+    three tests that follow are aimed at that one line from three directions —
+    upward, downward, and the mid-flight reload the line actually exists for.
+  */
+
+  test("corrects the count upward when the server disagrees with the guess", () => {
     // The row was already complete server-side — a duplicate write, or a flip
     // from another tab. The response is the truth and the count follows it.
     const before = listOf([todo({ id: "a" })]);
@@ -246,6 +393,55 @@ describe("replaceTodo — reconciling with the server", () => {
 
     expect(after.completedCount).toBe(1);
     expect(completedOf(after, "a")).toBe(true);
+  });
+
+  test("corrects the count downward when the server says the row is not complete", () => {
+    const before = listOf([
+      todo({ id: "a", completed: true }),
+      todo({ id: "b", completed: true }),
+    ]);
+
+    expect(before.completedCount).toBe(2);
+
+    const after = replaceTodo(before, todo({ id: "a", completed: false }));
+
+    expect(after.completedCount).toBe(1);
+    expect(completedOf(after, "a")).toBe(false);
+  });
+
+  test("a reload landing mid-flight still reconciles to exactly one", () => {
+    /*
+      The race the by-difference correction is *for* (review MA-2). A `GET`
+      lands between the press and the response and clobbers the optimistic
+      flip with the pre-write truth. `replaceTodo` then measures against that
+      reloaded row, not against the guess, and still moves the count by one.
+      An assumed `+1` on top of the optimistic `+1` would double-count.
+    */
+    const pressed = applyCompletion(
+      listOf([todo({ id: "a" }), todo({ id: "b" })]),
+      "a",
+      true,
+      "all",
+    );
+
+    expect(pressed.completedCount).toBe(1);
+
+    // The refetch arrives, carrying the state from before the write committed.
+    const reloaded = listOf([todo({ id: "a" }), todo({ id: "b" })]);
+
+    expect(reloaded.completedCount).toBe(0);
+
+    const after = replaceTodo(reloaded, todo({ id: "a", completed: true }));
+
+    expect(after.completedCount).toBe(1);
+  });
+
+  test("never moves the count when the row already agrees with the response", () => {
+    const before = listOf([todo({ id: "a", completed: true })]);
+
+    const after = replaceTodo(before, todo({ id: "a", completed: true }));
+
+    expect(after.completedCount).toBe(1);
   });
 
   test("does not add a row the current filter is not showing", () => {

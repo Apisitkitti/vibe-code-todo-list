@@ -8,6 +8,7 @@ import {
   addedToast,
   deleteConfirmBody,
   deletedToast,
+  doneCount,
   markedCompleteToast,
   markedNotCompleteToast,
   updatedToast,
@@ -116,9 +117,11 @@ test.describe("happy path", () => {
    *
    * A toggle used to be two sequential HTTP requests: the `PATCH`, whose
    * authoritative response body was discarded, and then a full `GET
-   * /api/todos` to fetch that same row again — two session lookups and seven
-   * database queries for one checkbox (`docs/REVIEW.md` §2.1). Splicing the
-   * `PATCH` response into local state deletes the second request outright.
+   * /api/todos` to fetch that same row again — two session lookups and nine
+   * database queries for one checkbox, measured against a real Postgres
+   * (`docs/REVIEW.md` MA-1, which corrects §2.1's original figure of seven).
+   * Splicing the `PATCH` response into local state deletes the second request
+   * outright, taking it to one request and four queries.
    *
    * Asserted as a *count*, because a reinstated `reloadSilently()` would not
    * change a single thing the other tests look at — the list would still be
@@ -138,6 +141,7 @@ test.describe("happy path", () => {
     */
     await page.reload();
     await expect(todos.row(TODO_TITLE)).toBeVisible();
+    await expect(todos.doneCounter).toHaveText(doneCount(0, 1));
 
     const statusRequests = countRequests(page, TODO_STATUS_URL, "PATCH");
     const listRequests = countRequests(page, TODO_LIST_URL, "GET");
@@ -154,5 +158,13 @@ test.describe("happy path", () => {
       listRequests.count,
       "the PATCH already returned the row — refetching the list is the round trip m-7 removed",
     ).toBe(0);
+
+    /*
+      And the counter is right without that refetch. `reloadSilently()` was
+      incidentally the only thing that ever corrected it, so with the refetch
+      gone this number is now pure client arithmetic — the one value on this
+      branch computed by hand (review MA-2).
+    */
+    await expect(todos.doneCounter).toHaveText(doneCount(1, 1));
   });
 });

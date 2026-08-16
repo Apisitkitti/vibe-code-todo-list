@@ -9,6 +9,7 @@ import {
   UNDO_FAILURE,
   addedToast,
   deletedToast,
+  doneCount,
   markedCompleteToast,
   markedNotCompleteToast,
   removedToast,
@@ -51,6 +52,8 @@ import { expect, test } from "./support/fixtures";
 */
 const TODO_TITLE = "Ship the release";
 const EDITED_TITLE = "Draft the changelog";
+/** A second row, so the `N of M done` counter has room to move. */
+const SECOND_TITLE = "Book the venue";
 
 test.describe("fault injection — writes", () => {
   test("500 on create shows copy-deck wording and does not add the todo", async ({
@@ -124,6 +127,9 @@ test.describe("fault injection — writes", () => {
 
   test("500 on toggle reverts the optimistic tick", async ({ signedIn: page, todos }) => {
     await todos.createTodo(TODO_TITLE);
+    // A second todo, so the counter has somewhere to move to and from.
+    await todos.createTodo(SECOND_TITLE);
+    await expect(todos.doneCounter).toHaveText(doneCount(0, 2));
 
     /*
       Held, not fulfilled immediately, and that is the whole design of this
@@ -149,6 +155,13 @@ test.describe("fault injection — writes", () => {
 
     // 1. The tick lands under the finger, with nothing confirmed.
     await expect(todos.checkbox(TODO_TITLE)).toBeChecked();
+    /*
+      The counter moves with the flip. It is the one number this branch
+      computes by hand — `reloadSilently()` used to be the only thing that ever
+      corrected it, and the toggle path no longer calls it — so it is asserted
+      as the string the user reads, not as a field on an object (review MA-2).
+    */
+    await expect(todos.doneCounter).toHaveText(doneCount(1, 2));
     // The row says the change is not yet a fact: dimmed and locked, so a
     // second press cannot race the PATCH still in flight (review m-4).
     await expect(todos.rowByText(TODO_TITLE)).toHaveAttribute("aria-busy", "true");
@@ -169,6 +182,53 @@ test.describe("fault injection — writes", () => {
     */
     await expect(todos.checkbox(TODO_TITLE)).not.toBeChecked();
     await expect(todos.rowByText(TODO_TITLE)).toHaveAttribute("aria-busy", "false");
+    // And the counter comes back with it — a revert that untick-ed the box but
+    // left the header saying `1 of 2 done` is still a list disagreeing with
+    // the database.
+    await expect(todos.doneCounter).toHaveText(doneCount(0, 2));
+    await expectNoFalseSuccess(todos.toasts, markedCompleteToast(TODO_TITLE));
+  });
+
+  test("500 on a toggle under Active brings the row back into the list", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await todos.createTodo(TODO_TITLE);
+    await todos.createTodo(SECOND_TITLE);
+
+    await page.goto("/todos?status=active");
+    await expect(todos.rowByText(TODO_TITLE)).toBeVisible();
+
+    let releaseToggle = () => {};
+    const toggleHeld = new Promise<void>((resolve) => {
+      releaseToggle = resolve;
+    });
+
+    await page.route(TODO_STATUS_URL, async (route) => {
+      await toggleHeld;
+      await fulfilOpaqueError(route, 500);
+    });
+
+    await todos.toggle(TODO_TITLE, true);
+
+    /*
+      Under a status filter the flip does not tick a box — it removes the row
+      (`docs/PRD.md` US-07 ruling, US-10). So the revert has more to undo than
+      a boolean: reverting the value while leaving the row absent would leave
+      the filtered list showing fewer rows than a reload of the same URL,
+      which is the exact property the ruling exists to protect.
+    */
+    await expect(todos.rowByText(TODO_TITLE)).toHaveCount(0);
+    await expect(todos.doneCounter).toHaveText(doneCount(1, 2));
+
+    releaseToggle();
+
+    await expect(todos.toasts.filter({ hasText: TOGGLE_FAILURE })).toBeVisible();
+    await expectNoTransportLeak(todos.toasts);
+
+    await expect(todos.rowByText(TODO_TITLE)).toBeVisible();
+    await expect(todos.checkbox(TODO_TITLE)).not.toBeChecked();
+    await expect(todos.doneCounter).toHaveText(doneCount(0, 2));
     await expectNoFalseSuccess(todos.toasts, markedCompleteToast(TODO_TITLE));
   });
 
