@@ -6,7 +6,6 @@ import {
   LIST_ERROR_TITLE,
   TOGGLE_FAILURE,
   TRY_AGAIN_LABEL,
-  UNAUTHORIZED_MESSAGE,
   UNDO_FAILURE,
   addedToast,
   deletedToast,
@@ -20,7 +19,6 @@ import {
   TODO_ITEM_URL,
   TODO_LIST_URL,
   TODO_STATUS_URL,
-  expectAbsentNow,
   expectNoFalseSuccess,
   expectNoTransportLeak,
   fulfilApiError,
@@ -303,23 +301,19 @@ test.describe("fault injection — the list load", () => {
 
 test.describe("fault injection — a mid-session 401", () => {
   /**
-   * DOCUMENTS CURRENT BEHAVIOUR — this is a defect record, not an endorsement.
+   * A session that dies mid-visit must not strand the user.
    *
-   * `docs/DESIGN.md` §7.9 specifies a "Session expired" state with the title
-   * `You've been signed out` and the description `Sign in again to continue.`
-   * That copy is NOT implemented anywhere: `grep` finds the string only as the
-   * default message of `ApiErrorCode.Unauthorized` in `src/lib/apiError.ts`.
+   * It used to: `getErrorMessage` maps every failure to a string, so a 401
+   * arrived as an ordinary red toast, the app stayed on `/todos`, the header
+   * still showed a signed-in avatar, and the only escape was a manual reload —
+   * `src/proxy.ts` checks the cookie on a document request, and nothing in the
+   * client did. QA reached it by signing out and pressing Back, which is
+   * `docs/PRD.md` US-03's acceptance criterion verbatim (DEF-13).
    *
-   * Nothing on the client inspects a response status. `getErrorMessage` maps
-   * every failure to a string, so a 401 is reported exactly like a 500 — as an
-   * ordinary red toast — and the app stays on `/todos` with no route change,
-   * no re-auth prompt, and no way forward except a manual reload. The session
-   * is gone but the UI keeps offering mutations that can only fail.
-   *
-   * The assertions below pin that behaviour so the day it is fixed, this test
-   * fails and gets rewritten to assert the §7.9 copy instead.
+   * The shared axios instance now redirects on a 401, carrying the current
+   * path, so the client agrees with what `requireUser()` does on the server.
    */
-  test("a mid-session 401 dead-ends: a toast, no redirect, no session-expired copy", async ({
+  test("a mid-session 401 sends the user to sign in, keeping where they were", async ({
     signedIn: page,
     todos,
   }) => {
@@ -331,30 +325,11 @@ test.describe("fault injection — a mid-session 401", () => {
 
     await todos.toggle(TODO_TITLE, true);
 
-    // What the user actually gets: the API's 401 message, as a plain toast.
-    await expect(todos.toasts.filter({ hasText: UNAUTHORIZED_MESSAGE })).toBeVisible();
-    await expectNoTransportLeak(todos.toasts);
+    // Sign-in, with the page they were on preserved for the round trip back.
+    await expect(page).toHaveURL(/\/sign-in\?next=%2Ftodos$/);
+    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
 
-    // The dead-end, asserted explicitly.
-    await expect(page).toHaveURL(/\/todos$/);
-    await expect(page.getByRole("heading", { name: "Your todos" })).toBeVisible();
-    // Both quote styles, since §7.9 is written with a typographic apostrophe
-    // and an implementation might reasonably use either. Read once, so this
-    // means "never rendered" rather than "no longer rendered".
-    await expectAbsentNow(
-      page.getByText("You’ve been signed out"),
-      "§7.9's session-expired copy is still unimplemented",
-    );
-    await expectAbsentNow(
-      page.getByText("You've been signed out"),
-      "§7.9's session-expired copy is still unimplemented",
-    );
-    // The toggle did not happen, and the row still invites another doomed try.
-    await expect(todos.checkbox(TODO_TITLE)).not.toBeChecked();
-
-    // Only a full navigation escapes, and only because `src/proxy.ts` checks
-    // for the cookie on a document request. Nothing in the client does this.
-    await page.reload();
-    await expect(page).toHaveURL(/\/sign-in/);
+    // And it is a real sign-in page, not a shell: the form is there to use.
+    await expect(page.getByLabel("Email")).toBeVisible();
   });
 });
