@@ -23,6 +23,7 @@
     "@react-aria/i18n": "^3.13.1",
     "@react-aria/ssr": "^3.10.1",
     "@react-aria/utils": "^3.34.1",
+    "@vercel/speed-insights": "^2.0.0",
     "axios": "^1.19.0",
     "better-auth": "^1.6.28",
     "dayjs": "^1.11.21",
