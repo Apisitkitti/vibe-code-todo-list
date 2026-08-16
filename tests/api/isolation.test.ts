@@ -42,7 +42,7 @@ import {
 } from "../support/request";
 
 /**
- * The cross-user isolation matrix from `docs/QA-REPORT.md` §7, as tests.
+ * The cross-user isolation matrix from `docs/QA-REPORT.md` §3.1, as tests.
  *
  * Until now this guarantee was re-proved by a human reading a diff and judging
  * it safe. Everything here is the machine version of that judgement: two real

@@ -43,6 +43,14 @@ jobs:
       DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
       TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
 
+      # The runner is UTC, and at UTC the date logic's two calendars — the
+      # UTC day a `dueAt` falls on and the viewer's local day — are the same
+      # value, so a test that confuses them still passes. The review proved
+      # it: collapsing the two into one made 187 tests pass at UTC and redden
+      # 12 at UTC+14. Running CI at a large positive offset is what makes the
+      # date tests discriminate rather than merely run.
+      TZ: Pacific/Kiritimati
+
       # `next build` runs under NODE_ENV=production, and `src/lib/auth.ts`
       # deliberately throws at import time when `BETTER_AUTH_URL` is unset —
       # production must never derive its origin from the Host header. No `.env`
@@ -121,6 +129,14 @@ jobs:
       # is set here rather than left to fall through.
       DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
       TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
+
+      # The runner is UTC, and at UTC the date logic's two calendars — the
+      # UTC day a `dueAt` falls on and the viewer's local day — are the same
+      # value, so a test that confuses them still passes. The review proved
+      # it: collapsing the two into one made 187 tests pass at UTC and redden
+      # 12 at UTC+14. Running CI at a large positive offset is what makes the
+      # date tests discriminate rather than merely run.
+      TZ: Pacific/Kiritimati
 
       # Development mode derives the auth base URL from the request, so unlike
       # the build job this one does not need `BETTER_AUTH_URL`. The secret is

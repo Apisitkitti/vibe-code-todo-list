@@ -112,6 +112,45 @@ npm run lint
 npx tsc --noEmit   # typecheck
 ```
 
+## Schema changes against production
+
+There is no migration history — the project uses `prisma db push`, which
+applies whatever the schema file says with no reviewable artifact and no
+ordering guarantee. That is survivable for a table nobody is reading yet. It
+is not survivable for an index change on a live table, because the plain
+statements `db push` issues take locks that stop the app:
+
+- a non-concurrent `CREATE INDEX` holds a `SHARE` lock, blocking every write
+  for the whole build
+- `DROP INDEX` takes `ACCESS EXCLUSIVE`, which blocks reads too, and queues
+  behind in-flight queries — taking new requests with it while it waits
+
+So an index change goes out by hand, in this order, and **create always comes
+before drop**:
+
+```bash
+# 1. Build the new index without blocking writes.
+CREATE INDEX CONCURRENTLY "todo_userId_completed_dueAt_idx"
+  ON "todo" ("userId", "completed", "dueAt");
+
+# 2. Confirm it is valid. A failed concurrent build leaves an invalid index
+#    that costs every write and serves no read.
+SELECT indisvalid FROM pg_index
+  WHERE indexrelid = '"todo_userId_completed_dueAt_idx"'::regclass;
+
+# 3. Confirm the planner uses it, on production-sized data.
+EXPLAIN SELECT … ;
+
+# 4. Only then remove the one it replaces.
+DROP INDEX CONCURRENTLY "todo_userId_completed_idx";
+
+# 5. `db push` last, where it should be a no-op that re-syncs the shadow.
+npx prisma db push
+```
+
+Keeping a redundant index is cheap; dropping the wrong one under load is not.
+If step 3 is inconclusive, stop after step 2 and leave both in place.
+
 ## Definition of done
 
 1. `npx tsc --noEmit` clean

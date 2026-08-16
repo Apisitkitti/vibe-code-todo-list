@@ -12,6 +12,7 @@ vi.mock("next/headers", () => ({
 
 import { GET } from "@/app/api/todos/route";
 import { prisma } from "@/lib/prisma";
+import { groupTodos } from "@/lib/todoGroups";
 
 import {
   createTestUser,
@@ -197,6 +198,24 @@ describe("priority breaks a tie between todos sharing a due date", () => {
   });
 
   /**
+   * The whole design rests on one claim: the sections are cuts through the
+   * server's single ordering, not a re-sort of it. Both halves are pinned
+   * separately — the server's sequence above, the section membership in
+   * `todoGroups.test.ts` — and nothing asserted the join, which is where a
+   * regression would actually land. If grouping ever reorders within a
+   * section, or a section's members are not contiguous in the server's
+   * sequence, flattening the groups stops reproducing the list.
+   */
+  test("grouping cuts the server order without resequencing it", async () => {
+    const response = await GET(getRequest("/api/todos"));
+    const body = await readList(response);
+
+    const flattened = groupTodos(body.todos).flatMap((group) => group.todos);
+
+    expect(flattened).toEqual(body.todos);
+  });
+
+  /**
    * Priority sits *below* the date on purpose: a low-priority todo due today
    * is more urgent than a high-priority one due next month. Ranking priority
    * first would put `dueAt` back to being decoration, which is the defect this
@@ -315,4 +334,5 @@ describe("the order survives every filter, and so does the scoping", () => {
     expect(body.totalCount).toBe(4);
     expect(body.completedCount).toBe(1);
   });
+
 });
