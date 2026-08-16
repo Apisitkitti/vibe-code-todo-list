@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Todos">
+  <!--
+    Tab icons render at 16px, so this is drawn for that size: one shape, one
+    accent, no text. The rounded square keeps a silhouette when the checkmark
+    is too small to read, and the colours are literals rather than theme
+    tokens because a favicon renders outside the document.
+    Accent matches --accent in HeroUI's default theme.
+  -->
+  <rect width="32" height="32" rx="8" fill="#0485F7" />
+  <path
+    d="M9 16.5 L14 21.5 L23 11.5"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="3.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
