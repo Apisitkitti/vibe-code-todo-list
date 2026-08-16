@@ -7,24 +7,17 @@ import { parseDueDate } from "@/lib/todo";
 
 import {
   badRequestResponse,
-  malformedBodyResponse,
+  completionNotHereResponse,
   notFoundResponse,
   toFieldErrors,
   unauthorizedResponse,
 } from "../errors";
-import { findOwnedTodo, readJsonBody, toTodoResponse } from "../util";
-
-/**
- * `completed` belongs to the status route. Accepting it here and dropping it
- * would return a 200 that looks like the checkbox was saved — the silent
- * no-op QA caught before the routes were split (review m-5, QA DEF-06).
- */
-const COMPLETED_NOT_HERE_MESSAGE =
-  "Use PATCH /api/todos/[id]/status to change completion; this route saves the todo's fields.";
-
-const mentionsCompleted = (body: unknown): boolean => {
-  return typeof body === "object" && body !== null && "completed" in body;
-};
+import {
+  findOwnedTodo,
+  mentionsCompleted,
+  readJsonBody,
+  toTodoResponse,
+} from "../util";
 
 /**
  * The todo's own fields. Completion is deliberately not one of them — it has
@@ -43,9 +36,7 @@ export const PATCH = async (request: NextRequest, context: RouteContext<"/api/to
   const { id } = await context.params;
   const body = await readJsonBody(request);
 
-  if (mentionsCompleted(body)) {
-    return malformedBodyResponse(COMPLETED_NOT_HERE_MESSAGE);
-  }
+  if (mentionsCompleted(body)) return completionNotHereResponse();
 
   const parsed = todoFormSchema.safeParse(body);
 

@@ -69,3 +69,13 @@ export const badRequestResponse = (fieldErrors: TodoFieldErrors) => {
  */
 export const malformedBodyResponse = (message: string) =>
   apiError(ApiErrorCode.BadRequest, { message });
+
+/**
+ * Sent when a create or save body carries `completed`. The wording names the
+ * user's action rather than the route, because this string is shown to them
+ * through `toast.danger` — route shapes are not user-facing copy.
+ */
+export const completionNotHereResponse = () =>
+  malformedBodyResponse(
+    "Completion is changed by the checkbox, not by saving the todo.",
+  );

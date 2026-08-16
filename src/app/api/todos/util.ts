@@ -46,6 +46,15 @@ export const findOwnedTodo = (id: string, userId: string) => {
   return prisma.todo.findFirst({ where: { id, userId } });
 };
 
+/**
+ * Completion is only ever changed through `/status`. Both the create and the
+ * save handlers use this to reject a body that carries it, rather than
+ * parsing it away and returning a success the caller will misread.
+ */
+export const mentionsCompleted = (body: unknown): boolean => {
+  return typeof body === "object" && body !== null && "completed" in body;
+};
+
 /** `request.json()` throws on a malformed body; the caller gets `null`. */
 export const readJsonBody = async (request: Request): Promise<unknown> => {
   return await request.json().catch(() => null);

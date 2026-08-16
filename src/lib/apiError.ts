@@ -16,6 +16,7 @@ export enum ApiErrorCode {
   Unauthorized = "UNAUTHORIZED",
   NotFound = "NOT_FOUND",
   BadRequest = "BAD_REQUEST",
+  Internal = "INTERNAL",
 }
 
 /** What every error response body looks like. There is no second shape. */
@@ -44,6 +45,12 @@ const API_ERROR_DEFINITIONS: Record<ApiErrorCode, ApiErrorDefinition> = {
   [ApiErrorCode.BadRequest]: {
     status: 400,
     message: "That request wasn’t valid.",
+  },
+  // Never carries the underlying error: a thrown Prisma or driver message
+  // would put schema and query details in front of the user.
+  [ApiErrorCode.Internal]: {
+    status: 500,
+    message: "Something went wrong on our end.",
   },
 };
 

@@ -13,10 +13,16 @@ import {
 
 import {
   badRequestResponse,
+  completionNotHereResponse,
   toFieldErrors,
   unauthorizedResponse,
 } from "./errors";
-import { readJsonBody, toTodoListResponse, toTodoResponse } from "./util";
+import {
+  mentionsCompleted,
+  readJsonBody,
+  toTodoListResponse,
+  toTodoResponse,
+} from "./util";
 
 const STATUS_PARAM = "status";
 const PRIORITY_PARAM = "priority";
@@ -70,7 +76,13 @@ export const POST = async (request: NextRequest) => {
 
   if (!session?.user) return unauthorizedResponse();
 
-  const parsed = todoFormSchema.safeParse(await readJsonBody(request));
+  const body = await readJsonBody(request);
+
+  // A new todo is never created already-completed, and parsing `completed`
+  // away would return a 201 whose body silently disagrees with the request.
+  if (mentionsCompleted(body)) return completionNotHereResponse();
+
+  const parsed = todoFormSchema.safeParse(body);
 
   if (!parsed.success) return badRequestResponse(toFieldErrors(parsed.error));
 

@@ -8,7 +8,6 @@ const isProduction = process.env.NODE_ENV === "production";
 
 /** Any port, so `next dev` can fall back to 3001 when 3000 is taken. */
 const LOCAL_HOSTS = ["localhost:*", "127.0.0.1:*"];
-const LOCAL_ORIGINS = ["http://localhost:*", "http://127.0.0.1:*"];
 
 /**
  * Production pins the base URL to `BETTER_AUTH_URL`. Deriving it from the
@@ -20,13 +19,27 @@ const LOCAL_ORIGINS = ["http://localhost:*", "http://127.0.0.1:*"];
  * broke every auth call with `Invalid origin`, and the only way to run this
  * app was to kill the other one.
  */
-const baseURL = isProduction
-  ? process.env.BETTER_AUTH_URL
-  : { allowedHosts: LOCAL_HOSTS, protocol: "http" as const };
+const resolveBaseURL = () => {
+  if (!isProduction) {
+    return { allowedHosts: LOCAL_HOSTS, protocol: "http" as const };
+  }
+
+  const productionURL = process.env.BETTER_AUTH_URL;
+
+  // Leaving it unset does not fall back to something safe: better-auth would
+  // derive the origin from the request, which is the Host-header trust this
+  // whole branch exists to avoid. Fail at boot instead of shipping that.
+  if (!productionURL) {
+    throw new Error(
+      "BETTER_AUTH_URL must be set in production — auth would otherwise derive its origin from the request Host header.",
+    );
+  }
+
+  return productionURL;
+};
 
 export const auth = betterAuth({
-  baseURL,
-  trustedOrigins: isProduction ? [] : LOCAL_ORIGINS,
+  baseURL: resolveBaseURL(),
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
