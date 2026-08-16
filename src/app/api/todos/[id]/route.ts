@@ -15,19 +15,25 @@ import {
   unauthorizedResponse,
 } from "../response";
 
-/**
- * The toggle sends only this; it must never touch the other fields.
- *
- * `strict()` matters: dispatching on the mere presence of `completed` meant a
- * body that mixed toggle and form fields was treated as a toggle and its other
- * fields were silently dropped — a 200 that looked like a successful save
- * (review m-5). Mixed bodies now fail parsing and fall through to the form
- * branch, which rejects them properly.
- */
+/** The toggle sends only this; it must never touch the other fields. */
 const todoToggleSchema = z.object({ completed: z.boolean() }).strict();
 
 const isToggleBody = (body: unknown): boolean => {
   return todoToggleSchema.safeParse(body).success;
+};
+
+const mentionsCompleted = (body: unknown): boolean => {
+  return typeof body === "object" && body !== null && "completed" in body;
+};
+
+/**
+ * A body that carries `completed` but is not a pure toggle is neither request:
+ * the toggle branch would drop its form fields, and the form branch would drop
+ * its `completed` — both returning a 200 that looks like a successful save
+ * (review m-5, QA DEF-06). Reject it instead of guessing which half was meant.
+ */
+const isMixedBody = (body: unknown): boolean => {
+  return mentionsCompleted(body) && !isToggleBody(body);
 };
 
 /**
@@ -43,6 +49,10 @@ export const PATCH = async (request: NextRequest, context: RouteContext<"/api/to
 
   const { id } = await context.params;
   const body = await readJsonBody(request);
+
+  // No field errors, so this reports as a malformed request rather than
+  // pinning the blame on one input.
+  if (isMixedBody(body)) return badRequestResponse({});
 
   if (isToggleBody(body)) {
     const parsed = todoToggleSchema.safeParse(body);

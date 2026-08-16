@@ -21,20 +21,24 @@ import {
  * plain `string` for the form while leaving the API contract honest.
  */
 export const todoFormSchema = z.object({
+  // Every `z.string()` carries its own message. The form can only ever send a
+  // string, but the API is public: without these, a wrong type from a direct
+  // call renders zod's internal English under the field — "Invalid input:
+  // expected string, received number" (QA DEF-07).
   title: z
-    .string()
+    .string("Enter a title.")
     .trim()
     .min(1, "Enter a title.")
     .max(TITLE_MAX_LENGTH, "Keep the title under 200 characters."),
   note: z
-    .string()
+    .string("Keep the note under 2000 characters.")
     .trim()
     .max(NOTE_MAX_LENGTH, "Keep the note under 2000 characters.")
     .default(""),
   priority: z.enum(PRIORITY_VALUES, "Choose a priority."),
-  // `<input type="date">` yields "" or `YYYY-MM-DD`.
+  // The DatePicker yields "" or `YYYY-MM-DD`.
   dueAt: z
-    .string()
+    .string("Enter a valid date.")
     .trim()
     .refine(
       (value) => parseDueDate(value) !== "invalid",
