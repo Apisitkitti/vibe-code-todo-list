@@ -430,8 +430,10 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
         Space between rows rather than rules between them. Each row is already
         a rounded pill on hover, and hairlines running between floating pills
         made the list read as a ruled table that had been rounded by mistake —
-        the contradiction the designer raised. Whitespace is the separator now,
-        so the pill has room to be a pill.
+        the contradiction the designer raised.
+        Space is not the boundary, though: the rows share `--surface` with this
+        Card, so the gap alone left nothing to see at rest. The boundary is the
+        row's own outline (`TodoRow`); this gap only keeps the outlines apart.
       */
       <ul className="flex flex-col gap-1.5 p-2">
         {result.todos.map((todo) => (
