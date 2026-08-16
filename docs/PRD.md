@@ -77,8 +77,8 @@ As a returning user, I want to sign in with my email and password, so that I can
 
 - Given I am on `/sign-in`, When the page loads, Then I see Email, Password, a "Sign in" button, and a link to `/sign-up`.
 - Given I submit the correct email and password for an existing account, When the request succeeds, Then a session is created and I am redirected to `/todos`.
-- Given I submit a correct email with a wrong password, When the request completes, Then I remain on `/sign-in` and see the error "Invalid email or password".
-- Given I submit an email that has no account, When the request completes, Then I see the same message "Invalid email or password" (no hint that the account does not exist).
+- Given I submit a correct email with a wrong password, When the request completes, Then I remain on `/sign-in` and an error alert appears above the form with the title "Sign in failed" and the description "That email and password don’t match. Try again." — the copy deck's string (`docs/DESIGN.md` §7.9), with a typographic apostrophe (U+2019) in "don’t" — and the same description is also announced in a danger toast.
+- Given I submit an email that has no account, When the request completes, Then the title and description rendered are character-for-character identical to the wrong-password case above. This is the criterion's actual requirement: the two failure modes must be **indistinguishable**, so nothing the user or an attacker can see tells them whether an account exists with that email. QA verifies it by comparing the two rendered strings, not by reading them; any future change to this copy must change both branches together, and a branch-specific message is a defect even if its wording is friendlier.
 - Given I was redirected to `/sign-in` from a protected route (e.g. `/todos`), When I sign in successfully, Then I land on the route I originally requested.
 - Given I already have a valid session, When I navigate to `/sign-in` or `/sign-up`, Then I am redirected to `/todos` without seeing the form.
 
@@ -111,7 +111,7 @@ As a signed-in user, I want to add a todo with a title and optional details, so 
 **Acceptance criteria**
 
 - Given I am on `/todos`, When the page loads, Then I see a create form (or a button that opens one) with Title, Note, Priority, and Due date fields.
-- Given I enter a title "Buy milk" and submit with all other fields untouched, When the request succeeds, Then a todo is created with `title = "Buy milk"`, `note = null`, `priority = medium`, `completed = false`, `dueAt = null`, and `userId` = my id, and it appears in the list without a full page reload, in its place under the default list order (§2) — for an undated todo, first among the undated ones.
+- Given I enter a title "Buy milk" and submit with all other fields untouched, When the request succeeds, Then a todo is created with `title = "Buy milk"`, `note = null`, `priority = medium`, `completed = false`, `dueAt = null`, and `userId` = my id, and it appears in the list without a full page reload, in its place under the default list order (§2). Concretely, for this todo — undated, priority `medium` — that place is in the `No date` section: below every undated `high`-priority todo, above every undated `low`-priority one, and first among the undated `medium` ones (`createdAt` descending, newest first). It is **not** necessarily the first row of the section, and it is first overall only when no undated `high`-priority todo exists.
 - Given the Title field is empty or only whitespace, When I submit, Then no todo is created and I see the inline error "Title is required".
 - Given I enter a title longer than 200 characters, When I submit, Then no todo is created and I see the inline error "Title must be 200 characters or fewer".
 - Given I enter a note longer than 2000 characters, When I submit, Then no todo is created and I see the inline error "Note must be 2000 characters or fewer".
@@ -161,12 +161,39 @@ As a signed-in user, I want to check off a todo, so that I can track what I fini
 
 **Acceptance criteria**
 
-- Given an active todo, When I activate its completion control, Then `completed` becomes `true`, the row shows the completed styling, and the change persists after a page reload.
+The toggle is optimistic: the row changes on press and the server confirms afterwards. The two criteria that decide what the list does next — what happens under a status filter, and where the row sits inside `Completed` — are ruled below and are requirements, not implementation notes.
+
+**Acceptance criteria — the flip**
+
+- Given an active todo, When I activate its completion control, Then the row shows the completed styling **immediately, without waiting for the server**, `completed` becomes `true`, and the change persists after a page reload.
 - Given a completed todo, When I activate its completion control again, Then `completed` becomes `false` and it returns to the due-date section its `dueAt` puts it in (§2).
-- Given the "All" filter is active, When I toggle a todo, Then it moves between its due-date section and `Completed` (§2) without a full page reload, and both sections re-render in the default list order.
-- Given the "Active" filter is applied, When I mark a visible todo complete, Then it disappears from the filtered list.
-- Given the toggle request fails, When the error returns, Then the control reverts to its previous state and an error message is shown.
 - Given I toggle a todo, When the request is sent, Then only the todo's `completed` value changes — title, note, priority, and due date are unchanged.
+- Given the toggle request fails, When the error returns, Then the row returns to exactly the state it held before the press — including reappearing in the list if it had left it under a status filter — and the toast "Couldn’t update the todo. Try again." is shown.
+- Given the counts beside the page heading (`N of M done`), When a toggle applies and again when it reverts, Then N moves by exactly one and M does not move. The counts describe the whole account, not the filtered page, so a filter never changes them.
+
+**Acceptance criteria — under a status filter (ruling)**
+
+The list under a filter shows only the todos that match that filter, at every moment — not only after a reload. A user who asked for `Active` asked a question, and a row sitting under a `Completed` heading inside that view is an answer to a different one. Two users on the same filter with the same data must see the same rows, whatever either of them just pressed.
+
+- Given the "Active" status filter is applied, When I mark a visible todo complete, Then the row leaves the list immediately — before the server answers, at the same moment the flip would otherwise have been shown — and **no `Completed` heading appears under this filter at any point**.
+- Given the "Completed" status filter is applied, When I mark a visible todo not complete, Then the row leaves the list immediately in the same way, and no due-date heading (`Overdue`/`Today`/`Upcoming`/`No date`) appears under this filter at any point.
+- Given a row left the list this way, When the list re-renders, Then what remains is exactly what a full page reload under the same filter would show — same rows, same order, same headings.
+- Given marking the last remaining row complete under "Active" empties the list, When the list re-renders, Then the matching empty state is shown (`All caught up`, US-11 / US-10) and nothing implies data is missing.
+
+**Acceptance criteria — Undo after the row is gone**
+
+Undo is offered from the toast, and the toast is anchored to the screen rather than to the row. That is what makes the ruling above affordable: the row may leave, the Undo does not.
+
+- Given I marked a todo complete under the "Active" filter and its row left the list, When the success toast appears, Then it carries the same `Undo` action as under "All" and stays for the full undo window, unaffected by the row's absence; it is reachable by keyboard from where focus landed after the row was removed.
+- Given I press `Undo` on a toast whose row is no longer in the filtered list, When the undo write succeeds, Then the todo returns to its previous `completed` value, **the row reappears in the list in its default-order (§2) place**, a toast reports the restored state, and no further Undo is offered on that toast.
+- Given I press `Undo` for a row that is no longer in the list and the undo write fails, When the error returns, Then the todo keeps the value the toggle gave it, the row stays absent from the filtered list, and the toast "Couldn’t undo that. Try again." is shown — the list and the database never disagree about whether the row belongs here.
+- Given the undo window expires without me pressing `Undo`, When the toast closes, Then nothing else changes: the todo keeps its new value and the row stays out of the filtered list. The toggle is still reversible by clearing the filter or selecting the opposite status and toggling the row back.
+
+**Acceptance criteria — position within `Completed` (ruling: accepted transient)**
+
+- Given the "All" status filter, When I mark a todo complete, Then it moves into the `Completed` section without a full page reload and **keeps the relative position it held among the rows already on screen**, rather than taking its `dueAt` ascending slot inside `Completed`.
+- Given that todo is sitting in that position, When the list is next loaded from the server — a reload, a filter or search change, or any mutation that refetches — Then it sits in its default-order (§2) place inside `Completed`.
+- **This transient is accepted product behaviour and is not a defect.** Do not file it, and do not fix it by re-sorting on the client. §2's order is produced by the server and the client draws only the section cuts (NFR-09); a client-side re-sort would create a second ordering authority, and the two would drift. What is never wrong is the row's *section* — a completed todo is under `Completed` from the instant it is ticked. Only its position inside that section is stale, only until the next load, and only under the "All" filter, since under "Active" the row has left the list and under "Completed" only an un-completion is possible.
 
 ### US-08 — Edit a todo
 
@@ -208,6 +235,9 @@ As a signed-in user, I want to filter my list by status and priority, so that I 
 - Given filters are applied, When I reload the page, Then the same filter selection is still applied (filter state is reflected in the URL).
 - Given a filter combination matches no todos while I do have todos, When the list renders, Then I see a "No todos match these filters" message with a control to clear the filters, and clearing restores the full list.
 - Given any filter is applied, When results render, Then they still contain only my own todos.
+- Given a status filter of "Active" or "Completed" is applied, When a todo on screen is changed so that it no longer matches that status — today the only such change is the completion toggle (US-07) — Then it leaves the list at the moment of the change, not at the next reload. A filtered list must match what a reload of the same URL would show at all times; a row kept visible because it was just acted on makes the same filter mean two different things for two users.
+- Given a status filter of "Active" or "Completed" is applied, When the results render, Then no section heading appears for todos the filter excludes: under "Active" the `Completed` heading never appears, and under "Completed" no due-date heading appears (with one section surviving, US-06 shows no heading at all).
+- Given a todo left the filtered list because of a toggle, When I undo that toggle from its toast within the undo window (US-07), Then the row reappears in this filtered list in its default-order (§2) place.
 
 ### US-11 — Empty state
 
@@ -265,7 +295,10 @@ Not yet built. It is the follow-up to US-06's sections and ships as its own chan
 - Text search over the todo list, combinable with the filters and reflected in the URL.
 - Undo on the completion toggle, offered from its toast. Toggling is the one
   mutation with no confirmation dialog, so undo is what makes it reversible;
-  it re-runs the same scoped endpoint rather than taking a shortcut.
+  it re-runs the same scoped endpoint rather than taking a shortcut. The toast
+  is deliberately the home of Undo rather than the row: under a status filter
+  the row leaves the list the moment it stops matching (US-07, US-10), and the
+  Undo has to outlive it.
 - Empty state and no-results state.
 - Responsive mobile-first layout, dark mode, keyboard accessibility.
 

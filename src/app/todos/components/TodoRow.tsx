@@ -121,8 +121,12 @@ export const TodoRow = ({
       <Checkbox
         isDisabled={isPending}
         isSelected={todo.completed}
-        // Not optimistic: the box holds its current state until the server
-        // confirms the flip, so it never shows something that did not happen.
+        // Optimistic: `TodoListScreen` flips `completed` in local state before
+        // the request goes out, so the box ticks under the finger and
+        // `aria-checked` moves with it rather than lagging a round trip behind
+        // (review m-7, `docs/DESIGN.md` §1 and §8.3.2). What keeps that honest
+        // is the revert — a refused write writes the previous value back, and
+        // the row re-sections with it — not the box holding still.
         onChange={(isSelected) => onToggle(todo, isSelected)}
         aria-label={
           todo.completed

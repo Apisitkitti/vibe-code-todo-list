@@ -861,15 +861,24 @@ until **both** land, because nothing is applied locally. Same shape in
 
 Cost per toggle, on Vercel + Neon, in order:
 
-1. `PATCH /api/todos/[id]/status` — `getSession()` (a `session` table read),
-   `updateMany`, then a **second** query, `findOwnedTodo`, to build the response
-   (`status/route.ts:61-70`). Three DB round trips inside one request.
+1. `PATCH /api/todos/[id]/status` — `getSession()`, `updateMany`, then a
+   **second** query, `findOwnedTodo`, to build the response
+   (`status/route.ts:61-70`). Four queries inside one request.
 2. `GET /api/todos` — `getSession()` again, then three queries in parallel
-   (`route.ts:60-67`): `findMany`, `count`, `count`.
+   (`route.ts:60-67`): `findMany`, `count`, `count`. Five queries.
 
-So one checkbox click is **two HTTP requests, two session lookups and seven
+So one checkbox click is **two HTTP requests, two session lookups and nine
 database queries**, and the response body of the first one — the authoritative
-updated row — is thrown away. On a good desktop connection that is perhaps
+updated row — is thrown away.
+
+> **Correction (see MA-1).** This paragraph originally said *seven* queries,
+> counting a session lookup as one. It is not: better-auth reads `session` and
+> then `user` with no join, so **one session lookup is two queries**. Measured
+> against a real Postgres with query logging on the `globalThis` Prisma
+> singleton — which `prismaAdapter(prisma)` resolves too — the `PATCH` is 4
+> queries / 5 statements and the `GET` is 5. The corrected ledger is 2
+> requests / 2 lookups / **9 queries** before, and 1 / 1 / **4** after. The
+> shape of the win is unchanged and, in ratio, slightly better than claimed. On a good desktop connection that is perhaps
 250–400 ms and reads as "fine". On a phone on mobile data, two sequential
 round trips to a serverless function plus a Neon connection is comfortably
 half a second to a second of a checkbox that does not tick. That is the thing
@@ -3283,3 +3292,409 @@ Two things before this reaches `main`:
 one test I would genuinely like written. Everything else is a follow-up, and
 **m2** is now the third consecutive pass to defer `useTodoList` — the next
 branch to touch `TodoListScreen.tsx` does the hook first.
+
+---
+
+# Senior review — `feature/optimistic-toggle` → `develop`
+
+One commit, `1f9ebc5`. Seven files, +653/−42. This is m-7, which I have asked
+for since the first review and deferred three times, and I want to record up
+front that the branch is the right shape: the behaviour change is about three
+lines, the risky one is in a `catch`, and the author put the risk somewhere a
+test can reach it before writing it. That is the thing I have been asking for
+more than the optimisation.
+
+## Verdict, up front
+
+> **Approve.** Merge into `develop`.
+
+Three conditions, all cheap, none of them a hold:
+
+1. The merge-commit body carries the **corrected** query figure (MA-1). Both
+   the pushed body and the author's own correction are wrong.
+2. **MA-2** — one assertion on the rendered `N of M done` counter — is the next
+   test written. It is the only number this branch computes by hand and the
+   only number nothing checks end to end.
+3. `useTodoList` is the **next** branch to touch `TodoListScreen.tsx`, as a
+   pure move with no behaviour change. See the ruling in §6.
+
+## What I ran
+
+Node 24, `TZ=Pacific/Kiritimati`, `TEST_DATABASE_URL` pointed at
+`todo_app_test`.
+
+| | Result |
+|---|---|
+| `vitest run` | **207 passed** / 9 files |
+| `playwright test` (both projects) | **42 passed** / 1.3m, no flake |
+| `tsc --noEmit` | clean |
+| `eslint` | clean |
+
+Plus four deliberate mutations of my own (§4) and a direct measurement of the
+per-toggle query cost against a real Postgres (§MA-1). Every mutation was
+reverted; `git diff -- src tests e2e` is empty. I did not touch `docs/PRD.md`.
+
+---
+
+## Blocker
+
+None.
+
+---
+
+## Major
+
+### MA-1 — The query figure is wrong in the commit body *and* in the correction. It is four, not three, and not two.
+
+The pushed body says "one request, one session lookup, two queries". The author
+says the right number is three and could not amend. Neither is right.
+
+I measured it rather than counting call sites: a `PrismaClient` with
+`log: [{ emit: "event", level: "query" }]` installed as the `globalThis`
+singleton that `@/lib/prisma`, and therefore `prismaAdapter(prisma)` in
+`src/lib/auth.ts`, both resolve — so the session lookup is instrumented too,
+which is exactly where the miscount is. Handlers called directly with a real
+cookie and a real session row.
+
+`PATCH /api/todos/[id]/status` — **4 queries, 5 statements**:
+
+```
+1. SELECT … FROM "session" WHERE "token" = $1          ← session lookup, part 1
+2. SELECT … FROM "user"    WHERE "id"    = $1          ← session lookup, part 2
+3. UPDATE "todo" SET "completed" … WHERE id AND userId
+4. COMMIT
+5. SELECT … FROM "todo" WHERE id AND userId            ← the scoped re-read
+```
+
+`GET /api/todos` — **5 queries**: the same two session queries, `findMany`, and
+the two unfiltered counts.
+
+So the honest ledger:
+
+| | requests | session lookups | queries | statements |
+|---|---|---|---|---|
+| before (`PATCH` + `GET`) | 2 | 2 | 9 | 10 |
+| after (`PATCH` only) | 1 | 1 | **4** | **5** |
+
+**One session lookup is two queries, not one** — better-auth reads `session`
+and then `user` with no join. That is the whole source of the error, in the
+commit body, in the author's correction, and in my own original m-7 write-up,
+which said seven queries when it was nine or ten. I got it wrong first; I am
+correcting the record, not scoring a point.
+
+The *shape* of the win is real and, in ratio, slightly better than claimed:
+statements halve, requests halve, session lookups halve. Fix it in the merge
+commit body since force-push is blocked, and correct `docs/REVIEW.md` m-7 §2.1
+while someone is in there.
+
+### MA-2 — `completedCount` now has no reconciliation path, and nothing tests the number it renders.
+
+This is the finding I would most like closed, and it follows directly from what
+m-7 removed.
+
+`reloadSilently()` after a toggle was, incidentally, the only thing that ever
+corrected the header counter. It is gone from both toggle paths, so
+`completedCount` on the toggle path is now **purely** the product of client
+arithmetic — `+1`/`−1` on the way out, corrected by difference on the way back —
+until some *unrelated* action (a create, an edit, a delete, a filter change, a
+page load) happens to refetch.
+
+The arithmetic itself is good, and the correct-by-difference choice in
+`replaceTodo` is why most of the races I tried are survivable. Walked through:
+
+- **Mid-flight reload, row still on screen.** `GET` lands with the pre-PATCH
+  truth, clobbering the optimistic flip. `replaceTodo` then computes
+  `saved.completed − current.completed = +1` against the *reloaded* row and
+  lands on the right number. Correct, and correct *because* it is a difference
+  rather than an assumed `+1`. Good design.
+- **Failure after a reload.** The revert is a no-op — the reloaded row already
+  holds the pre-press value — so nothing double-counts. Correct.
+- **Mid-flight reload under a filter that excludes the row.** User switches to
+  `Completed` while a completion `PATCH` is in flight. The `GET` returns rows
+  not yet including this one, with an account-wide `completedCount` computed
+  *before* the write committed. The `PATCH` resolves; `replaceTodo` finds no
+  such row and returns the identical object — which is the right call, and the
+  documented one — so the count is never incremented. **The header is
+  permanently one low** until an unrelated full load. On `develop` the
+  post-toggle refetch swallowed this.
+
+That last one is narrow and I am not blocking on it. What I am flagging is that
+we cannot tell:
+
+**All 19 new Vitest cases assert `completedCount` on the pure `TodoListResult`.
+Not one test — unit or E2E — asserts the string the user reads.** `grep` for
+the counter across `e2e/` and `tests/` returns nothing but incidental matches.
+The one number this branch computes by hand is the one number with no verifier,
+which is precisely the argument `todoListState.ts`'s own header makes about the
+revert. Apply it to the counter: one E2E assertion on `N of M done` across a
+successful toggle and a refused one.
+
+### MA-3 — The revert is as well guarded as claimed. The count correction is not.
+
+Mutation results are in §4. The short version: breaking `setTodoCompleted`'s
+delta reddens **4** cases; zeroing `replaceTodo`'s `completedDelta` reddens
+exactly **1** of 19.
+
+That one line is the mechanism the whole mid-flight-reload story above rests
+on — it is why the second bullet in MA-2 is correct rather than lucky — and it
+is the least-tested line in the file. The author's "five Vitest cases" is about
+right in aggregate but the distribution is lopsided, and it is lopsided in the
+wrong direction. Two more cases against `replaceTodo` (server disagrees
+downward; server agrees with a reloaded row rather than the guess) would fix it.
+
+---
+
+## Minor
+
+### MI-1 — The unconditional revert *can* write back a superseded value. Exactly one shape, and the doc comment overstates the safety.
+
+I went looking for this specifically. Nearly every path is safe, and the "a
+no-op returns the identical object" claim is load-bearing and **verified** —
+removing the `current.completed === completed` guard reddens two cases,
+including the one named for this argument.
+
+The one shape that gets through: a **foreign writer** (second tab, second
+device) sets the row, *and* a list reload lands inside our flight window, *and*
+our own `PATCH` then fails. The `catch` writes `!nextCompleted` over the fresher
+truth and drags `completedCount` with it. Three preconditions, so I am not
+holding the branch for it.
+
+But `runToggle`'s comment claims the revert has "no dependence on the request
+having failed at any particular stage" and that writing the previous value back
+"is the whole rollback". Against a single writer, true. Against a concurrent
+one, not quite. The fix is small and strictly safer — a compare-and-set that
+reverts only if the row still holds `nextCompleted`, which is a third function
+in `todoListState.ts` and two more unit cases. Follow-up, not a condition; but
+soften the comment now, because the next person will read it as a proof.
+
+### MI-2 — `clampCount` turns a detectable inconsistency into a silent one.
+
+`setTodoCompleted` only decrements a row it just found holding
+`completed: true`, so in a consistent state `completedCount ≥ 1` and the clamp
+is unreachable. It can therefore only fire when the count has *already* drifted —
+which is the moment you would most want to know. Keep the clamp (a negative
+count on screen is worse), but pair it with a dev-only assertion so drift
+surfaces in development instead of being rounded away in production.
+
+### MI-3 — A 404 leaves a phantom row with nothing left to remove it.
+
+Row deleted on another device, user toggles it here, `PATCH` 404s, the `catch`
+reverts the boolean and the row stays on screen. The failure path never
+reloaded on `develop` either, so this is not a regression — but the *success*
+path's refetch used to clean it up on the next toggle, and that is gone. Low
+priority, and arguably better handled by treating 404 as a delete signal rather
+than by reinstating a reload.
+
+### MI-4 — Knock-on behaviour #1 has no test.
+
+Completing a todo under `status=Active` now leaves it visible under a
+`Completed` heading. That is an intentional behaviour change, and the branch
+pins the *other* one — the grouping revert — with a careful, well-argued spec.
+Pin this one the same way, or the next person to see a `Completed` section
+inside an `Active` filter will file it as a bug and "fix" it.
+
+### MI-5 — Knock-on #2 is more visible than the description says, and the PM should rule on the real thing.
+
+The emitted SQL confirms `ORDER BY completed ASC, dueAt ASC NULLS LAST,
+priority DESC, createdAt DESC`. Because `completed` is the **first** key, an
+optimistically completed row keeps its index *among the active rows* — which
+puts it at the **head** of the `Completed` section, above rows completed months
+ago. Not "keeps its previous relative position", which reads as a small local
+wobble. Correct the framing before the PM rules on it.
+
+### MI-6 — `docs/DESIGN.md` now contradicts itself and no doc was updated.
+
+§4.8 and §8.3.2 give opposite instructions for the toggle's pending treatment,
+and this branch resolves that contradiction — in a 28-line code comment. The
+argument is good and it is in the wrong file. It belongs in `DESIGN.md` where
+the designer can answer it. See the ruling in §7.
+
+### MI-7 — Out of scope, worth a ticket: every authenticated request pays two queries for its session.
+
+Visible in MA-1's trace: `session` then `user`, no join, on *every* request in
+the app. better-auth's `session.cookieCache` would take that to zero for most
+of them. That is a larger absolute saving than m-7 itself and touches nothing
+on this branch. File it.
+
+---
+
+## Nit
+
+- **N-1 — the §4.8 half of the pending argument is a misreading.** "No spinner —
+  these are optimistic" is a justification for *omitting a spinner*; it is not a
+  pairing of the dim *with* optimism. And §8.3.2 is the same author's later,
+  more specific ruling on exactly this situation. The conclusion survives
+  intact on the m-4 argument alone — drop the §4.8 half rather than leaning on
+  it. Ruling in §7.
+- **N-2 — comment-to-code ratio.** `runToggle` carries ~35 lines of comment over
+  ~20 lines of code; `pendingTodoIds` carries ~28. The content is good and most
+  of it is design rationale, which is `DESIGN.md` / `REVIEW.md` material, not a
+  preamble the next reader must scroll past to find a `try`.
+- **N-3 — `reloadSilently()` is now a one-line passthrough** to `requestReload()`
+  with two call sites and a ten-line comment. Inline it, or fold the comment
+  into `requestReload`.
+
+---
+
+## §3 — "No `where` clause touched, no server file changed"
+
+**Verified, not accepted.** `git diff develop...feature/optimistic-toggle
+--stat` touches seven files: three E2E specs, `TodoListScreen.tsx`,
+`TodoRow.tsx`, the new `src/lib/todoListState.ts`, and the new unit test.
+Nothing under `src/app/api/`, nothing under `src/service/`, no Prisma schema,
+no migration. The claim is true.
+
+Worth stating what that means rather than just ticking it: the entire
+optimisation is client-side, so the server's authorisation story — `updateMany`
+scoped by `{ id, userId }`, the scoped re-read, the 404 on zero rows — is
+byte-for-byte what `tests/api/isolation.test.ts` already proves. Nothing in the
+isolation matrix needed re-establishing, and I did not have to take that on
+faith.
+
+## §4 — The deliberate-failure evidence, reproduced with my own mutations
+
+The author reports three Playwright specs and five Vitest cases. I ran four
+mutations of my own. The suite is **more** discriminating than claimed, in the
+way that matters: each spec fails for its own reason rather than the whole
+suite going red together.
+
+**Mutation A — delete the three-line revert from `runToggle`'s `catch`.**
+
+```
+✘ fault-injection: 500 on toggle reverts the optimistic tick
+✘ fault-injection: 500 on a toggle-Undo reverts the flip-back …
+✘ grouping:        a refused toggle puts the row back in the section …
+✓ happy-path:      a toggle is one request, with no list refetch behind it
+   3 failed, 1 passed
+```
+
+Exactly the three claimed, failing on `expect(checkbox).not.toBeChecked()`,
+`toBeChecked()` and `toHaveText()` respectively — three different assertions
+catching one deletion, in two viewport projects. Claim confirmed.
+
+**Mutation B — the converse, which the author did not run.** Reinstate
+`reloadSilently()` on the toggle's success path:
+
+```
+✓ ✓ ✓ the three revert specs
+✘ happy-path: a toggle is one request, with no list refetch behind it
+   1 failed, 3 passed
+```
+
+This is the better result. The request-count spec catches a reinstated round
+trip that changes *nothing else observable*, and it catches it alone — so the
+m-7 win is pinned independently of the correctness win, and a future regression
+of either is legible from the failure list. That spec is the most valuable
+thing in the E2E diff and its own comment says why.
+
+**Mutation C — `setTodoCompleted`'s count delta → no-op:** 4 Vitest cases red.
+**Mutation D — remove the `current.completed === completed` guard**, so an
+unconditional revert double-counts: 2 red, including *"reverting something that
+never applied is harmless"*. The load-bearing invariant has a verifier.
+
+**Where it is thin:** zeroing `replaceTodo`'s `completedDelta` reddens **one**
+case. See MA-3.
+
+## §5 — The two knock-on behaviours
+
+**(a) A completed row stays visible under `Active`.** Accept as engineering. It
+is the honest consequence of not refetching, it converges on the next load, it
+avoids a rug-pull under the user's cursor, and it keeps the Undo toast's target
+on screen where the toast can still point at it. One thing for the PM that is
+not in the author's framing: the row appears under a `Completed` *heading*
+while the filter chip says `Active`, so the two pieces of chrome contradict each
+other — and `resolveEmptyState`'s "All caught up" is now unreachable by
+completing your last active todo. Product call, not a defect.
+
+**(b) Ordering inside `Completed`.** **Their argument is sound and I accept
+it.** To place the row correctly the client would have to reimplement a
+four-key comparator — including `NULLS LAST` and a Prisma enum's *declaration*
+order, where `priority desc` means high → medium → low and getting it backwards
+is silent — which is the exact duplicate authority `todoGroups.ts`'s header
+forbids and `groupTodos`' own contract ("grouping never reorders anything")
+rules out. `tests/api/ordering.test.ts` exists because that comparator is
+subtle. Reproducing it client-side to smooth one frame would be a bad trade,
+and self-correcting on the next load is the right failure mode. Fix the
+*description* per MI-5, then let the PM rule on what actually happens.
+
+## §6 — The skipped `useTodoList` extraction
+
+I have asked for this twice, and my last review closed with *"the next branch to
+touch `TodoListScreen.tsx` does the hook first."* This branch touched it and did
+not. That is the fourth pass.
+
+**I accept the deviation, and the reasoning is better than my rule was.** What I
+asked for in m-7 was a revert I could actually review. A ~200-line extraction
+landing in the same diff would have buried a three-line `catch` inside a move,
+and reviewing a move for behaviour preservation is the one review task where
+attention reliably fails. The author extracted `todoListState.ts` instead —
+which is not a substitute for the hook, it is a *different* and better-motivated
+seam, cut exactly where the untested correctness property lived. I can point at
+the three lines that carry all the risk. That is the outcome the rule was
+supposed to produce, and the rule would have prevented it.
+
+So: accepted, and the standing instruction is now discharged rather than
+deferred a fourth time. Replacing it, and this one is not negotiable:
+
+> **`useTodoList` is the next branch to touch `TodoListScreen.tsx`, and it lands
+> as a pure move — no behaviour change, no new tests, an empty behavioural
+> diff.** No further behaviour change to that file merges before it.
+
+The reason to hold that line now is that the argument for deferring has just
+been spent. There is no behaviour change queued behind the extraction any more,
+so the next time this file is opened the move is the cheapest it will ever be —
+and `TodoListScreen.tsx` is now 659 lines.
+
+## §7 — The pending treatment
+
+**Conclusion right. One of the two arguments wrong. Keep it.**
+
+The §4.8 argument does not hold (N-1). "Row-level pending (toggle, delete):
+apply `opacity-60 pointer-events-none`… No spinner — these are optimistic" is
+reasoning about *why a spinner is unnecessary*, not a claim that the dim belongs
+with optimism — and §8.3.2 is the same author writing later, with §4.8 in front
+of them, saying the treatment "should then apply only to *delete*". On the
+documents alone, §8.3.2 wins.
+
+The m-4 / DEF-12 argument holds completely, and it is enough on its own.
+`isDisabled` plus `pointer-events-none` is what stops a second press racing an
+in-flight `PATCH`, the author is right that optimism makes that press *more*
+likely rather than less, and the branch's own E2E now asserts `aria-busy="true"`
+during flight — the guard is not theoretical, it is tested. §8.3.2 was written
+about perceived latency and was not reasoning about races at all, so it does not
+actually rule on the question the author is answering.
+
+Is a dimmed row that has already visibly changed just noise? Not quite: it is
+also the only visible reason the row has stopped responding. A locked,
+*undimmed* row is worse than either alternative — it ignores you and does not
+say why.
+
+One thing the branch's framing forecloses, and the designer should have it:
+**the guard and the dim are separable.** `isDisabled` + `pointer-events-none`
+are the lock; `opacity-60` is only the signal. Dropping the opacity while
+keeping the lock is a real third option, and it is the one §8.3.2 was reaching
+for. I would not take it today — but the branch argues as though it does not
+exist, and that is the part to correct. Note too that this branch halves how
+long the dim is on screen, so §8.3.2's complaint is already half-answered by the
+change it was written about.
+
+Ship as is. Take MI-6 to the designer with the separability point and let
+`DESIGN.md` be made self-consistent by whoever owns it.
+
+---
+
+## Summary
+
+| | |
+|---|---|
+| Blocker | — |
+| Major | MA-1 query figure wrong twice · MA-2 counter unreconciled and untested · MA-3 `replaceTodo`'s correction under-tested |
+| Minor | MI-1 … MI-7 |
+| Nit | N-1 … N-3 |
+
+The revert — the thing I said was the whole feature — is correct on every path I
+could construct except one that needs three concurrent preconditions, and it is
+the only part of this app whose correctness I can now demonstrate by breaking it
+and watching the right tests fail. That is the standard I asked for. It is met.
+
+> **Approve**, with the three conditions at the top.

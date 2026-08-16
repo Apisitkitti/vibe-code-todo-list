@@ -23,6 +23,17 @@ export const ariaQuoted = (title: string) => `"${title}"`;
 
 /** §7.3 */
 export const PAGE_HEADING = "Your todos";
+
+/**
+ * §7.3 — the counter beside the heading.
+ *
+ * It describes the **account**, not the filtered page (`GET /api/todos`
+ * computes both counts without the filter clauses), so a filter never moves
+ * it and a toggle moves the first number by exactly one — including when the
+ * row it describes has just left the filtered list (`docs/PRD.md` US-07).
+ */
+export const doneCount = (done: number, total: number) =>
+  `${done} of ${total} done`;
 export const NEW_TODO_LABEL = "New todo";
 export const ACCOUNT_MENU_LABEL = "Account menu";
 export const SIGN_OUT_LABEL = "Sign out";

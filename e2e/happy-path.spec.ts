@@ -8,10 +8,16 @@ import {
   addedToast,
   deleteConfirmBody,
   deletedToast,
+  doneCount,
   markedCompleteToast,
   markedNotCompleteToast,
   updatedToast,
 } from "./support/copy";
+import {
+  TODO_LIST_URL,
+  TODO_STATUS_URL,
+  countRequests,
+} from "./support/assertions";
 import { expect, test } from "./support/fixtures";
 
 /**
@@ -104,5 +110,61 @@ test.describe("happy path", () => {
 
     // The account still exists until the fixture tears it down.
     expect(account.email).toContain("@e2e.invalid");
+  });
+
+  /**
+   * The cost m-7 was actually about, pinned so it cannot creep back.
+   *
+   * A toggle used to be two sequential HTTP requests: the `PATCH`, whose
+   * authoritative response body was discarded, and then a full `GET
+   * /api/todos` to fetch that same row again — two session lookups and nine
+   * database queries for one checkbox, measured against a real Postgres
+   * (`docs/REVIEW.md` MA-1, which corrects §2.1's original figure of seven).
+   * Splicing the `PATCH` response into local state deletes the second request
+   * outright, taking it to one request and four queries.
+   *
+   * Asserted as a *count*, because a reinstated `reloadSilently()` would not
+   * change a single thing the other tests look at — the list would still be
+   * right, just fetched twice — so nothing else in this suite would notice.
+   */
+  test("a toggle is one request, with no list refetch behind it", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await todos.createTodo(TODO_TITLE);
+
+    /*
+      Reload first, so the counters start from a settled page: creating a todo
+      legitimately refetches the list (a create can move the row or drop it out
+      of the filter, so it keeps its reload), and that GET must not be counted
+      against the toggle.
+    */
+    await page.reload();
+    await expect(todos.row(TODO_TITLE)).toBeVisible();
+    await expect(todos.doneCounter).toHaveText(doneCount(0, 1));
+
+    const statusRequests = countRequests(page, TODO_STATUS_URL, "PATCH");
+    const listRequests = countRequests(page, TODO_LIST_URL, "GET");
+
+    await todos.toggle(TODO_TITLE, true);
+
+    await expect(todos.checkbox(TODO_TITLE)).toBeChecked();
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(TODO_TITLE) }),
+    ).toBeVisible();
+
+    expect(statusRequests.count, "a toggle writes exactly once").toBe(1);
+    expect(
+      listRequests.count,
+      "the PATCH already returned the row — refetching the list is the round trip m-7 removed",
+    ).toBe(0);
+
+    /*
+      And the counter is right without that refetch. `reloadSilently()` was
+      incidentally the only thing that ever corrected it, so with the refetch
+      gone this number is now pure client arithmetic — the one value on this
+      branch computed by hand (review MA-2).
+    */
+    await expect(todos.doneCounter).toHaveText(doneCount(1, 1));
   });
 });
