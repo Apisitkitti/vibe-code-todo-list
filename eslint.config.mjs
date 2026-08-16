@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Playwright's output. Gitignored, but a developer who has just run the
+    // suite has thousands of bundled vendor files sitting here, and linting
+    // them buries the real findings under a few thousand warnings.
+    "playwright-report/**",
+    "test-results/**",
   ]),
 ]);
 

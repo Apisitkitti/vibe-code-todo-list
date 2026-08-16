@@ -34,6 +34,21 @@ import { TodoRow } from "./TodoRow";
 const TODOS_PATH = "/todos";
 const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
 
+/**
+ * How long an Undo stays offered. HeroUI's 4s default is a reasonable life for
+ * "here is what happened" and a poor one for "you have this long to change
+ * your mind" — it can expire while the reader is still finishing the sentence
+ * that told them Undo was there. Both the designer and the Senior called it
+ * too short before anyone was looking for it.
+ *
+ * It is also the margin that keeps the toast usable at all: the first ~400ms
+ * of an action toast is inert while HeroUI's view transition owns hit-testing
+ * (`docs/DESIGN.md` §4.10). Shortening this window without taking the
+ * `wrapUpdate` escape hatch would eat into a control that is already dead on
+ * arrival.
+ */
+const UNDO_WINDOW_MS = 12_000;
+
 /** Rendered twice: the toolbar button and the brand-new-account empty state. */
 const NEW_TODO_LABEL = "New todo";
 
@@ -136,6 +151,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     dismissUndo(todoId);
 
     const key = toast.success(message, {
+      timeout: UNDO_WINDOW_MS,
       actionProps: {
         children: "Undo",
         onPress: () => {
