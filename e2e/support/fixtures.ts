@@ -135,7 +135,17 @@ const settleToastTransitions = async (page: Page) => {
       nothing to read. At 60fps this is ~5s, far longer than a toast chain.
     */
     const MAX_FRAMES = 300;
-    const QUIET_FRAMES = 2;
+
+    /*
+      Three, not two. HeroUI chains a close and an add through
+      `startViewTransition`, and the gap between two chained transitions is
+      two idle frames — measured at 2 frames across 4 runs in this project's
+      own Chromium. Two quiet frames therefore returns *inside* that seam,
+      with the next transition starting on the following frame; three clears
+      the whole chain. This is the difference between waiting for the
+      animation to finish and finding the one gap in the middle of it.
+    */
+    const QUIET_FRAMES = 3;
 
     let quiet = 0;
 
