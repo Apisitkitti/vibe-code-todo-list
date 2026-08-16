@@ -1207,6 +1207,35 @@ which would tell the user their todo was deleted.
 |---|---|
 | Malformed request body | `That request wasn’t valid.` |
 
+### 7.16 List section headings
+
+Added for backlog #2 (`docs/PM-PROPOSAL.md` §7.1): the list is ordered by
+urgency and cut into sections, so each section needs a name. Rendered as a real
+`<h2>` (`Typography.Heading level={2}`) at the `body-sm` size, per §8.4.3 —
+navigable structure, not styled text.
+
+Two rules govern when these appear, and both are requirements rather than
+polish:
+
+- **An empty section renders nothing** — no heading standing over no rows.
+- **A lone section renders no heading either.** A user who has never set a due
+  date has one section, `No date`, and a heading there would name the whole
+  list after the one thing it lacks. Headings appear only once there are two or
+  more sections to tell apart.
+
+| Slot | String |
+|---|---|
+| Section heading: past due | `Overdue` |
+| Section heading: due today | `Today` |
+| Section heading: due later | `Upcoming` |
+| Section heading: no due date | `No date` |
+| Section heading: completed | `Completed` |
+
+`Today` is deliberately the same word the row's own due-date label uses (§7.4).
+A row reading `Today` inside a section headed `Today` is a repetition, not a
+contradiction, and the alternative — inventing a second word for the same day —
+is worse.
+
 Punctuation notes: use the typographic apostrophe (`'`) in contractions
 (`don't`, `can't`, `Couldn't`) and curly double quotes around interpolated
 titles in prose. Use the ellipsis character `…`.
