@@ -112,6 +112,23 @@ npm run lint
 npx tsc --noEmit   # typecheck
 ```
 
+## Deployment region
+
+`vercel.json` pins functions to **`sin1` (Singapore)** because the Neon
+database is in `ap-southeast-1`. Without it Vercel defaults to `iad1`
+(Washington DC), and every query crosses the Pacific — twice, since a request
+that touches the database does at least one session lookup before its own
+query.
+
+That single hop is not a tuning detail here. Rendering `/todos` costs a
+session lookup in the layout, then the client's list fetch costs another
+session lookup plus the list query. At ~200ms of round trip each, the region
+mismatch alone accounts for most of a slow first byte, and no amount of
+application work recovers it.
+
+Keep the function region and the database region equal. If the database
+moves, this file moves with it.
+
 ## Schema changes against production
 
 There is no migration history — the project uses `prisma db push`, which
