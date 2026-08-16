@@ -63,18 +63,36 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   // Bumped after every mutation to re-run the load below — one fetch path for
   // the initial render, a filter change, a retry and a refresh alike.
   const [reloadToken, setReloadToken] = useState(0);
+  const [lastFilterKey, setLastFilterKey] = useState<string | null>(null);
   const formState = useOverlayState();
 
   const router = useRouter();
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
   const { status, priority, query } = filters;
+  const filterKey = `${status}|${priority}|${query}`;
 
+  // Filters arrive as props from the URL, so the refetch they trigger starts
+  // in the effect below — too late to raise the flag without a render showing
+  // stale rows first. Adjusted during render instead, the same way
+  // `TodoFilters` follows the URL. An effect here trips
+  // `react-hooks/set-state-in-effect`.
+  if (lastFilterKey !== filterKey) {
+    setLastFilterKey(filterKey);
+    setIsLoading(true);
+  }
+
+  /**
+   * Every refetch shows the skeleton, not just the first load. A mutation used
+   * to close its modal the moment the write returned, leaving the old list on
+   * screen until the refetch landed — a window where the app looked like it
+   * had ignored you. A filter change had the same gap (review m-8).
+   */
   const reload = () => {
+    setIsLoading(true);
     setReloadToken((token) => token + 1);
   };
 
   const retry = () => {
-    setIsLoading(true);
     setLoadError(null);
     reload();
   };
