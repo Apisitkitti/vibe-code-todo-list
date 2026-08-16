@@ -9,7 +9,6 @@ import {
   parseDueDate,
   parsePriorityFilter,
   parseStatusFilter,
-  type TodoListResult,
 } from "@/lib/todo";
 
 import {
@@ -17,7 +16,8 @@ import {
   toFieldErrors,
   unauthorizedResponse,
 } from "./errors";
-import { readJsonBody, toTodoItemData } from "./model";
+import { TodoListResponse, TodoResponse } from "./model";
+import { readJsonBody } from "./util";
 
 const STATUS_PARAM = "status";
 const PRIORITY_PARAM = "priority";
@@ -61,13 +61,9 @@ export const GET = async (request: NextRequest) => {
     prisma.todo.count({ where: { userId: session.user.id, completed: true } }),
   ]);
 
-  const result: TodoListResult = {
-    todos: todos.map(toTodoItemData),
-    totalCount,
-    completedCount,
-  };
-
-  return NextResponse.json(result);
+  return NextResponse.json(
+    new TodoListResponse(todos, totalCount, completedCount),
+  );
 };
 
 export const POST = async (request: NextRequest) => {
@@ -93,5 +89,5 @@ export const POST = async (request: NextRequest) => {
     },
   });
 
-  return NextResponse.json(toTodoItemData(todo), { status: 201 });
+  return NextResponse.json(TodoResponse.from(todo), { status: 201 });
 };

@@ -1,5 +1,4 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { z } from "zod";
 
 import { todoFormSchema } from "@/app/todos/components/form";
 import { prisma } from "@/lib/prisma";
@@ -13,37 +12,29 @@ import {
   toFieldErrors,
   unauthorizedResponse,
 } from "../errors";
-import { readJsonBody, toTodoItemData } from "../model";
+import { TodoResponse } from "../model";
+import { findOwnedTodo, readJsonBody } from "../util";
 
-/** The toggle sends only this; it must never touch the other fields. */
-const todoToggleSchema = z.object({ completed: z.boolean() }).strict();
-
-const isToggleBody = (body: unknown): boolean => {
-  return todoToggleSchema.safeParse(body).success;
-};
+/**
+ * `completed` belongs to the status route. Accepting it here and dropping it
+ * would return a 200 that looks like the checkbox was saved — the silent
+ * no-op QA caught before the routes were split (review m-5, QA DEF-06).
+ */
+const COMPLETED_NOT_HERE_MESSAGE =
+  "Use PATCH /api/todos/[id]/status to change completion; this route saves the todo's fields.";
 
 const mentionsCompleted = (body: unknown): boolean => {
   return typeof body === "object" && body !== null && "completed" in body;
 };
 
 /**
- * A body that carries `completed` but is not a pure toggle is neither request:
- * the toggle branch would drop its form fields, and the form branch would drop
- * its `completed` — both returning a 200 that looks like a successful save
- * (review m-5, QA DEF-06). Reject it instead of guessing which half was meant.
- */
-const isMixedBody = (body: unknown): boolean => {
-  return mentionsCompleted(body) && !isToggleBody(body);
-};
-
-const MIXED_BODY_MESSAGE =
-  "Send either “completed” on its own to toggle, or the todo fields without it to save changes — not both.";
-
-/**
- * `PATCH` serves both the edit form and the completion toggle. Either way the
- * write is scoped by `{ id, userId }` in the same statement, so a todo owned
- * by another user matches zero rows and comes back as 404 — never as data
- * (`docs/PRD.md` NFR-01).
+ * The todo's own fields. Completion is deliberately not one of them — it has
+ * its own route at `PATCH /api/todos/[id]/status`, so one request can never
+ * half-mean "save" and half-mean "toggle".
+ *
+ * Every write is scoped by `{ id, userId }` in the same statement, so a todo
+ * owned by another user matches zero rows and comes back as 404 — never as
+ * data (`docs/PRD.md` NFR-01).
  */
 export const PATCH = async (request: NextRequest, context: RouteContext<"/api/todos/[id]">) => {
   const session = await getSession();
@@ -53,53 +44,34 @@ export const PATCH = async (request: NextRequest, context: RouteContext<"/api/to
   const { id } = await context.params;
   const body = await readJsonBody(request);
 
-  // No field errors, so this reports as a malformed request rather than
-  // pinning the blame on one input.
-  // Say which of the two requests it failed to be, rather than a bare
-  // "that request wasn't valid" the caller has to guess at.
-  if (isMixedBody(body)) return malformedBodyResponse(MIXED_BODY_MESSAGE);
-
-  if (isToggleBody(body)) {
-    const parsed = todoToggleSchema.safeParse(body);
-
-    if (!parsed.success) return badRequestResponse(toFieldErrors(parsed.error));
-
-    const result = await prisma.todo.updateMany({
-      where: { id, userId: session.user.id },
-      data: { completed: parsed.data.completed },
-    });
-
-    if (result.count === 0) return notFoundResponse();
-  } else {
-    const parsed = todoFormSchema.safeParse(body);
-
-    if (!parsed.success) return badRequestResponse(toFieldErrors(parsed.error));
-
-    const { title, note, priority, dueAt } = parsed.data;
-    const parsedDueAt = parseDueDate(dueAt);
-
-    const result = await prisma.todo.updateMany({
-      where: { id, userId: session.user.id },
-      data: {
-        title,
-        note: note === "" ? null : note,
-        priority,
-        dueAt: parsedDueAt === "invalid" ? null : parsedDueAt,
-      },
-    });
-
-    if (result.count === 0) return notFoundResponse();
+  if (mentionsCompleted(body)) {
+    return malformedBodyResponse(COMPLETED_NOT_HERE_MESSAGE);
   }
 
-  // Re-read through the same ownership filter so the response cannot leak a
-  // row the caller does not own.
-  const todo = await prisma.todo.findFirst({
+  const parsed = todoFormSchema.safeParse(body);
+
+  if (!parsed.success) return badRequestResponse(toFieldErrors(parsed.error));
+
+  const { title, note, priority, dueAt } = parsed.data;
+  const parsedDueAt = parseDueDate(dueAt);
+
+  const result = await prisma.todo.updateMany({
     where: { id, userId: session.user.id },
+    data: {
+      title,
+      note: note === "" ? null : note,
+      priority,
+      dueAt: parsedDueAt === "invalid" ? null : parsedDueAt,
+    },
   });
+
+  if (result.count === 0) return notFoundResponse();
+
+  const todo = await findOwnedTodo(id, session.user.id);
 
   if (!todo) return notFoundResponse();
 
-  return NextResponse.json(toTodoItemData(todo));
+  return NextResponse.json(TodoResponse.from(todo));
 };
 
 export const DELETE = async (_request: NextRequest, context: RouteContext<"/api/todos/[id]">) => {
