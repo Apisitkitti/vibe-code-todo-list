@@ -1,11 +1,27 @@
 import { z } from "zod";
 
 import {
+  DUE_DATE_FORMAT,
   NOTE_MAX_LENGTH,
+  PRIORITY_LABELS,
   PRIORITY_VALUES,
   TITLE_MAX_LENGTH,
   parseDueDate,
 } from "@/lib/todo";
+
+/**
+ * Messages are built from the same values they describe, so raising a limit
+ * or adding a priority updates the copy with it. A hard-coded "under 200
+ * characters" starts lying the moment `TITLE_MAX_LENGTH` changes.
+ */
+const tooLongMessage = (field: string, maxLength: number) =>
+  `Keep the ${field} under ${maxLength} characters.`;
+
+const PRIORITY_INVALID_MESSAGE = `Choose a priority: ${PRIORITY_VALUES.map(
+  (priority) => PRIORITY_LABELS[priority].toLowerCase(),
+).join(", ")}.`;
+
+const DUE_DATE_INVALID_MESSAGE = `Enter a valid date (${DUE_DATE_FORMAT}).`;
 
 /**
  * The single description of a todo form's shape. The client validates with it
@@ -29,21 +45,18 @@ export const todoFormSchema = z.object({
     .string("Enter a title.")
     .trim()
     .min(1, "Enter a title.")
-    .max(TITLE_MAX_LENGTH, "Keep the title under 200 characters."),
+    .max(TITLE_MAX_LENGTH, tooLongMessage("title", TITLE_MAX_LENGTH)),
   note: z
-    .string("Keep the note under 2000 characters.")
+    .string(tooLongMessage("note", NOTE_MAX_LENGTH))
     .trim()
-    .max(NOTE_MAX_LENGTH, "Keep the note under 2000 characters.")
+    .max(NOTE_MAX_LENGTH, tooLongMessage("note", NOTE_MAX_LENGTH))
     .default(""),
-  priority: z.enum(PRIORITY_VALUES, "Choose a priority."),
+  priority: z.enum(PRIORITY_VALUES, PRIORITY_INVALID_MESSAGE),
   // The DatePicker yields "" or `YYYY-MM-DD`.
   dueAt: z
-    .string("Enter a valid date.")
+    .string(DUE_DATE_INVALID_MESSAGE)
     .trim()
-    .refine(
-      (value) => parseDueDate(value) !== "invalid",
-      "Enter a valid date.",
-    )
+    .refine((value) => parseDueDate(value) !== "invalid", DUE_DATE_INVALID_MESSAGE)
     .default(""),
 });
 

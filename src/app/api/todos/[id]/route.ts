@@ -8,6 +8,7 @@ import { parseDueDate } from "@/lib/todo";
 
 import {
   badRequestResponse,
+  malformedBodyResponse,
   notFoundResponse,
   toFieldErrors,
   unauthorizedResponse,
@@ -35,6 +36,9 @@ const isMixedBody = (body: unknown): boolean => {
   return mentionsCompleted(body) && !isToggleBody(body);
 };
 
+const MIXED_BODY_MESSAGE =
+  "Send either “completed” on its own to toggle, or the todo fields without it to save changes — not both.";
+
 /**
  * `PATCH` serves both the edit form and the completion toggle. Either way the
  * write is scoped by `{ id, userId }` in the same statement, so a todo owned
@@ -51,7 +55,9 @@ export const PATCH = async (request: NextRequest, context: RouteContext<"/api/to
 
   // No field errors, so this reports as a malformed request rather than
   // pinning the blame on one input.
-  if (isMixedBody(body)) return badRequestResponse({});
+  // Say which of the two requests it failed to be, rather than a bare
+  // "that request wasn't valid" the caller has to guess at.
+  if (isMixedBody(body)) return malformedBodyResponse(MIXED_BODY_MESSAGE);
 
   if (isToggleBody(body)) {
     const parsed = todoToggleSchema.safeParse(body);

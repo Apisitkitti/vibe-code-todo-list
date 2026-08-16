@@ -61,3 +61,11 @@ export const badRequestResponse = (fieldErrors: TodoFieldErrors) => {
     fieldErrors,
   });
 };
+
+/**
+ * A `400` that no single field is to blame for — the body itself is the
+ * problem. Takes the reason so the caller can say what it expected instead of
+ * falling back to the generic "that request wasn't valid".
+ */
+export const malformedBodyResponse = (message: string) =>
+  apiError(ApiErrorCode.BadRequest, { message });
