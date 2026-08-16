@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { Toast } from "@heroui/react";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import "./globals.css";
@@ -41,6 +42,7 @@ const RootLayout = ({ children }: LayoutProps<"/">) => {
       <body className="min-h-full flex flex-col bg-[var(--background)] text-[var(--foreground)]">
         {children}
         <Toast.Provider placement="bottom" />
+        <SpeedInsights />
       </body>
     </html>
   );

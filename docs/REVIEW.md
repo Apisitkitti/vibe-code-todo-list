@@ -449,3 +449,249 @@ row actions revealed via `group-focus-within` rather than `hidden`, with
 tooltips suppressed on touch while the `aria-label` remains the accessible name
 (`TodoRow.tsx:62-80`); skeleton carries `aria-busy` and a label. Focus trap and
 restore come free from react-aria and are not overridden.
+
+---
+
+# Code review — `fix/qa-regression-findings` → `develop`
+
+Reviewer: Senior engineer
+Date: 2026-08-16
+Range: `git diff develop...fix/qa-regression-findings` (`d36b00a`…`26b55ef`, 8 commits)
+Gate: `npx tsc --noEmit` clean, `npm run lint` clean, `npm run build` succeeds —
+re-run against `26b55ef`. This review covers what those cannot see.
+
+Note: `26b55ef` ("drop the per-api model file") landed mid-review. It removes
+`src/app/api/todos/model.ts`, returns response building to `toTodoResponse` /
+`toTodoListResponse` in `util.ts` typed as `TodoItemData` / `TodoListResult`,
+and updates `docs/CONVENTIONS.md` to match. Findings below are against that
+commit. The classes-versus-arrow-functions question is moot — there are no
+classes left, and the mapper now returns the same type the client consumes, so
+the server↔client contract is compile-checked again. That is the right shape.
+
+## 1. Authorization and data scoping — clean
+
+Traced every handler under `src/app/api/todos/**`:
+
+- `GET /api/todos` (`route.ts:31-66`) — `getSession()` first, `401` before any
+  query; `where` seeded `{ userId: session.user.id }` (`:41`); both `count()`
+  calls repeat the owner clause (`:59-60`).
+- `POST /api/todos` (`route.ts:68-92`) — session first, schema second,
+  `userId` written from the session only (`:87`).
+- `PATCH /api/todos/[id]` (`[id]/route.ts:38-74`) — session first,
+  `updateMany({ where: { id, userId: session.user.id } })` (`:57-58`),
+  `count === 0` → `404`, re-read through `findOwnedTodo(id, session.user.id)`.
+- `PATCH /api/todos/[id]/status` (new, `[id]/status/route.ts:37-69`) — same
+  order, same single-statement scoping (`:57-59`), same `404`. No `userId`
+  anywhere in the body schema, query or headers.
+- `DELETE /api/todos/[id]` (`[id]/route.ts:77-91`) — `deleteMany` scoped,
+  `404` on zero rows, `204` otherwise.
+
+Undo path traced concretely: `TodoListScreen.undoToggle` (`:100-116`) →
+`toggleTodo` → `PATCH /api/todos/:id/status` — the identical route with the
+identical session check. No privileged shortcut, no id from anywhere but the
+row the user already sees. A foreign id returns `404` with
+`TODO_NOT_FOUND_MESSAGE`, indistinguishable from a deleted one.
+
+No finding.
+
+## 2. The `completed` split — one gap (see m-3)
+
+`PATCH /api/todos/[id]` rejects any body carrying `completed` (`:46-48`), the
+status route rejects anything but `completed` (`:22`, `.strict()`), and neither
+rejection can read as a save: both are `400`s with no `fieldErrors`, so
+`readFieldErrors` returns `null` and `TodoFormModal` shows a danger toast rather
+than re-rendering the form as if it had submitted. `updateTodo` sends exactly
+the four form fields; `toggleTodo` sends exactly `{ completed }`.
+
+The third path is `POST /api/todos` — filed as m-3.
+
+## 3. Secret and boundary leaks — clean
+
+`@/lib/prisma` is imported only by the four route handlers and `util.ts`; no
+`"use client"` module reaches it (checked by grepping every `"use client"` file
+for `lib/prisma`, `lib/auth`, `lib/session` — zero hits). `DATABASE_URL` appears
+only in `src/lib/prisma.ts` and generated Prisma doc comments;
+`BETTER_AUTH_SECRET` appears nowhere in `src/`. Every error body now goes
+through `apiError`, which emits `{ code, message, fieldErrors? }` and nothing
+else — no stack, no Prisma text, no SQL. See M-4 for the one hole in that
+claim (unhandled 500s).
+
+---
+
+## Blocker
+
+None.
+
+## Major
+
+**M-1 — `src/app/api/todos/[id]/status/route.ts:49-55`: the `badRequestResponse`
+branch is unreachable, and every rejection gets the wrong message.**
+`toFieldErrors` (`errors.ts:28-41`) keeps only paths that pass
+`isTodoFieldName`, and `TODO_FIELD_NAMES` is `title, note, priority, dueAt` —
+`completed` is not among them. This schema has exactly one key, `completed`, so
+`fieldErrors` is *always* empty and `Object.keys(fieldErrors).length > 0` is
+always false. Consequence: `PATCH /status` with `{"completed":"yes"}` — a plain
+wrong-type error — answers "This route takes only “completed”; use PATCH
+/api/todos/[id] to save the todo's fields.", which is untrue and points the
+caller at the route that would reject it too. It also means dead code plus two
+imports (`badRequestResponse`, `toFieldErrors`) that do nothing at runtime, and
+a doc comment (`:24-28`) that implies field errors are reachable here.
+Fix: drop the ternary and the two imports; branch on the issue instead —
+`parsed.error.issues.some((issue) => issue.code === "unrecognized_keys")` gets
+the "wrong route" wording, anything else gets a message that says `completed`
+must be `true` or `false`.
+
+**M-2 — `[id]/route.ts:22-23` and `[id]/status/route.ts:29-30`: developer copy
+is shown to users, and it is not in the copy deck.** Both strings name HTTP
+methods and route paths (`"Use PATCH /api/todos/[id]/status …"`). They reach
+`getErrorMessage` and land verbatim in a `toast.danger`. `docs/CONVENTIONS.md`
+→ Mutation UX: "Exact strings come from the copy deck in `docs/DESIGN.md`. If a
+string is missing there, add it to that file rather than improvising inline."
+Neither string is in `docs/DESIGN.md`, and this branch does not touch that file.
+Fix: add user-facing copy to `docs/DESIGN.md` (e.g. "That change couldn't be
+saved. Refresh and try again.") and use it; if the API detail is wanted for
+developers, put it in the `code` or a separate `detail` field, not `message`.
+While there: `“completed”` uses curly quotes and `todo's` a straight
+apostrophe in the same sentence — the deck uses typographic quotes throughout.
+
+**M-3 — `src/app/api/todos/route.ts:73-89`: `POST` still accepts and silently
+drops `completed`.** `todoFormSchema` is a non-strict object, so
+`{"title":"x","completed":true}` parses, `completed` is stripped, and the todo
+is created incomplete. It is the same defect class the branch exists to close
+(DEF-06), one route over. Milder than DEF-06 because the `201` body reports
+`completed:false`, so the answer is at least honest — but the invariant the
+branch claims ("`completed` is never accepted where it cannot be applied") is
+not held. Fix: hoist `mentionsCompleted` into `util.ts` (or `errors.ts`) and
+apply the same guard in `POST` before parsing, with the same message chosen
+under M-2.
+
+**M-4 — `src/lib/apiError.ts:14-19`: no code for `500`, so the "every error
+response carries `message`" contract is not actually total.** The handlers have
+no `try`/`catch`; a Prisma or connection failure becomes Next's own `500`, whose
+body has no `message` and no `code`. `getErrorMessage` then falls through to the
+caller's fallback string — which works, but `docs/CONVENTIONS.md` (as amended by
+this branch) states the client "depends on this: `getErrorMessage` reads
+`message` and expects it on every error response". Fix: either add
+`ApiErrorCode.Internal` plus a thin wrapper the handlers use, or write the
+exclusion into the convention explicitly so the next reader does not trust a
+guarantee that does not exist.
+
+**M-5 — `src/lib/auth.ts:23-25`: production pinning depends on an env var
+nothing enforces.** The security reasoning in the comment is right and the
+implementation of the split is right: `NODE_ENV === "production"` never yields
+the dynamic config, so the `Host` header cannot steer the base URL in a Vercel
+deploy; development is confined to `allowedHosts: ["localhost:*",
+"127.0.0.1:*"]`, which better-auth matches against the validated `host` header
+(`resolveDynamicBaseURL`, `matchesHostPattern`), so a non-loopback host throws
+rather than being accepted. I checked this against the installed better-auth
+(`node_modules/better-auth/dist/utils/url.mjs`) rather than the docs. So: the
+change is not wrong, and I would not block on it.
+The gap is that if `BETTER_AUTH_URL` is unset in production, `baseURL` is
+`undefined` and better-auth falls back to the env vars and then to
+`getOrigin(request.url)` — i.e. the very `Host`-derived base URL the comment
+says production excludes, silently and with no error. Fix (one line, worth
+having):
+`if (isProduction && !process.env.BETTER_AUTH_URL) throw new Error("BETTER_AUTH_URL must be set in production");`
+before the ternary. Fail at boot, not on the first password-reset link.
+
+## Minor
+
+**m-1 — `src/lib/auth.ts:29`: `trustedOrigins` is a no-op in both branches and
+reads as though it does something.** In development, `getTrustedOrigins`
+(`better-auth/dist/context/helpers.mjs:60-75`) already derives
+`http://localhost:*` and `http://127.0.0.1:*` from the dynamic `allowedHosts`
+plus `protocol: "http"`, so `LOCAL_ORIGINS` duplicates them exactly. In
+production the value is `[]`, which adds nothing to the origin derived from
+`BETTER_AUTH_URL`. It cannot widen production — that part of the brief checks
+out — but a reader has to prove that from library source. Fix: delete the
+`trustedOrigins` line and `LOCAL_ORIGINS`; if the intent is documentation, say
+so in one comment instead of in dead config.
+
+**m-2 — `src/app/todos/components/form/schema.ts:54, 56-60`: two user-facing
+strings changed without updating the copy deck.** `docs/DESIGN.md:1062-1063`
+specify `Choose a priority.` and `Enter a valid date.`; the code now sends
+`Choose a priority: low, medium, high.` and `Enter a valid date (YYYY-MM-DD).`
+The new wording is better — but the deck is the source of truth for copy, and
+it is now stale. Fix: update `docs/DESIGN.md:1062-1063` in this branch.
+
+**m-3 — `schema.ts:50`: `note`'s type-error message is a length message.**
+`z.string(tooLongMessage("note", NOTE_MAX_LENGTH))` means `{"note": 5}` answers
+"Keep the note under 2000 characters.", which is not what went wrong. `title`
+gets this right (`:45`, "Enter a title."). Fix: give `note` its own type
+message ("The note must be text.") and add it to the copy deck.
+
+**m-4 — the two `PATCH` handlers disagree about the no-field-to-blame case.**
+`[id]/route.ts:52` hands an empty `fieldErrors` to `badRequestResponse` and
+relies on `apiError`'s default ("That request wasn't valid."); `status/route.ts`
+20 lines away branches explicitly to `malformedBodyResponse`. Same situation,
+two shapes of code, and a garbage body gets a helpful message on one route and a
+generic one on the other. Fix: pick one — with M-1 applied, the status route's
+ternary disappears and both routes read the same way.
+
+**m-5 — duplicated write-then-reread tail, and a window between the two
+statements.** `[id]/route.ts:57-73` and `[id]/status/route.ts:57-68` are the
+same six lines: `updateMany` → `count === 0 ? 404` → `findOwnedTodo` →
+`!todo ? 404` → `json(toTodoResponse(todo))`. Two round trips, and a concurrent
+`DELETE` between them turns a successful write into a `404`. Prisma 7 allows
+non-unique filters in `update`'s `where`, so
+`prisma.todo.update({ where: { id, userId }, data })` returns the row in one
+statement (catch `P2025` → `404`) and removes both the duplication and the
+window. At minimum, extract the tail into one helper in `util.ts`.
+
+**m-6 — commit hygiene, `d36b00a`.** It carries the entire 851-line rewrite of
+`docs/QA-REPORT.md` alongside three code fixes in three areas.
+`docs/WORKFLOW.md` → Commit messages: "One logical change per commit." The QA
+report is QA's artifact and belongs in its own `docs:` commit (arguably on
+`develop`, not here); bundled like this the code fix is unreviewable in
+isolation. Not something to re-write history over now — noting it so it does not
+repeat.
+
+**m-7 — `docs/CONVENTIONS.md` is amended by `refactor:` commits.** `d73a708`,
+`0588137` and `26b55ef` each add mandatory-convention text that blesses the
+structure the same commit introduces. The conventions are the team lead's
+document and they override inferred style; a fix branch editing them, inside
+commits typed `refactor:`, is the wrong direction of authority even when the
+resulting rules are sensible (they are, after `26b55ef`). Fix going forward:
+propose convention changes as their own `docs:` commit, ideally its own PR.
+
+**m-8 — `@vercel/speed-insights` is undocumented and out of scope for this
+branch.** `package.json:26`, `src/app/layout.tsx:45`. The commit is correctly
+typed `chore:` and isolated, and the component is inert outside Vercel — but
+`docs/STACK.md` lists the stack and does not mention it, and adding a
+third-party beacon to every page is a product decision, not a QA regression fix.
+Fix: add a row to `docs/STACK.md`; ideally ship it on its own branch.
+
+## Nit
+
+- `[id]/route.ts:25` — `mentionsCompleted` describes narration, not a
+  predicate. `hasCompletedKey` says what it tests.
+- `[id]/route.ts:17-21` — the doc block explains the *route's* behaviour but is
+  attached to the message constant. It belongs on the guard or on `PATCH`.
+- `util.ts` is a generic name and now holds three unrelated things (row
+  mapping, a Prisma read, body parsing). `26b55ef` documents it in
+  `docs/CONVENTIONS.md`, which is enough to stop the next developer guessing,
+  so I am not filing it — but if a fourth kind of helper appears, split it.
+
+## Claims checked against the code
+
+| Claim | Verdict |
+|---|---|
+| DEF-02 — `PressResponder` warning from `ConfirmDialog` | Closed. `ConfirmDialog.tsx:45` now renders `AlertDialog.Backdrop` directly; `AlertDialogBackdrop` computes its own slots and does not need the root's context, and the root was the `DialogTrigger`/`Pressable` that logged the warning. Controlled props (`isOpen`/`onOpenChange`) are `ModalOverlay` props, so behaviour is unchanged. |
+| DEF-06 — mixed PATCH body `200` with fields dropped | Closed for `PATCH /[id]`; see M-3 for `POST`. |
+| DEF-07 — raw zod text reaching the user | Closed for the four form fields; see m-3 for `note`'s wording. A root-level type error (body is an array/number) still falls to the generic message, which is correct. |
+| Auth base URL derived in dev, pinned in prod | True as implemented; see M-5, m-1. |
+| Every API error centralised in `src/lib/apiError.ts` | True for every error the handlers emit; `NextResponse.json` no longer appears in an error path. Unhandled `500`s are outside it — M-4. |
+| Validation messages built from their constants | True (`schema.ts:17-24`); deck not updated — m-2. |
+| Write routes split; response bodies built in one place | True. After `26b55ef` the mapper returns `TodoItemData`/`TodoListResult`, so client and server share one declaration. |
+
+## Verdict
+
+**Request changes.**
+
+Merge-blocking: **M-1** (unreachable branch, wrong message on a real error
+path), **M-2** (developer copy in a user toast, off-deck), **M-3** (`POST`
+still drops `completed`). **M-5** is one line and should ride along.
+The rest can follow as separate commits.
+
+The authorization work is solid and the `/status` split is the right call — I
+found nothing to fault in session handling, ownership scoping or the Undo path.

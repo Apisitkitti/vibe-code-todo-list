@@ -1,11 +1,27 @@
 import { z } from "zod";
 
 import {
+  DUE_DATE_FORMAT,
   NOTE_MAX_LENGTH,
+  PRIORITY_LABELS,
   PRIORITY_VALUES,
   TITLE_MAX_LENGTH,
   parseDueDate,
 } from "@/lib/todo";
+
+/**
+ * Messages are built from the same values they describe, so raising a limit
+ * or adding a priority updates the copy with it. A hard-coded "under 200
+ * characters" starts lying the moment `TITLE_MAX_LENGTH` changes.
+ */
+const tooLongMessage = (field: string, maxLength: number) =>
+  `Keep the ${field} under ${maxLength} characters.`;
+
+const PRIORITY_INVALID_MESSAGE = `Choose a priority: ${PRIORITY_VALUES.map(
+  (priority) => PRIORITY_LABELS[priority].toLowerCase(),
+).join(", ")}.`;
+
+const DUE_DATE_INVALID_MESSAGE = `Enter a valid date (${DUE_DATE_FORMAT}).`;
 
 /**
  * The single description of a todo form's shape. The client validates with it
@@ -21,25 +37,26 @@ import {
  * plain `string` for the form while leaving the API contract honest.
  */
 export const todoFormSchema = z.object({
+  // Every `z.string()` carries its own message. The form can only ever send a
+  // string, but the API is public: without these, a wrong type from a direct
+  // call renders zod's internal English under the field — "Invalid input:
+  // expected string, received number" (QA DEF-07).
   title: z
-    .string()
+    .string("Enter a title.")
     .trim()
     .min(1, "Enter a title.")
-    .max(TITLE_MAX_LENGTH, "Keep the title under 200 characters."),
+    .max(TITLE_MAX_LENGTH, tooLongMessage("title", TITLE_MAX_LENGTH)),
   note: z
-    .string()
+    .string(tooLongMessage("note", NOTE_MAX_LENGTH))
     .trim()
-    .max(NOTE_MAX_LENGTH, "Keep the note under 2000 characters.")
+    .max(NOTE_MAX_LENGTH, tooLongMessage("note", NOTE_MAX_LENGTH))
     .default(""),
-  priority: z.enum(PRIORITY_VALUES, "Choose a priority."),
-  // `<input type="date">` yields "" or `YYYY-MM-DD`.
+  priority: z.enum(PRIORITY_VALUES, PRIORITY_INVALID_MESSAGE),
+  // The DatePicker yields "" or `YYYY-MM-DD`.
   dueAt: z
-    .string()
+    .string(DUE_DATE_INVALID_MESSAGE)
     .trim()
-    .refine(
-      (value) => parseDueDate(value) !== "invalid",
-      "Enter a valid date.",
-    )
+    .refine((value) => parseDueDate(value) !== "invalid", DUE_DATE_INVALID_MESSAGE)
     .default(""),
 });
 

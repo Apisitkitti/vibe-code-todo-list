@@ -177,6 +177,70 @@ Every route handler under `src/app/api/**` must, in this order:
 A route handler that skips any of these three is a security defect, not a
 style problem.
 
+### Splitting an API folder
+
+Each `src/app/api/<resource>/` folder keeps one route per operation, and the
+shared code beside them in two files:
+
+```
+src/app/api/todos/
+  route.ts               # GET (list), POST (create)
+  [id]/route.ts          # PATCH (save fields), DELETE
+  [id]/status/route.ts   # PATCH (toggle completion)
+  util.ts                # row → response body, shared reads, body parsing
+  errors.ts              # status responses, field-error mapping
+```
+
+- **One route per operation.** Changing a record's status is its own route,
+  not a branch inside the update handler. When one handler serves two
+  intents it has to guess from the body shape, and a body that half-matches
+  gets half-applied — a `200` that looks like a save but silently dropped
+  something. Each route also rejects the other's body and names the route
+  that wants it.
+- **`util.ts`** — the success side: turning a database row into the response
+  body, the reads the handlers share, and reading the request body.
+- **`errors.ts`** — the error side: `401` / `404` / `400` responses, their
+  messages, and the zod-issue → field-error mapping.
+
+There is no per-API model file. Response types are the canonical ones in
+`src/lib/<resource>.ts`, which the client already uses — a second declaration
+of the same record is only something to keep in sync.
+
+Name the error file `errors.ts`, **not** `error.ts`. Anything called
+`error.*` under `app/` is Next's error-boundary convention and the build
+fails with "must be a Client Component".
+
+### One error shape for the whole API
+
+`src/lib/apiError.ts` is the single source of truth for error responses.
+It owns the body shape, the status per code, and the default message per
+code:
+
+```ts
+apiError(ApiErrorCode.Unauthorized);
+apiError(ApiErrorCode.NotFound, { message: TODO_NOT_FOUND_MESSAGE });
+apiError(ApiErrorCode.BadRequest, { message, fieldErrors });
+```
+
+```json
+{ "code": "UNAUTHORIZED", "message": "Sign in again to continue." }
+```
+
+Rules:
+
+- A route handler **never** calls `NextResponse.json` for an error and never
+  writes a status code by hand. It picks an `ApiErrorCode`.
+- A resource's `errors.ts` may override the *message* to give domain wording
+  ("That todo no longer exists" rather than "That item no longer exists").
+  It may never change the shape or the status.
+- `fieldErrors` is omitted entirely when empty, so its presence always means
+  a field-level validation failure.
+- A new kind of error means a new `ApiErrorCode` in that one file — not a new
+  ad-hoc body somewhere in a handler.
+
+The client depends on this: `getErrorMessage` reads `message` and expects it
+on every error response, whatever endpoint it came from.
+
 ## Services
 
 - `src/service/` holds the layer the UI calls. A service function does one
