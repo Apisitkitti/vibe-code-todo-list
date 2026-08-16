@@ -12,10 +12,9 @@ import {
 } from "@heroui/react";
 
 import { CANCEL_LABEL } from "@/app/todos/constants";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { toDueDateInputValue, type TodoItemData } from "@/lib/todo";
-import { createTodo, updateTodo } from "@/service/todo.service";
+import { createTodo, deleteTodo, updateTodo } from "@/service/todo.service";
 
 import {
   DEFAULT_TODO_FORM_VALUES,
@@ -61,7 +60,6 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
   const isEdit = todo !== null;
 
-  const [pendingValues, setPendingValues] = useState<TodoFormValues | null>(null);
   const [serverFieldErrors, setServerFieldErrors] =
     useState<TodoFieldErrors | null>(null);
   const [isPending, setIsPending] = useState(false);
@@ -77,12 +75,6 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
     if (!state.isOpen) setServerFieldErrors(null);
   }
 
-  const closeConfirm = () => {
-    if (isPending) return;
-
-    setPendingValues(null);
-  };
-
   /**
    * This component stays mounted between openings, and two consecutive creates
    * share the same `key`, so a stale `serverFieldErrors` would render on the
@@ -93,27 +85,60 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
     state.close();
   };
 
-  const handleConfirm = async () => {
-    if (!pendingValues) return;
-
-    setIsPending(true);
-
+  /**
+   * Undo runs the same endpoints with the same authorization as the save it
+   * reverses — never a privileged shortcut. A created todo is deleted; an
+   * edited one is written back to the values it held when the form opened.
+   */
+  const undoSave = async (savedId: string, previous: TodoFormValues | null) => {
     try {
-      if (isEdit) {
-        await updateTodo(todo.id, pendingValues);
+      if (previous) {
+        await updateTodo(savedId, previous);
+        toast.success(`Todo “${previous.title}” restored`);
       } else {
-        await createTodo(pendingValues);
+        await deleteTodo(savedId);
+        toast.success("Todo removed");
       }
 
-      toast.success(
-        isEdit
-          ? `Todo “${pendingValues.title}” updated`
-          : `Todo “${pendingValues.title}” added`,
-      );
+      onSaved();
+    } catch (error) {
+      toast.danger(getErrorMessage(error, "Couldn’t undo that. Try again."));
+    }
+  };
 
-      setPendingValues(null);
+  /**
+   * Saving is reversible, so it goes straight through and offers Undo rather
+   * than asking the user to re-read the sentence they just typed
+   * (`docs/CONVENTIONS.md` → Mutation UX).
+   */
+  const handleValidSubmit = async (values: TodoFormValues) => {
+    if (isPending) return;
+
+    setServerFieldErrors(null);
+    setIsPending(true);
+
+    // Captured before the write, since `todo` is the pre-edit record.
+    const previousValues = todo ? toFormValues(todo) : null;
+
+    try {
+      const saved = isEdit
+        ? await updateTodo(todo.id, values)
+        : await createTodo(values);
+
       closeForm();
       onSaved();
+
+      toast.success(
+        isEdit ? `Todo “${values.title}” updated` : `Todo “${values.title}” added`,
+        {
+          actionProps: {
+            children: "Undo",
+            onPress: () => {
+              void undoSave(saved.id, previousValues);
+            },
+          },
+        },
+      );
     } catch (error) {
       const fieldErrors = readFieldErrors(error);
 
@@ -121,7 +146,6 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
         // A 400: the server rejected something the client thought was valid.
         // Keep the form open with the typed values and mark the bad fields.
         setServerFieldErrors(fieldErrors);
-        setPendingValues(null);
 
         return;
       }
@@ -140,8 +164,7 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
   };
 
   return (
-    <>
-      <Modal state={state}>
+    <Modal state={state}>
         <Modal.Backdrop variant="blur">
           <Modal.Container
             size={isDesktop ? "md" : "full"}
@@ -161,8 +184,7 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
                   serverFieldErrors={serverFieldErrors}
                   isDisabled={isPending}
                   onValidSubmit={(values) => {
-                    setServerFieldErrors(null);
-                    setPendingValues(values);
+                    void handleValidSubmit(values);
                   }}
                 />
               </Modal.Body>
@@ -195,26 +217,8 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
                 </Button>
               </Modal.Footer>
             </Modal.Dialog>
-          </Modal.Container>
-        </Modal.Backdrop>
-      </Modal>
-
-      <ConfirmDialog
-        isOpen={pendingValues !== null}
-        heading={isEdit ? "Save these changes?" : "Add this todo?"}
-        body={
-          isEdit
-            ? `“${pendingValues?.title ?? ""}” will be updated.`
-            : `“${pendingValues?.title ?? ""}” will be added to your list.`
-        }
-        confirmLabel={isEdit ? "Save changes" : "Add todo"}
-        pendingLabel={isEdit ? UPDATE_PENDING_LABEL : CREATE_PENDING_LABEL}
-        isPending={isPending}
-        onConfirm={handleConfirm}
-        onOpenChange={(isOpen) => {
-          if (!isOpen) closeConfirm();
-        }}
-      />
-    </>
+        </Modal.Container>
+      </Modal.Backdrop>
+    </Modal>
   );
 };
