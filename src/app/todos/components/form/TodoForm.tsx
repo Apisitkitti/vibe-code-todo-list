@@ -36,8 +36,8 @@ export interface TodoFormProps {
 }
 
 /**
- * Fields only. Submitting hands validated values to the parent, which runs the
- * confirm-then-mutate flow (`docs/CONVENTIONS.md` → Mutation UX).
+ * Fields only. Submitting hands validated values to the parent, which performs
+ * the write and reports it (`docs/CONVENTIONS.md` → Mutation UX).
  */
 export const TodoForm = ({
   formId,

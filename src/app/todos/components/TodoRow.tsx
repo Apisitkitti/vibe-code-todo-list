@@ -94,13 +94,35 @@ export const TodoRow = ({
 }: TodoRowProps) => {
   return (
     <li
-      className={`group flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-surface-hover ${
+      // `pointer-events-none` only stops a mouse. A keyboard user could hold
+      // Space and fire the out-of-order PATCHes m-4 describes, so the controls
+      // are disabled outright and the row announces itself as busy
+      // (QA DEF-12).
+      aria-busy={isPending}
+      // The outline is the row boundary; the gap is only breathing room.
+      // Spacing alone gave the list no boundary at all at rest — the row and
+      // the Card behind it are both `--surface`, so `gap-1.5` was 6px of the
+      // row's own colour — and no surface token can supply one: measured
+      // against `--surface`, `--surface-hover` is 1.20:1 light / 1.19:1 dark,
+      // `--surface-secondary` 1.15 / 1.13, `--surface-tertiary` 1.20 / 1.18.
+      // Hover does not exist on touch and there is no row-level focus style,
+      // so on a phone that left no separation in any state (§4.4).
+      //
+      // `--border-secondary` measures 1.71:1 light / 1.78:1 dark against
+      // `--surface`, and 1.42 / 1.50 against a hovered row — the same token,
+      // and the same strength, as the `divide-y` rule this replaced, drawn
+      // around the pill instead of across it. Not a `--field-border-width`
+      // case: this is a plain border utility on an `<li>`, so HeroUI's 0px
+      // field default (DEF-08) does not reach it.
+      className={`group flex items-center gap-3 rounded-2xl border border-border-secondary px-4 py-3.5 hover:bg-surface-hover ${
         isPending ? "pointer-events-none opacity-60" : ""
       }`}
     >
       <Checkbox
+        isDisabled={isPending}
         isSelected={todo.completed}
-        // Stays in its current state until the confirmed mutation lands.
+        // Not optimistic: the box holds its current state until the server
+        // confirms the flip, so it never shows something that did not happen.
         onChange={(isSelected) => onToggle(todo, isSelected)}
         aria-label={
           todo.completed
@@ -160,6 +182,7 @@ export const TodoRow = ({
             size="sm"
             isIconOnly
             className={ICON_BUTTON_SIZING}
+            isDisabled={isPending}
             aria-label={`Edit "${todo.title}"`}
             onPress={() => onEdit(todo)}
           >
@@ -172,6 +195,7 @@ export const TodoRow = ({
             size="sm"
             isIconOnly
             className={ICON_BUTTON_SIZING}
+            isDisabled={isPending}
             aria-label={`Delete "${todo.title}"`}
             onPress={() => onDelete(todo)}
           >

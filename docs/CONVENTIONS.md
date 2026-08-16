@@ -385,26 +385,41 @@ const form = useForm<TodoFormValues>({
   validation is UX; the server action is the trust boundary and must not
   assume the client validated anything.
 
-## Mutation UX — applies to EVERY create, update and delete
+## Mutation UX — confirm what cannot be undone
 
-Two things are mandatory around every mutation.
+**Confirm destructive and irreversible actions. Everything else fires
+immediately and offers Undo.**
 
-**Ruled by the team lead:**
+This replaces the earlier rule, which asked for a confirm modal on every
+create, update and delete. That rule collected an exception every time it met
+a real screen — sign-in, then the completion toggle, with two more queued —
+and a rule with four exceptions is not a rule. What every exception had in
+common was that the action was trivially reversible. So that is the rule now.
 
-- **Sign-up** gets a confirm modal — it creates an account, so the rule is
-  applied literally there.
-- **Sign-in does not.** It creates nothing and is undone by signing out, so a
-  confirmation step would only add a click to the most-repeated action in the
-  app. It submits straight through and still reports via toast.
-- Toggling a todo complete/incomplete is the **one exception**: no confirm
-  modal. It fires immediately and reports with a toast carrying an **Undo**
-  action that flips it back. Ten checkboxes must not mean ten dialogs.
-  The toast notification is still mandatory.
+The result is an app that is *more* recoverable, not looser: a dialog asks you
+to re-read what you just typed, while Undo actually puts things back.
 
-### 1. Confirm modal before the mutation runs
+| Action | Confirm? | Why |
+|---|---|---|
+| Delete a todo | **Yes** | Nothing restores it |
+| Create a todo | No | Undo removes it |
+| Edit a todo | No | Undo restores the previous values |
+| Toggle complete | No | Undo flips it back |
+| Sign in | No | Signing out undoes it |
+| Sign up | No | Creates an account, but nothing is lost by it |
 
-Every create, update and delete must open a confirmation modal first. The
-mutation only fires after the user confirms.
+Every mutation still reports through a toast — that part was never the
+problem and is not optional.
+
+### 1. Confirm modal — destructive actions only
+
+A destructive action opens a confirmation modal first, and only mutates after
+the user confirms. A reversible one does not: it fires on submit and reports
+with a toast carrying **Undo**.
+
+Before adding a confirm to something new, answer one question: *if this is
+wrong, can the user put it back without losing anything?* If yes, build the
+Undo instead of the dialog.
 
 Use HeroUI `AlertDialog` (verified sub-components:
 `.Root .Trigger .Backdrop .Container .Dialog .Header .Heading .Icon .Body
@@ -414,10 +429,8 @@ a separate dialog per screen.
 
 Requirements:
 
-- The confirm button for a delete is visually destructive; for create and
-  update it is the normal primary action.
-- Cancel must be the default focused action on destructive confirms, and
-  `Escape` must close without mutating.
+- The confirm button is visually destructive, and Cancel is focused by
+  default. `Escape` closes without mutating.
 - The body text names the specific record, e.g. the todo title — never a
   bare "Are you sure?".
 - While the mutation is in flight, the confirm button is disabled and shows
@@ -433,6 +446,10 @@ Every mutation reports its outcome with a toast.
   not a generic "Success".
 - A failed mutation must surface the server's error message, never fail
   silently.
+- **A reversible mutation's success toast carries an Undo action.** Undo is
+  a normal mutation: it goes through the same endpoint with the same
+  authorization, never a privileged shortcut. If a mutation cannot offer a
+  working Undo, that is the signal it needed a confirm dialog instead.
 
 Exact strings come from the copy deck in `docs/DESIGN.md`. If a string is
 missing there, add it to that file rather than improvising inline.

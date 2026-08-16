@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# A new push to the same branch makes the previous run's answer irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, lint, build and test
+    runs-on: ubuntu-latest
+
+    # The suite talks to a real database through the real Prisma client, so CI
+    # gets a real Postgres. It matches the local version rather than "whatever
+    # is newest": a difference in how Postgres collates or matches text would
+    # otherwise show up only in CI, on somebody else's pull request.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: todo_app_test
+          # Throwaway container on a private network, reachable only by this
+          # job. There is no password to protect.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # The name ends in `_test`, which is what `tests/setup/testDatabaseUrl.ts`
+      # insists on before it will let Prisma connect.
+      DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
+      TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
+
+      # `next build` runs under NODE_ENV=production, and `src/lib/auth.ts`
+      # deliberately throws at import time when `BETTER_AUTH_URL` is unset —
+      # production must never derive its origin from the Host header. No `.env`
+      # is committed, so without these the build dies while collecting
+      # `/api/auth/[...all]` and CI never reaches the tests at all.
+      #
+      # Both values are placeholders. Nothing in CI serves traffic or issues a
+      # cookie anyone will present again: the build only needs the module to
+      # import, and the suite overrides the secret from `vitest.config.ts`.
+      # A real secret here would be a real secret in a public build log.
+      BETTER_AUTH_URL: http://localhost:3000
+      BETTER_AUTH_SECRET: ci-build-only-not-a-real-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm ci` has already run `prisma generate` via postinstall, so this
+      # only has to create the tables. Prisma 7 reads the datasource URL from
+      # `prisma.config.ts`, which falls through to `DATABASE_URL` when no
+      # `.env` file exists — and none is committed.
+      - name: Push the schema to the test database
+        run: npx prisma db push
+
+      - name: Lint
+        run: npm run lint
+
+      # Before the typecheck, deliberately. `next build` generates the route
+      # types under `.next/types`; without them `tsc` reports errors about
+      # `RouteContext` and `PageProps` in the app's own files that have nothing
+      # to do with the change under test.
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm run test:run
+
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+
+    # A separate job, not a step on `verify`, for two reasons: it needs
+    # browsers and a server that the other job has no use for, and running the
+    # two in parallel keeps the slowest path to an answer roughly what it was.
+    # Its own Postgres, so the two suites never share a database in CI even
+    # though they share a default locally.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: todo_app_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Playwright serves the app with `next dev`, and `playwright.config.ts`
+      # hands the server `TEST_DATABASE_URL` explicitly — that override is the
+      # only thing standing between a test sign-up and a real database, so it
+      # is set here rather than left to fall through.
+      DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
+      TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
+
+      # Development mode derives the auth base URL from the request, so unlike
+      # the build job this one does not need `BETTER_AUTH_URL`. The secret is
+      # still required, since better-auth signs a real session cookie here.
+      #
+      # 32 random-looking characters, not because this value is protecting
+      # anything — the container and its accounts are destroyed with the job —
+      # but because a shorter one makes better-auth log an entropy warning on
+      # every run, and a log that always warns is a log nobody reads.
+      BETTER_AUTH_SECRET: ci4e2eXqPmZ7vK3nR8sT1wY6bD0hJ5gL
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Push the schema to the test database
+        run: npx prisma db push
+
+      # Only Chromium: both projects in `playwright.config.ts` are Chromium
+      # (desktop and an emulated Pixel 7), so the other engines would be
+      # download time spent on nothing.
+      - name: Install Playwright's browser
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      # The report is the only way to see why a browser test failed on a
+      # machine nobody can attach to. Traces, video and screenshots are already
+      # configured to be retained on failure.
+      - name: Upload the report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

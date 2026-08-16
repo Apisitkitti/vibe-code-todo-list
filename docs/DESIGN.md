@@ -50,7 +50,7 @@ Reference them in Tailwind v4 arbitrary-value syntax, e.g.
 | Text on a surface | `--surface-foreground` | Inside `Card`. |
 | Muted / secondary text | `--muted` | Due dates, helper copy, empty-state body. |
 | Border | `--border` | Card and input borders. |
-| Softer border | `--border-secondary` | Row dividers inside a card. |
+| Softer border | `--border-secondary` | The todo row's outline (§4.4). Measured 1.71:1 light / 1.78:1 dark against `--surface`. |
 | Divider line | `--separator` | Used by `Separator`. |
 | Accent (brand) | `--accent` | Primary buttons, links, active filter. |
 | Text on accent | `--accent-foreground` | |
@@ -377,19 +377,25 @@ simply not setting `fullWidth` and using `className="w-full sm:w-auto"` instead)
 </div>
 ```
 
-**The list.** A single `Card` containing a `<ul>`; each todo is an `<li>`
-separated by a 1px bottom border, **not** by `Separator` components (one
-element per row is cheaper and avoids a stray element in the a11y tree).
+**The list.** A single `Card` containing a `<ul>`; each todo is an `<li>` drawn
+as an outlined pill, spaced by `gap-1.5` — **not** separated by `Separator`
+components and **not** by `divide-y` (see §4.4 for why the outline moved onto
+the row, and §8.7 for the measurements). One element per row is cheaper and
+avoids a stray element in the a11y tree.
 
 ```tsx
 <Card>
   <Card.Content className="p-0">
-    <ul className="divide-y divide-[var(--border-secondary)]">
+    <ul className="flex flex-col gap-1.5 p-2">
       {todos.map(t => <TodoRow key={t.id} todo={t} />)}
     </ul>
   </Card.Content>
 </Card>
 ```
+
+The `p-2` on the `<ul>` is what keeps the outermost pills off the Card's own
+edge; without it the first and last row's outline sits on top of the Card
+border.
 
 **Responsive.**
 
@@ -405,8 +411,17 @@ element per row is cheaper and avoids a stray element in the a11y tree).
 
 Fixed left-to-right order: **checkbox → title (+ note) → priority → due date → edit → delete.**
 
+**The row is an outlined pill.** `rounded-2xl border border-border-secondary
+px-4 py-3.5`, with `hover:bg-surface-hover` as a hover *state* layered on top —
+not as the boundary. The outline is what separates one row from the next; the
+`gap-1.5` on the `<ul>` only keeps two outlines from touching. Both are needed:
+drop the outline and the list has no boundary at all at rest, because the rows
+and the Card behind them are the same `--surface`. §8.7 has the measurements and
+the reasoning; the short version is that the outline is 1.71:1 light / 1.78:1
+dark, and no surface token can beat 1.20:1.
+
 ```tsx
-<li className="group flex items-start gap-3 px-4 py-3 hover:bg-[var(--surface-hover)]">
+<li className="group flex items-start gap-3 rounded-2xl border border-border-secondary px-4 py-3.5 hover:bg-surface-hover">
   <Checkbox
     isSelected={todo.completed}
     onChange={onToggle}
@@ -709,9 +724,9 @@ and takes `animationType`: `"shimmer" | "pulse" | "none"` (default from
 `--skeleton-animation`, which is `shimmer`).
 
 ```tsx
-<ul className="divide-y divide-[var(--border-secondary)]" aria-busy="true" aria-label="Loading todos">
+<ul className="flex flex-col gap-1.5 p-2" aria-busy="true" aria-label="Loading todos">
   {Array.from({ length: 4 }).map((_, i) => (
-    <li key={i} className="flex items-center gap-3 px-4 py-3">
+    <li key={i} className="flex items-center gap-3 rounded-2xl border border-border-secondary px-4 py-3.5">
       <Skeleton className="size-5 rounded-[var(--radius)]" />
       <Skeleton className="h-4 flex-1 rounded-[var(--radius)]" />
       <Skeleton className="h-5 w-16 rounded-[var(--radius)]" />
@@ -720,8 +735,9 @@ and takes `animationType`: `"shimmer" | "pulse" | "none"` (default from
 </ul>
 ```
 
-Match the skeleton row geometry to the real row (`px-4 py-3`, `gap-3`) so
-nothing shifts on swap.
+Match the skeleton row geometry to the real row (`px-4 py-3.5`, `gap-3`, and
+the 1px outline) so nothing shifts on swap. The border counts: leaving it off
+the skeleton moves every row by 2px when the real list arrives.
 
 **In-button pending.** `Spinner` — only `.Root`; `size`:
 `"sm" | "md" | "lg" | "xl"`; `color`: `"current" | "accent" | "success" | "warning" | "danger"`.
@@ -753,6 +769,54 @@ Three tiers, and each error belongs to exactly one:
 
 An unexpected exception is caught by an `error.tsx` boundary showing the
 page-scoped Alert plus `Try again` (calls `reset()`).
+
+---
+
+### 4.10 Toast actions — the first moments are dead
+
+**Constraint, not a bug we introduced.** Design in-toast affordances around it.
+
+HeroUI runs *every* toast queue update — each add and each close — inside
+`document.startViewTransition` (`dist/components/toast/toast-queue.js`, the
+default `wrapUpdate`). While a view transition is running, the browser paints
+the `::view-transition` snapshot layer over the page, and **that layer takes the
+hit-testing**. The real toast underneath is mounted, painted and focusable, but
+a pointer press lands on the snapshot and never reaches the button.
+
+So for roughly the **first 350–400ms of a toast's life its action button is
+visible and completely inert.** The 350ms is the slide animation in
+`styles/dist/components/toast.css`; the rest is frame overhead.
+
+Three things follow, and each of them is a design constraint:
+
+- **It is pointer-only.** Keyboard activation does not hit-test, so a user who
+  tabs to Undo and presses Enter is unaffected. The failure is invisible to
+  keyboard testing and to unit tests that call `onPress` directly — it only
+  reproduces with a real pointer inside the window.
+- **A repeat write to the same todo doubles the window.** We dismiss a row's
+  outstanding Undo before raising the new one, and the queue *serialises*
+  transitions in a promise chain — one at a time, by design, because the View
+  Transitions API aborts a transition that starts while another is live. The
+  close animates, then the add animates, so the second toast's Undo is dead for
+  roughly twice as long.
+- **The dead window has no visual tell.** The button looks armed the whole
+  time. A user who presses immediately gets nothing, and the only feedback
+  available to them is pressing again.
+
+**What this means for design.** Do not put a *time-critical* action in a toast
+and expect the first press to land — the affordance the user reaches for
+fastest is the one most likely to be swallowed. Our Undo survives this only
+because its timeout is generous relative to the dead window; a short-lived toast
+with an action would be substantially worse. If a future affordance needs to be
+live on the first frame, the escape hatch is a `ToastQueue` constructed with an
+explicit `wrapUpdate: fn => fn()` (the option is public), which trades the slide
+animation for a correct hit target. **That trade is worth making the moment an
+action matters more than the animation** — and I would take it now if the Undo
+timeout were ever shortened.
+
+Related, and the same shape of problem: `toast.close()` does not unmount
+immediately for the same reason, which is why `TodoListScreen` guards
+double-presses on the *key* rather than on the toast's presence.
 
 ---
 
@@ -1035,6 +1099,10 @@ update, toggle and delete is confirmed first and reports its outcome in a
 toast that names the record. These success-toast strings supersede the
 generic ones in §7.5 and §7.6.
 
+Any toast here that carries an action (the Undo toasts, §7.13 and §7.15) is
+subject to §4.10: **the action does not respond to a pointer for the first
+~400ms.** Read §4.10 before adding another one.
+
 | Slot | String |
 |---|---|
 | Confirm cancel (all) | `Cancel` |
@@ -1103,6 +1171,31 @@ reports its own outcome with the §7.11 toast for the flipped state.
 | Undo failure toast | `Couldn’t undo that. Try again.` |
 | Sign out failure toast | `Couldn’t sign you out. Try again.` |
 
+### 7.15 Create and edit Undo
+
+Added when the Mutation UX rule became "confirm what cannot be undone": create
+and edit lost their confirm dialogs, so their toasts carry the reversal
+instead. Undo runs the same scoped endpoints as the write it reverses — a
+created todo is deleted, an edited one is written back to the values it held
+when the form opened.
+
+Every string names the record. `Todo removed` on its own was rejected in
+review (M-3) for naming nothing.
+
+| Slot | String |
+|---|---|
+| Create toast | `Todo “{title}” added` |
+| Edit toast | `Todo “{title}” updated` |
+| Toast action | `Undo` |
+| Create Undo succeeded | `Todo “{title}” removed` |
+| Edit Undo succeeded | `Todo “{title}” restored` |
+| Undo failure | `Couldn’t undo that. Try again.` (shared with §7.13) |
+
+An Undo is offered for one write only. A later write to the same todo dismisses
+the earlier toast, so an Undo can never restore a record past a change the user
+made after it. A toggle and a delete dismiss before they start; a save dismisses
+when its write resolves, since it runs behind a modal that covers the toast.
+
 ### 7.14 Malformed request
 
 Added for review finding M-3: a `400` whose zod failure sits at the root of the
@@ -1117,3 +1210,311 @@ which would tell the user their todo was deleted.
 Punctuation notes: use the typographic apostrophe (`'`) in contractions
 (`don't`, `can't`, `Couldn't`) and curly double quotes around interpolated
 titles in prose. Use the ellipsis character `…`.
+
+---
+
+## 8. Design note: drag-and-drop and the completion control
+
+*2026-08-16 — UX/UI. Opened as an answer to "should the completion checkbox be
+replaced by drag and drop?", rewritten after the lead reframed the question to
+"how do we make this application genuinely more appealing to use?". §8.1
+disposes of the original question; everything after it answers the real one.
+Several proposals below revise things I specified in this document myself, and
+each says so.*
+
+### 8.1 Drag and drop — no, and it was never the question
+
+Replacing the checkbox with a drag gesture would trade a labelled,
+keyboard-operable, screen-reader-announced binary control for a spatial gesture
+with no accessible equivalent: it breaks §6.3 (there is no element left to
+measure, which retires the 44×44 target QA verified twice — `docs/QA-REPORT.md`
+§2.5, DEF-01), §6.8 (react-aria's keyboard drag mode moves items to positions,
+it cannot express "this sets a boolean"), §6.9 (a gesture has no
+`motion-reduce` variant), and it collides head-on with vertical touch scrolling
+— the disambiguating long-press would make the app's most repeated action its
+slowest. Separately, *reordering* is a different feature wearing the same
+costume: `prisma/schema.prisma` has no ordering column, `docs/PRD.md` §4 lists
+drag-and-drop reordering as out of scope for v1, HeroUI v3 ships no `GridList`
+(the collection components are `list-box`, `menu`, `table`, `tag-group`), and a
+handle cannot fit beside three 44 px targets in a 343 px content column at
+375 px — so it would be pointer-only with a separate mobile path forever. If PM
+ever wants reordering, it is a schema migration plus a scoped endpoint plus a
+second ordering system competing with the priority filter, and it should be
+argued on those terms. **The checkbox stays. Nothing below depends on this.**
+
+### 8.2 Why the app feels plain — the actual diagnosis
+
+The app is not plain because it lacks ornament. It is plain because **it asks
+permission constantly and answers slowly**, and no amount of visual polish
+fixes that.
+
+Adding a todo today is: press `New todo` → a modal opens → fill four fields →
+press `Add todo` → **a second modal** asks `Add this todo?` → confirm → the
+entire list is replaced by a skeleton → the list returns. Two modals, three
+confirmations of the same intent, and a full-screen loading state, to write the
+words "Buy milk". Checking a todo off is worse in a subtler way: the checkbox
+does not move until the server answers (`TodoRow.tsx`: *"Stays in its current
+state until the confirmed mutation lands"*), so the single most satisfying
+micro-interaction in any todo app — the tick landing under your finger — is
+instead a short dead pause.
+
+Both of those contradict **§1 of this document, which I wrote**: *"Optimistic
+and quiet. State changes apply immediately… Never show a spinner for an action
+that finishes in under 300 ms."* The implementation is neither optimistic nor
+quiet, and the confirm-modal convention in `docs/CONVENTIONS.md` is what pushed
+it there. That is the gap to close. Appeal, in an app you touch fifty times a
+day, is mostly **latency and ceremony**; hierarchy and colour are second-order
+and are handled in §8.4.
+
+### 8.3 The first move — and I would take only this one if forced
+
+**Delete the confirmation modal on create and on edit. Make the toggle
+optimistic. Never blank the list after a mutation.** One ruling, three changes,
+and the app changes character.
+
+**8.3.1 Confirms on create and edit — remove.**
+`docs/CONVENTIONS.md` → Mutation UX makes a confirm modal mandatory for every
+create and update, and §7.11/§7.12 of this document encode the strings, so this
+is a lead ruling and I am arguing against it directly rather than around it.
+The rule's purpose — do not commit something by accident — is already served
+for create and edit by the form itself: the user typed the content and pressed
+a labelled button that says exactly what it will do. The confirm shows them
+nothing the previous screen did not. The lead has already reasoned this way
+once, about sign-in (§7.12: *"It creates nothing and is undone by signing
+out"*), and create and edit are **more** reversible than sign-in — both are
+undone by editing or deleting, and both already report by toast.
+
+Keep the confirm for **delete** only: destructive, irreversible, correctly
+specified in §4.6, and verified by QA (`docs/QA-REPORT.md` §6 — Cancel focused
+first, Escape cancels, focus returns to the trigger).
+
+*Accessibility:* this **removes** a focus trap rather than adding one, and
+removes a second dialog whose heading duplicated the first. No rule in §6 is
+touched. §7.11's `Create confirm …` / `Update confirm …` rows and §7.12 in full
+would be struck; the success toasts stay exactly as they are.
+
+**8.3.2 The toggle must move on press.**
+Flip `completed` in local state immediately, render the row's completed styling
+at once, and revert on failure with the existing `Couldn't update the todo. Try
+again.` toast. The `Undo` action in the success toast (§7.13) is unchanged and
+still re-runs the scoped endpoint. This is what §1 already promised. The row's
+current `opacity-60 pointer-events-none` pending treatment should then apply
+only to *delete*, where the row is about to vanish and a stable, dimmed row is
+honest; on a toggle it is now visible latency for its own sake.
+
+*Accessibility:* `aria-checked` flips with the visual state instead of lagging
+behind it, which is strictly more correct for a screen reader. §6.4's "checkbox
+state **and** `line-through`" pairing is unchanged.
+
+**8.3.3 Stop replacing the list with a skeleton.**
+`TodoListScreen` calls `reloadWithSkeleton()` after a create or an edit, which
+blanks every row on screen to report a change to one of them. The skeleton
+earns its place exactly once — the first load, where there is nothing to
+preserve (§4.8). After a mutation, refetch underneath the rendered list and let
+the row change in place. A create can prepend the new row optimistically; an
+edit already knows the new values. Nothing flashes, scroll position survives,
+and the app stops re-introducing itself every time you use it.
+
+**Together these three remove one modal, one dead pause and one full-page flash
+from the single most common path in the product.** That is the strongest first
+move available, and it costs nothing in §6.
+
+### 8.4 Then, in order: the visual work
+
+Ranked. Each is small, and none costs an accessibility rule.
+
+**1 — The row contradicts itself, and that is what looks unfinished.**
+`TodoRow.tsx` gives each `<li>` `rounded-2xl hover:bg-surface-hover`, while
+`TodoListScreen.tsx` wraps them in `divide-y divide-border-secondary`: a
+rounded hover pill drawn inside a hard-ruled table. **§4.3, which I wrote,
+specifies the dividers and is the half that is wrong.** Take the pills: drop
+`divide-y`, put `p-2` on the `<ul>`, keep the rounded hover, and separate rows
+by space instead of rules. A list of soft rows with breathing room reads as
+designed; a ruled table with rounded hover reads as two people editing. Also
+`rounded-2xl` is a literal forbidden by §2.3 — it must be
+`rounded-[var(--radius)]`. Amend §4.3 and §4.4 to match.
+
+> **Done, with one correction and one addition — see §8.7.** The correction:
+> `rounded-2xl` is **not** a forbidden literal. HeroUI redefines Tailwind's
+> radius scale in terms of the theme
+> (`--radius-2xl: calc(var(--radius) * 2)`, `themes/shared/theme.css`), so
+> `rounded-2xl` already resolves to a token and rescales with `--radius`.
+> Changing it to `rounded-[var(--radius)]` would make the pill *less*
+> token-driven and a quarter of the radius. I was wrong; it stays.
+> The addition: dropping `divide-y` on its own left the list with no boundary
+> at rest, so the row now carries its own outline. §8.7 has the numbers.
+
+**2 — Every row wears a chip, so no row stands out.**
+`PriorityChip` renders `variant="soft"` for all three levels and `medium` is the
+schema default, so a typical list is a column of near-identical warning-tinted
+chips and `High` has nothing to be loud against. Render `low` and `medium` as
+`variant="tertiary"` and keep `high` at `variant="soft" color="danger"`. The
+word and the shape glyph (`▲`/`■`/`▼`) are untouched, so **§6.4 holds exactly as
+written** — this changes only how loud the tint is. Cheapest single change that
+makes the list look considered, and it is the direct fix for "everything looks
+the same".
+
+**3 — Give the list a shape: a completed section, with a real heading.**
+With `status=all`, completed rows simply appear below the active ones and a
+screen-reader user gets no signal that the list changed character halfway down.
+Render a `Separator` plus `<Typography.Heading level={2}>Completed</…>` between
+the groups, only when the status filter is `all` and both groups are non-empty.
+This is an accessibility **gain** — a real heading to navigate by — it makes the
+ordering rule visible instead of implicit, and it gives a long list the
+structure it currently lacks. Needs one copy-deck string (`Completed`).
+
+**4 — Make progress visible once, at the top.**
+`{done} of {total} done` is a number nobody feels. Put a `Meter` under the page
+heading — verified compound: `.Root .Track .Fill .Output`, with `color` and
+`size` (`dist/components/meter/index.d.ts`) — using the existing string as its
+accessible output rather than as a second label. One accent bar, at the one
+place in the app where the accent means something. This is the only ornament I
+would add, and it earns its place by reporting real state.
+
+**5 — `Today` should not look like `Mar 4, 2027`.**
+Overdue gets `⚠` and a warning tint (§4.4); everything else is uniform muted
+grey, so the single most actionable date in the app is as quiet as a date two
+years out. Give `Today` `--accent-soft-foreground`, keeping the literal word as
+the carrier of meaning. §6.4 unaffected.
+
+**6 — Four empty states, one calendar icon.**
+`TodoEmptyState` takes only `heading`/`body`/`actionLabel`, so `No matches`
+shows a calendar with a tick. Add an icon slot and give the search-empty state
+`IconSearch` (shipped, already listed in §5). The empty state is the first
+screen a new account sees; it should not look like a fallback.
+
+**7 — Motion, deliberately small.**
+The only additions I want: a 150 ms transition on the title's
+`line-through`/muted change when a todo completes, and a 150 ms fade-in on a
+newly inserted row. Both `motion-reduce:transition-none`, per §6.9. That is the
+whole budget. No list reflow animations, no springs — this is a tool, and a
+tool that wobbles is annoying by the tenth use.
+
+### 8.5 One default I think is wrong, and one thing to remove
+
+**Default priority.** `medium` is the schema default and the form's default
+(§4.5), so almost every todo is medium and the priority chip carries almost no
+information across a real list. I would rather the create form defaulted to
+**low** — the honest state of a task nobody has triaged — which would make
+`medium` and `high` mean something the moment a user sets one. This changes no
+schema constraint (`priority` still defaults to `medium` server-side for a
+payload that omits it); it changes what the form pre-selects. **This is a PM
+call, not mine** — it is a claim about how users triage, and I would want them
+to weigh in.
+
+**Remove: the priority chip on completed rows.** Once a todo is done, its
+priority is history and it is competing for attention with the active rows above
+it. Hiding it on completed rows only removes a chip from an already-struck-out
+title, and §6.4 is unaffected because completion is carried by the checkbox
+state and the `line-through`, not by the chip.
+
+### 8.6 What I would ask PM and QA
+
+- **PM.** (a) Does dropping the create/edit confirm modal (§8.3.1) need a
+  formal reopen of the Mutation UX ruling in `docs/CONVENTIONS.md`, or can the
+  lead simply rule it as they ruled sign-in? (b) The default-priority question
+  in §8.5. (c) For the record: is drag-and-drop reordering being reopened
+  against `docs/PRD.md` §4, or is §8.1 the end of it?
+- **QA.** (a) An optimistic toggle needs the **failure** path tested, and
+  `docs/QA-REPORT.md` §8 lists failure paths as never yet exercised ("no fault
+  injection"). I would not ship §8.3.2 without one injected 500 proving the row
+  reverts and the toast fires. (b) Is a `Meter` inside the heading row still
+  clear of horizontal scroll at 320 px? (c) After §8.4.1 removes `divide-y`,
+  the row's hover and focus states become the only row boundary — worth
+  re-measuring `--surface-hover` against `--surface` in both themes, since
+  DEF-08's light-mode headroom was already thin (3.25:1 on a hovered row).
+  **(c) is answered and closed by §8.7** — the measurement came back worse than
+  I feared, and the row now has an outline so that hover is no longer load
+  bearing.
+
+**If exactly one thing is taken from this note, take §8.3.** Everything in §8.4
+makes the app look better; §8.3 makes it feel like it is on your side.
+
+---
+
+### 8.7 The row boundary — decision record
+
+§8.4.1 was taken: `divide-y` is gone, the rows are spaced pills. In §8.6 I asked
+QA to re-measure what that left behind. The answer came back worse than I
+expected, and this section records what I did about it. **This is the spec for
+the row boundary; §4.3, §4.4 and §4.8 now describe the outcome.**
+
+**What the measurements said.** All ratios computed from HeroUI's own token
+graph — the surface levels resolve through `color-mix(in oklab, …)` against
+`--surface-foreground`, composited before comparing, not eyeballed:
+
+| Pair | Light | Dark |
+|---|---|---|
+| `--surface-hover` vs `--surface` (the hover pill) | 1.20 : 1 | 1.19 : 1 |
+| `--surface-secondary` vs `--surface` | 1.15 : 1 | 1.13 : 1 |
+| `--surface-tertiary` vs `--surface` | 1.20 : 1 | 1.18 : 1 |
+| `--border` vs `--surface` | 1.35 : 1 | 1.21 : 1 |
+| `--border-secondary` vs `--surface` (**chosen**) | **1.71 : 1** | **1.78 : 1** |
+| `--border-secondary` vs `--surface-hover` | 1.42 : 1 | 1.50 : 1 |
+| `--border-tertiary` vs `--surface` | 2.38 : 1 | 2.66 : 1 |
+
+**Why spacing alone was not enough.** Separation by whitespace is a perfectly
+good pattern, and I would normally defend it. It works because the rows sit on a
+*different plane* from their container — a card on a page, a tile on a canvas —
+and the plane, not the gap, is the boundary. These tokens cannot give us a
+plane: the strongest surface-on-surface pair in the theme is 1.20:1, and the
+rows share `--surface` with the Card they sit in, so `gap-1.5` was six pixels of
+the row's own colour. That is not whitespace separation. That is no boundary,
+dressed as one. And because hover does not exist on touch and we have no
+row-level focus style, a phone had no separation in **any** state.
+
+**Not an accessibility blocker, and nobody should argue it as one.** The `<li>`
+elements carry the list semantics regardless of how they are painted; a screen
+reader gets item counts and boundaries either way. Nor does WCAG 1.4.11
+apply — a divider between two blocks of text is not a control boundary or a
+meaningful graphic, and each row's *content* meets contrast on its own. This was
+purely a question of visual perception, which is exactly why it was mine to
+answer rather than QA's.
+
+**The decision: outline the row.** `border border-border-secondary` on the
+`<li>`, keeping `rounded-2xl`, `gap-1.5` and `hover:bg-surface-hover`.
+
+Its merits, in the order I weighed them:
+
+- It is **the same token and the same strength as the rule it replaced** —
+  `divide-y divide-border-secondary` was 1.71:1 light, and this is 1.71:1 light
+  / 1.78:1 dark. Nobody is being asked to accept a weaker boundary than what
+  already shipped; the ink simply follows the pill's shape instead of cutting
+  across it. That is what makes this not a revert: the contradiction §8.4.1
+  identified — hairlines running between floating pills — does not come back.
+- It works **at rest, in both themes, with no pointer**, which is the mobile
+  case and the one that was fully broken.
+- It **demotes hover to a hover state**, which is what a hover state should be.
+  1.20:1 is thin, but it no longer has to carry structure — it only has to say
+  "this row, the one under your cursor", and against a boundary that is already
+  visible, it does.
+- The two cues are **additive**. The gap and the outline reinforce each other,
+  where the old list had a rule and nothing else.
+
+**Rejected, and why.**
+
+- *Revert to `divide-y`.* Restores the boundary at identical contrast but
+  reinstates exactly the contradiction §8.4.1 was right about.
+- *Keep it as-is and write down that the weaker boundary is acceptable.* I
+  cannot write that honestly. 1.00:1 at rest is not a weak boundary, it is the
+  absence of one, and on mobile there is no second state to fall back to.
+- *Put the rows on `--surface-secondary` or `--surface-tertiary`.* The obvious
+  "different plane" move, and the tokens will not do it: 1.13–1.20:1.
+- *`--border-tertiary`* (2.38 / 2.66). Legible, and too loud. A perimeter is
+  four sides of ink where a divider was one; at this strength eight rows read as
+  eight boxes — a table of cards, which is further from the intent than the
+  hairlines were. `--border-secondary` is the ceiling here, not the floor.
+- *A shadow.* Non-starter: `--surface-shadow` is `0 0 0 0 transparent inset` in
+  dark mode by design, so a shadow-based boundary would exist in one theme only.
+- *A colour of our own, mixed from `--foreground`.* Available — the checkbox
+  fix (DEF-08) does exactly this at 50% for a real control boundary that must
+  clear 3:1. A row divider does not have that requirement, and inventing a
+  colour where a semantic token fits is how a token system stops meaning
+  anything.
+
+**On `--field-border-width: 0px`.** Worth naming, since it caught us once
+already: it is a *field* default, and this is a plain border utility on an
+`<li>`, so it does not apply. The DEF-08 trap was a HeroUI form control whose
+border width the theme zeroed out from under us. Any future boundary drawn on a
+HeroUI field — not on our own element — has to set its width explicitly and be
+measured, not assumed.

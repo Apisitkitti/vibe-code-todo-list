@@ -12,7 +12,6 @@ import {
 } from "@heroui/react";
 
 import { CANCEL_LABEL } from "@/app/todos/constants";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { toDueDateInputValue, type TodoItemData } from "@/lib/todo";
 import { createTodo, updateTodo } from "@/service/todo.service";
@@ -28,8 +27,7 @@ import {
 const FORM_ID = "todo-form";
 const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
 
-// Each pending label is rendered twice: on the submit button and, once the
-// user confirms, on the confirm dialog's own action.
+// Shown on the submit button while the write is in flight.
 const CREATE_PENDING_LABEL = "Adding…";
 const UPDATE_PENDING_LABEL = "Saving…";
 
@@ -48,20 +46,23 @@ export interface TodoFormModalProps {
   state: UseOverlayStateReturn;
   /** `null` puts the modal in create mode. */
   todo: TodoItemData | null;
-  /** Lets the list reload itself once the write has landed. */
-  onSaved: () => void;
+  /**
+   * Hands the write's result to the list, which reloads and raises the success
+   * toast. `previous` is the record's state when the form opened, or `null` on
+   * a create — it is what an Undo restores.
+   */
+  onSaved: (saved: TodoItemData, previous: TodoFormValues | null) => void;
 }
 
 /**
- * One modal for create and edit. Submitting only opens the confirm dialog;
- * the mutation runs after the user confirms and always reports through a
- * toast (`docs/CONVENTIONS.md` → Mutation UX).
+ * One modal for create and edit. Saving is reversible, so it submits straight
+ * through — no confirm dialog — and the list offers Undo on the toast
+ * (`docs/CONVENTIONS.md` → Mutation UX).
  */
 export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
   const isEdit = todo !== null;
 
-  const [pendingValues, setPendingValues] = useState<TodoFormValues | null>(null);
   const [serverFieldErrors, setServerFieldErrors] =
     useState<TodoFieldErrors | null>(null);
   const [isPending, setIsPending] = useState(false);
@@ -77,12 +78,6 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
     if (!state.isOpen) setServerFieldErrors(null);
   }
 
-  const closeConfirm = () => {
-    if (isPending) return;
-
-    setPendingValues(null);
-  };
-
   /**
    * This component stays mounted between openings, and two consecutive creates
    * share the same `key`, so a stale `serverFieldErrors` would render on the
@@ -93,27 +88,29 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
     state.close();
   };
 
-  const handleConfirm = async () => {
-    if (!pendingValues) return;
+  /**
+   * Saving is reversible, so it goes straight through — no confirm dialog. The
+   * success toast and its Undo belong to the list, which is the only place
+   * that can dismiss an earlier Undo when a later write lands (review M-2).
+   */
+  const handleValidSubmit = async (values: TodoFormValues) => {
+    if (isPending) return;
 
+    setServerFieldErrors(null);
     setIsPending(true);
 
+    // Captured before the write, since `todo` is the pre-edit record.
+    const previousValues = todo ? toFormValues(todo) : null;
+
+    let saved: TodoItemData;
+
+    // Only the write belongs in here. Handing the result upward from inside
+    // the `try` would report the list's own failures as a failed save
+    // (review r-4).
     try {
-      if (isEdit) {
-        await updateTodo(todo.id, pendingValues);
-      } else {
-        await createTodo(pendingValues);
-      }
-
-      toast.success(
-        isEdit
-          ? `Todo “${pendingValues.title}” updated`
-          : `Todo “${pendingValues.title}” added`,
-      );
-
-      setPendingValues(null);
-      closeForm();
-      onSaved();
+      saved = isEdit
+        ? await updateTodo(todo.id, values)
+        : await createTodo(values);
     } catch (error) {
       const fieldErrors = readFieldErrors(error);
 
@@ -121,7 +118,6 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
         // A 400: the server rejected something the client thought was valid.
         // Keep the form open with the typed values and mark the bad fields.
         setServerFieldErrors(fieldErrors);
-        setPendingValues(null);
 
         return;
       }
@@ -134,14 +130,18 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
             : "Couldn’t add the todo. Try again.",
         ),
       );
+
+      return;
     } finally {
       setIsPending(false);
     }
+
+    closeForm();
+    onSaved(saved, previousValues);
   };
 
   return (
-    <>
-      <Modal state={state}>
+    <Modal state={state}>
         <Modal.Backdrop variant="blur">
           <Modal.Container
             size={isDesktop ? "md" : "full"}
@@ -161,8 +161,7 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
                   serverFieldErrors={serverFieldErrors}
                   isDisabled={isPending}
                   onValidSubmit={(values) => {
-                    setServerFieldErrors(null);
-                    setPendingValues(values);
+                    void handleValidSubmit(values);
                   }}
                 />
               </Modal.Body>
@@ -195,26 +194,8 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
                 </Button>
               </Modal.Footer>
             </Modal.Dialog>
-          </Modal.Container>
-        </Modal.Backdrop>
-      </Modal>
-
-      <ConfirmDialog
-        isOpen={pendingValues !== null}
-        heading={isEdit ? "Save these changes?" : "Add this todo?"}
-        body={
-          isEdit
-            ? `“${pendingValues?.title ?? ""}” will be updated.`
-            : `“${pendingValues?.title ?? ""}” will be added to your list.`
-        }
-        confirmLabel={isEdit ? "Save changes" : "Add todo"}
-        pendingLabel={isEdit ? UPDATE_PENDING_LABEL : CREATE_PENDING_LABEL}
-        isPending={isPending}
-        onConfirm={handleConfirm}
-        onOpenChange={(isOpen) => {
-          if (!isOpen) closeConfirm();
-        }}
-      />
-    </>
+        </Modal.Container>
+      </Modal.Backdrop>
+    </Modal>
   );
 };
