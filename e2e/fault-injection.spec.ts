@@ -11,6 +11,7 @@ import {
   addedToast,
   deletedToast,
   markedCompleteToast,
+  markedNotCompleteToast,
   removedToast,
   restoredToast,
   updatedToast,
@@ -19,6 +20,8 @@ import {
   TODO_ITEM_URL,
   TODO_LIST_URL,
   TODO_STATUS_URL,
+  expectAbsentNow,
+  expectNoFalseSuccess,
   expectNoTransportLeak,
   fulfilApiError,
   fulfilOpaqueError,
@@ -69,12 +72,12 @@ test.describe("fault injection — writes", () => {
     await expect(todos.toasts.filter({ hasText: INTERNAL_ERROR_MESSAGE })).toBeVisible();
     await expectNoTransportLeak(todos.toasts);
 
-    // No false success: no "added" toast, and the modal stays open holding the
-    // typed values so the work is not lost (`TodoFormModal.handleValidSubmit`
-    // returns before `closeForm`).
-    await expect(todos.toasts.filter({ hasText: addedToast(TODO_TITLE) })).toHaveCount(0);
+    // No false success: the modal stays open holding the typed values so the
+    // work is not lost (`TodoFormModal.handleValidSubmit` returns before
+    // `closeForm`), and the row was never added.
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(todos.rowByText(TODO_TITLE)).toHaveCount(0);
+    await expectNoFalseSuccess(todos.toasts, addedToast(TODO_TITLE));
   });
 
   test("an opaque 500 on create falls back to the copy deck, not to axios", async ({
@@ -93,6 +96,7 @@ test.describe("fault injection — writes", () => {
     await expect(todos.toasts.filter({ hasText: CREATE_FAILURE })).toBeVisible();
     await expectNoTransportLeak(todos.toasts);
     await expect(todos.rowByText(TODO_TITLE)).toHaveCount(0);
+    await expectNoFalseSuccess(todos.toasts, addedToast(TODO_TITLE));
   });
 
   test("500 on edit keeps the old title and reports the failure", async ({
@@ -113,12 +117,11 @@ test.describe("fault injection — writes", () => {
     await expect(todos.toasts.filter({ hasText: EDIT_FAILURE })).toBeVisible();
     await expectNoTransportLeak(todos.toasts);
 
-    await expect(
-      todos.toasts.filter({ hasText: updatedToast(EDITED_TITLE) }),
-    ).toHaveCount(0);
     // The list must still show the record as it really is.
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(todos.rowByText(EDITED_TITLE)).toHaveCount(0);
+    await expect(todos.rowByText(TODO_TITLE)).toBeVisible();
+    await expectNoFalseSuccess(todos.toasts, updatedToast(EDITED_TITLE));
   });
 
   test("500 on toggle leaves the checkbox unchecked", async ({ signedIn: page, todos }) => {
@@ -140,9 +143,7 @@ test.describe("fault injection — writes", () => {
       regression to optimistic rendering without rollback.
     */
     await expect(todos.checkbox(TODO_TITLE)).not.toBeChecked();
-    await expect(
-      todos.toasts.filter({ hasText: markedCompleteToast(TODO_TITLE) }),
-    ).toHaveCount(0);
+    await expectNoFalseSuccess(todos.toasts, markedCompleteToast(TODO_TITLE));
   });
 
   test("500 on delete keeps the row and reports the failure", async ({
@@ -169,7 +170,7 @@ test.describe("fault injection — writes", () => {
       for QA DEF-11 must not have widened into an unconditional one.
     */
     await expect(todos.rowByText(TODO_TITLE)).toBeVisible();
-    await expect(todos.toasts.filter({ hasText: deletedToast(TODO_TITLE) })).toHaveCount(0);
+    await expectNoFalseSuccess(todos.toasts, deletedToast(TODO_TITLE));
   });
 });
 
@@ -202,7 +203,7 @@ test.describe("fault injection — the Undo request itself", () => {
 
     // The undo failed, so the todo it would have removed is still there.
     await expect(todos.rowByText(TODO_TITLE)).toBeVisible();
-    await expect(todos.toasts.filter({ hasText: removedToast(TODO_TITLE) })).toHaveCount(0);
+    await expectNoFalseSuccess(todos.toasts, removedToast(TODO_TITLE));
   });
 
   test("500 on an edit-Undo reports failure and keeps the new values", async ({
@@ -227,9 +228,7 @@ test.describe("fault injection — the Undo request itself", () => {
 
     await expect(todos.rowByText(EDITED_TITLE)).toBeVisible();
     await expect(todos.rowByText(TODO_TITLE)).toHaveCount(0);
-    await expect(
-      todos.toasts.filter({ hasText: restoredToast(TODO_TITLE) }),
-    ).toHaveCount(0);
+    await expectNoFalseSuccess(todos.toasts, restoredToast(TODO_TITLE));
   });
 
   test("500 on a toggle-Undo reports failure and leaves the todo complete", async ({
@@ -251,6 +250,8 @@ test.describe("fault injection — the Undo request itself", () => {
     await expectNoTransportLeak(todos.toasts);
 
     await expect(todos.checkbox(TODO_TITLE)).toBeChecked();
+    // The flip-back never happened, so nothing may claim it did.
+    await expectNoFalseSuccess(todos.toasts, markedNotCompleteToast(TODO_TITLE));
   });
 });
 
@@ -336,9 +337,18 @@ test.describe("fault injection — a mid-session 401", () => {
 
     // The dead-end, asserted explicitly.
     await expect(page).toHaveURL(/\/todos$/);
-    await expect(page.getByText("You’ve been signed out")).toHaveCount(0);
-    await expect(page.getByText("You've been signed out")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Your todos" })).toBeVisible();
+    // Both quote styles, since §7.9 is written with a typographic apostrophe
+    // and an implementation might reasonably use either. Read once, so this
+    // means "never rendered" rather than "no longer rendered".
+    await expectAbsentNow(
+      page.getByText("You’ve been signed out"),
+      "§7.9's session-expired copy is still unimplemented",
+    );
+    await expectAbsentNow(
+      page.getByText("You've been signed out"),
+      "§7.9's session-expired copy is still unimplemented",
+    );
     // The toggle did not happen, and the row still invites another doomed try.
     await expect(todos.checkbox(TODO_TITLE)).not.toBeChecked();
 

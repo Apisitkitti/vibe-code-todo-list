@@ -1,4 +1,8 @@
+import { resolve } from "node:path";
+
 import { defineConfig, devices } from "@playwright/test";
+
+import { resolveTestDatabaseUrl } from "./e2e/support/testDatabaseUrl";
 
 /**
  * Playwright end-to-end harness.
@@ -14,6 +18,20 @@ import { defineConfig, devices } from "@playwright/test";
 /** Not 3000 — see the note above. */
 const PORT = 3117;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+
+/**
+ * Resolved here, at config load, so the dev server this suite starts is handed
+ * the test database rather than the app's own.
+ *
+ * This is the half that a delete-side guard cannot cover: the browser drives
+ * the real app, so whatever `DATABASE_URL` the server booted with is what the
+ * suite writes to. Pointing only the teardown client at a safe target would
+ * leave every sign-up landing in production. `resolveTestDatabaseUrl` refuses
+ * hosted hosts, any database not named `*_test`, and the app's own URL, so
+ * aiming this suite at production is not something a stray env var can do by
+ * accident.
+ */
+const TEST_DATABASE_URL = resolveTestDatabaseUrl(resolve(__dirname));
 
 /**
  * `next dev` compiles routes on first request, so the first navigation in a
@@ -64,11 +82,35 @@ export default defineConfig({
       */
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 } },
     },
+    {
+      /*
+        Mobile. Below both of the app's breakpoints, which changes real
+        behaviour rather than just the layout: `showTooltips` is
+        `useMediaQuery("(min-width: 640px)")` so row tooltips are not rendered
+        at all, the row actions lose their `lg:opacity-0` hiding, and
+        `TodoFormModal` switches to `size="full"` / `placement="bottom"`.
+
+        The pointer specs are excluded — they assert hover affordances that by
+        design do not exist here, and Pixel 7 emulates touch, where hover is
+        not a thing. Everything else is viewport-independent and worth running
+        twice.
+      */
+      name: "chromium-mobile",
+      testIgnore: /pointer\.spec\.ts/,
+      use: { ...devices["Pixel 7"] },
+    },
   ],
+  globalSetup: "./e2e/support/globalSetup.ts",
   webServer: {
     command: `npm run dev -- --port ${PORT} --hostname 127.0.0.1`,
     url: BASE_URL,
     timeout: WEB_SERVER_TIMEOUT_MS,
+    /*
+      The app reads `.env` on boot, so `DATABASE_URL` is overridden explicitly
+      here — it is the only thing standing between a test sign-up and the
+      production database.
+    */
+    env: { ...process.env, DATABASE_URL: TEST_DATABASE_URL },
     /*
       Reuse a server this suite already started, but never adopt or kill an
       unrelated process: on CI the port is always ours to bind.

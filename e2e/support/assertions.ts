@@ -66,6 +66,43 @@ export const expectNoTransportLeak = async (locator: Locator) => {
 };
 
 /**
+ * Point-in-time check that nothing on screen is claiming success.
+ *
+ * This MUST NOT be written as `await expect(toasts.filter(...)).toHaveCount(0)`.
+ * That assertion retries, and HeroUI toasts self-expire after four seconds
+ * (`DEFAULT_TOAST_TIMEOUT`, never overridden by the app), so a retrying
+ * "count is zero" sits and watches a false success toast expire and then
+ * reports a pass. Demonstrated in review: making a failed toggle also raise
+ * its success toast — the app lying to the user — left the retrying form green
+ * and merely slower, 6.5s instead of 2.3s.
+ *
+ * Reading once, after the failure has already been asserted and the durable
+ * state has settled, is what makes the absence mean "it never appeared"
+ * instead of "it is not here any more".
+ */
+export const expectNoFalseSuccess = async (
+  toasts: Locator,
+  ...forbidden: string[]
+) => {
+  const onScreen = (await toasts.allInnerTexts()).join("\n");
+
+  for (const message of forbidden) {
+    expect(
+      onScreen,
+      `a failed mutation reported success: "${message}"`,
+    ).not.toContain(message);
+  }
+};
+
+/**
+ * The same one-shot read for anything else whose absence is the assertion.
+ * Retrying would again let a briefly-present element pass as never-present.
+ */
+export const expectAbsentNow = async (locator: Locator, reason: string) => {
+  expect(await locator.count(), reason).toBe(0);
+};
+
+/**
  * Counts requests without changing them. Used to prove a press produced
  * exactly one request — the double-press guard's actual contract.
  */

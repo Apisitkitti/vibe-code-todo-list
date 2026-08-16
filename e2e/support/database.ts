@@ -2,16 +2,24 @@ import { resolve } from "node:path";
 
 import { Client } from "pg";
 
+import { resolveTestDatabaseUrl } from "./testDatabaseUrl";
+
 /**
  * Teardown, and nothing else.
  *
- * ── Why this file is the most dangerous file in the suite ──────────────────
+ * ── Why this file still guards as hard as it does ──────────────────────────
  *
- * `DATABASE_URL` points at the real Neon database, which holds production
- * data. There is no delete-account endpoint, so removing a test account has to
- * go through the database directly. A mistake here is not a failing test, it
- * is a production incident. Every rule below exists to make the blast radius
- * of a bug in this file as close to zero as it can be made.
+ * The suite now targets a throwaway database — `./testDatabaseUrl.ts` refuses
+ * hosted hosts, anything not named `*_test`, and the app's own URL — so the
+ * catastrophic case this guard was written for should no longer be reachable.
+ *
+ * The guard stays anyway, at full strength, because the two protections fail
+ * differently: the connection guard is one function that could be bypassed by
+ * a future `TEST_DATABASE_URL` pointed somewhere unwise, or by a proxy that
+ * makes a hosted database look local. There is no delete-account endpoint, so
+ * removing a test account goes through raw SQL, and a mistake there is not a
+ * failing test — it is a data-loss incident. Defence in depth is cheap here
+ * and the failure mode is not.
  *
  * ── The bound ──────────────────────────────────────────────────────────────
  *
@@ -59,46 +67,23 @@ const TEARDOWN_EMAIL_PATTERN = /^e2e-[a-z0-9]+-\d+@e2e\.invalid$/;
 let client: Client | null = null;
 
 /**
- * `.env` is not loaded for us: Next loads it for the app, but this module runs
- * inside Playwright's own Node process. Node 24 reads it directly, so the
- * suite needs no dotenv dependency.
+ * The same target the dev server was started with.
+ *
+ * Deliberately NOT the app's `DATABASE_URL` from `.env`: this client and the
+ * server under test must agree, and `resolveTestDatabaseUrl` is the single
+ * place that decides which database that is. Reading `.env` here would let the
+ * teardown client drift onto production even while the app was pointed
+ * somewhere safe.
  *
  * Playwright transpiles TypeScript to CommonJS, so `import.meta` is not
- * available here and `__dirname` is; `process.cwd()` is the fallback.
+ * available here and `__dirname` is.
  */
-const loadDatabaseUrl = (): string => {
-  if (!process.env.DATABASE_URL) {
-    const candidates = [
-      resolve(__dirname, "../../.env"),
-      resolve(process.cwd(), ".env"),
-    ];
-
-    for (const candidate of candidates) {
-      try {
-        process.loadEnvFile(candidate);
-        break;
-      } catch {
-        // Try the next candidate; the explicit error below covers "none of
-        // them worked", which is the only outcome the caller cares about.
-      }
-    }
-  }
-
-  const url = process.env.DATABASE_URL;
-
-  if (!url) {
-    throw new Error(
-      "DATABASE_URL is not set. E2E teardown needs it to remove the accounts the suite created.",
-    );
-  }
-
-  return url;
-};
-
 const getClient = async (): Promise<Client> => {
   if (client) return client;
 
-  const next = new Client({ connectionString: loadDatabaseUrl() });
+  const next = new Client({
+    connectionString: resolveTestDatabaseUrl(resolve(__dirname, "../..")),
+  });
 
   await next.connect();
   client = next;
