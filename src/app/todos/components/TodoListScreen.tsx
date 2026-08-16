@@ -426,7 +426,14 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     }
 
     return (
-      <ul className="divide-y divide-border-secondary">
+      /*
+        Space between rows rather than rules between them. Each row is already
+        a rounded pill on hover, and hairlines running between floating pills
+        made the list read as a ruled table that had been rounded by mistake —
+        the contradiction the designer raised. Whitespace is the separator now,
+        so the pill has room to be a pill.
+      */
+      <ul className="flex flex-col gap-1.5 p-2">
         {result.todos.map((todo) => (
           <TodoRow
             key={todo.id}

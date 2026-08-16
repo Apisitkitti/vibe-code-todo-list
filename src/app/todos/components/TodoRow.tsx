@@ -99,7 +99,7 @@ export const TodoRow = ({
       // are disabled outright and the row announces itself as busy
       // (QA DEF-12).
       aria-busy={isPending}
-      className={`group flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-surface-hover ${
+      className={`group flex items-center gap-3 rounded-2xl px-4 py-3.5 hover:bg-surface-hover ${
         isPending ? "pointer-events-none opacity-60" : ""
       }`}
     >
