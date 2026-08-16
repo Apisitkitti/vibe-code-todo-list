@@ -695,3 +695,1120 @@ The rest can follow as separate commits.
 
 The authorization work is solid and the `/status` split is the right call — I
 found nothing to fault in session handling, ownership scoping or the Undo path.
+
+---
+
+# Engineering proposals
+
+Author: Senior engineer
+Date: 2026-08-16
+Read against: the working tree of `fix/add-refresh-gap`, `docs/PM-PROPOSAL.md`,
+`docs/QA-REPORT.md` §7–§9, `docs/CONVENTIONS.md`, `docs/WORKFLOW.md`, and my own
+two reviews above.
+
+The round's question is **how we make this app genuinely more appealing to use.**
+Engineering has two answers product cannot give: one about why it feels slow, and
+one about why shipping the nice things is currently expensive.
+
+**The recommendation, up front:** the single change that makes this app feel like
+a different product is **stop making the user wait for a network round trip to
+see the result of their own click.** Every mutation in `TodoListScreen.tsx` today
+awaits a `PATCH`, then triggers a *second* full-list `GET` before anything moves
+on screen. That is the sluggishness, it is measurable rather than a feeling, and
+§2 sets out exactly where the milliseconds go. It is also, not coincidentally,
+the review finding (m-7) that has been open longest and been deferred three
+times.
+
+**And the thing that has to come with it:** before that lands — and before
+backlog #1, #2 or #4 — put automated tests under the two things a human cannot
+reliably re-check: **cross-user scoping in `src/app/api/todos/**`, and the list
+state machine in `TodoListScreen.tsx`**. Not on principle. Because of one
+specific fact: the strongest quality claim in this repo, the isolation matrix in
+`docs/QA-REPORT.md` §7, is re-proved **by a person deciding a diff looks safe**.
+That decision was made correctly twice. Backlog #4 is the diff where it gets made
+wrong. And optimistic updates are precisely the class of change that a
+browser-driving human cannot verify — you cannot see a revert-on-failure without
+breaking the network on purpose, which `docs/QA-REPORT.md` §8 says QA has no way
+to do.
+
+That is the honest engineering answer to "make it nicer": the nicest single
+change we can make is also the one we currently have no way to prove is correct.
+Two and a half days of test scaffolding is what turns it from a risk into a
+routine change — and then keeps doing that for every appealing thing after it.
+
+---
+
+## 1. What worries me, ranked
+
+### 1.1 — The isolation guarantee is verified by human judgement, and the backlog contains the exact diff that defeats it
+
+`docs/QA-REPORT.md` §7 runs the short form on the reasoning "the diff under test
+touches exactly two files … no route handler, no session code, no Prisma query
+changed." That is sound reasoning and it was the right call both times. Now read
+`docs/PM-PROPOSAL.md` #4 — search notes as well as titles. It is **one line** in
+`src/app/api/todos/route.ts:56-58`, changing
+
+```ts
+where.title = { contains: query, mode: "insensitive" };
+```
+
+into an `OR`. A one-line change to a `where` clause is exactly the diff a
+reviewer and a tester both classify as small. It is also the only diff in the
+whole backlog that can silently remove `{ userId: session.user.id }` from the top
+level of the filter. The PM spotted this and asked for "a security-minded review
+and a test" — there is nowhere for that test to go.
+
+Everything else on this list is a cost. This one is the only unbounded loss.
+
+### 1.2 — `TodoListScreen.tsx` is a hand-rolled data-fetching library, and the next three backlog items all land in it
+
+417 lines, nine `useState`, a `reloadToken` counter, a render-phase `setState`
+guarded by `lastFilterKey` (`:87-90`), a manual `isCurrent` race guard
+(`:331-355`), and now two reload variants with a paragraph of prose each
+explaining which callers may use which. Every one of those is a re-implementation
+of something a query library does: staleness, cancellation, loading state,
+invalidation. Each piece is correct — I have checked them all — and each was
+added to fix a real bug (m-4, m-8, the refresh gap). That is the tell. It is
+accreting invariants that live only in comments.
+
+PM backlog #1, #2 and #3 all edit this file, and #3 (optimistic toggle) adds
+local mutation of `result.todos` on top of a refetch token. The PM's own decision
+memo says it plainly: "two unreviewed behaviour changes landing in it at once is
+exactly how a subtle refetch bug ships." Correct — and sequencing them does not
+make the file smaller.
+
+### 1.3 — The API imports its trust boundary from a UI component folder
+
+`src/app/api/todos/route.ts:5` and `[id]/route.ts:3`:
+
+```ts
+import { todoFormSchema } from "@/app/todos/components/form";
+```
+
+`src/app/api/todos/errors.ts:3-6` does the same for `isTodoFieldName` and
+`TodoFieldErrors`. The dependency arrow points server → client-route-UI. Today
+that is only ugly. It stops being only ugly the moment a second producer of the
+same payload appears — which is backlog #1, quick-add — because then "the form's
+schema" and "the API's contract" are no longer the same idea, and the file that
+defines the trust boundary sits three directories inside a route's presentation
+layer where nobody expects to find a security-relevant module.
+
+`CONVENTIONS.md` → Forms still says "The same zod schema is re-validated inside
+the server action", which is a third name for the same object in an architecture
+that has no server actions.
+
+### 1.4 — There is no migration history, and the next two features need schema changes
+
+`prisma/` contains `schema.prisma` and nothing else. `package.json` has
+`db:push`, no `migrate`. Backlog #2 wants `@@index([userId, dueAt])`; the PM's
+success measure #5 wants a `createdVia` column; #7 and #8 want real tables. With
+`db push` there is no reviewable artefact for a schema change, no replay, no way
+to tell whether Neon matches `schema.prisma`, and an index added by hand in one
+environment is invisible in the diff. This is cheap to fix once and expensive to
+fix after four undocumented pushes.
+
+### 1.5 — A `401` mid-session is a dead end (m-3, still open)
+
+`src/lib/http.ts:28-31` is an interceptor that does nothing:
+
+```ts
+http.interceptors.response.use(
+  (response) => response,
+  (error) => Promise.reject(error),
+);
+```
+
+The comment says it is the "single hook point for cross-cutting concerns" — and
+the one genuinely cross-cutting concern in the app is sitting unhandled. When a
+session expires with the list open, the user gets an Alert titled "Couldn't load
+your todos" and a **Try again** button that will fail identically, forever. It is
+the only state in the app with no exit.
+
+### 1.6 — Two declared-but-unreachable paths that document guarantees the code does not make
+
+- `ApiErrorCode.Internal` (`src/lib/apiError.ts:19, 51-54`) is never constructed.
+  No handler has a `try`/`catch`, so a Neon blip returns Next's HTML 500 with no
+  `message` — the exact case `CONVENTIONS.md` → One error shape says cannot
+  happen. QA has this as DEF-10, open from inspection only, because QA has no way
+  to inject the fault.
+- `parseDueDate`'s `"invalid"` sentinel (`src/lib/todo.ts:93-101`) is handled in
+  both write handlers as `dueAt: parsedDueAt === "invalid" ? null : parsedDueAt`
+  (`route.ts:97`, `[id]/route.ts:54`) — i.e. if it ever *were* reachable, an
+  invalid date would silently clear the field instead of returning `400`. The
+  schema makes it unreachable today. A `Date | null | "invalid"` return type is
+  the shape that invites this; a discriminated result or a thrown error does not.
+
+### 1.7 — Nits still open from review 1 and 2
+
+`isTodoPriority` (`src/lib/todo.ts:64`) has no callers. `src/lib/http.ts:6-9` and
+`TodoListScreen.tsx:51-54` still cite server actions for code that uses none.
+`docs/STACK.md` still says Prisma 6.19 against `^7.9.1`. None of these will hurt
+anyone; they are the comments a newcomer trusts first.
+
+---
+
+## 2. What the app is actually slow at, and why
+
+The lead asked for the real cost rather than a feeling. Here it is, traced.
+
+### 2.1 — Every mutation costs two sequential round trips before anything moves
+
+`handleToggle` (`TodoListScreen.tsx:174-201`): `await toggleTodo(...)` — one
+`PATCH` — then `reloadSilently()` bumps `reloadToken`, which re-runs the effect
+at `:330-355`, which issues a fresh `GET /api/todos`. The checkbox does not move
+until **both** land, because nothing is applied locally. Same shape in
+`undoToggle`, `handleDelete` and `TodoFormModal.onSaved`.
+
+Cost per toggle, on Vercel + Neon, in order:
+
+1. `PATCH /api/todos/[id]/status` — `getSession()` (a `session` table read),
+   `updateMany`, then a **second** query, `findOwnedTodo`, to build the response
+   (`status/route.ts:61-70`). Three DB round trips inside one request.
+2. `GET /api/todos` — `getSession()` again, then three queries in parallel
+   (`route.ts:60-67`): `findMany`, `count`, `count`.
+
+So one checkbox click is **two HTTP requests, two session lookups and seven
+database queries**, and the response body of the first one — the authoritative
+updated row — is thrown away. On a good desktop connection that is perhaps
+250–400 ms and reads as "fine". On a phone on mobile data, two sequential
+round trips to a serverless function plus a Neon connection is comfortably
+half a second to a second of a checkbox that does not tick. That is the thing
+users describe as "it feels slow", and it is the most-repeated action in the app.
+
+**Yes — this is what makes it feel sluggish.** Not render performance, not bundle
+size, not Prisma. Sequential round trips on the interaction that happens most.
+
+### 2.2 — What I would do instead, in the order I would do it
+
+1. **Apply the toggle locally and immediately** (m-7, PM backlog #3). Flip the
+   row in `result.todos`, revert in `catch`. The row already has its
+   `opacity-60 pointer-events-none` treatment for exactly this
+   (`TodoRow.tsx`) — `docs/DESIGN.md` §4.8 specified this pattern and it was
+   never wired up. Perceived latency goes from ~500 ms to zero.
+2. **Use the response body instead of refetching.** `toggleTodo` and
+   `updateTodo` already return the authoritative `TodoItemData`
+   (`todo.service.ts:32-44`). Splice it into the list. That deletes the second
+   round trip entirely for toggle, undo and edit. Note this is a *narrower*
+   claim than the PM's backlog #3, and it agrees with the PM's own later
+   correction: a **create** genuinely can change membership and ordering, so
+   create keeps its refetch. Delete needs only the counts.
+3. **Return the counts from the write routes**, or derive them client-side. The
+   only reason a delete refetches at all is the `{completed} of {total} done`
+   header. That is arithmetic, not a query.
+4. **Collapse the write handlers' two queries into one.** Prisma 7 allows
+   non-unique filters in `update`'s `where`, so
+   `prisma.todo.update({ where: { id, userId }, data })` returns the row in one
+   statement (catch `P2025` → `404`). This is m-5 from review 2, still open. It
+   removes a query *and* closes the window where a concurrent delete turns a
+   successful write into a `404`.
+
+Items 1–3 are the felt difference. Item 4 is server-side hygiene that rides
+along.
+
+### 2.3 — The other real latency, and it is not on this list by accident
+
+The **initial** load of `/todos` is a server-rendered shell that then fetches its
+own data from the client (`page.tsx` renders `TodoListScreen`, which `GET`s in an
+effect). So first paint is a skeleton, always, even though the server rendering
+that page already has a session and a database connection in hand. That is a
+waterfall the architecture chose deliberately —
+`CONVENTIONS.md` → "Server actions — auth only" mandates it — and unpicking it
+means revisiting that rule, which is a bigger conversation than this document.
+I am **not** proposing it now. I am recording that it is the second-largest
+latency in the app so that nobody re-discovers it as a surprise, and noting that
+§2.2 gets the felt win without touching it.
+
+### 2.4 — What is *not* slow, so nobody optimises it
+
+The list query is three queries with no N+1 and hits the `[userId, completed]`
+index. Rendering is a flat `<ul>` with no memoisation problems at realistic
+sizes. `?query=` search is debounced (`TodoFilters.tsx:80`). Bundle size is
+unremarkable. None of these is worth an hour until the app has thousands of rows
+per user — and when it does, the first thing to break is the un-indexed `ILIKE`
+on notes that backlog #4 adds, not anything that exists today.
+
+---
+
+## 3. What I would build next, ranked — and where I disagree with the PM
+
+I agree with the PM's read of the product. I disagree with the order.
+
+### E-1 — API contract tests, before backlog anything (M, ~2 days)
+
+See §4. Half the headline, and the half that makes E-2 safe to do.
+
+### E-2 — Make the list respond instantly (S–M, 1–2 days) — the other half
+
+§2.2 items 1–3, on top of E-3's hook. This is m-7 plus the PM's backlog #3
+narrowed to what the PM's own decision memo still stands behind. It is the
+cheapest change in this document that a user can feel, and the only one of my
+proposals that is visible from the outside.
+
+It should not ship without E-1, and I want to be explicit about why rather than
+hiding behind process: optimistic state has exactly one failure mode — the
+revert — and `docs/QA-REPORT.md` §8 records that QA has **no fault injection**.
+A human cannot verify revert-on-failure through a browser. Today that is fine
+because nothing is optimistic and the row "already shows the truth"
+(`TodoListScreen.tsx:194`). The moment we apply changes locally, we have a
+correctness property with no verifier. Two tests cover it.
+
+### E-3 — Move the todo schema to `src/lib/todo.schema.ts` (S, half a day)
+
+One file move plus imports. The form imports it, both write handlers import it,
+`errors.ts` imports `TODO_FIELD_NAMES` from it. Do it **before** quick-add, not
+after, because after means doing it while a second caller is being written.
+
+### E-4 — Extract `useTodoList` from `TodoListScreen` (S–M, 1–2 days)
+
+A hook in `src/app/todos/hooks/useTodoList.ts` owning `result`, `isLoading`,
+`loadError`, `reloadToken`, `lastFilterKey`, the effect and the race guard,
+returning `{ result, isLoading, error, reload, reloadQuietly, retry }`. The
+screen keeps the dialogs, the pending set and the rendering. No new dependency,
+no behaviour change, reviewable in one sitting.
+
+I considered proposing TanStack Query instead, which is what this file is
+imitating, and I am not proposing it: it is a new dependency with its own
+conventions on a fixed stack, and the hook gets 80% of the value for a day. If
+the app ever grows a second list screen, revisit.
+
+### E-5 — Swap `db push` for `prisma migrate` (S, half a day) — before backlog #2
+
+`prisma migrate dev` locally, `prisma migrate deploy` in the Vercel build, one
+baseline migration generated from the current schema. Do it while the schema is
+still the one everybody agrees on.
+
+### E-6 — Backlog #2 (due-date ordering) **before** backlog #1 (quick-add)
+
+This is my one real disagreement, and I want to argue it rather than assert it.
+
+The PM's case for quick-add first is that ordering is worth little while `dueAt`
+is mostly null, and quick-add is what populates `dueAt`. That is a good argument
+and it may well be right about the product. It is the wrong thing to *start*,
+for three engineering reasons:
+
+1. **Quick-add is blocked on a decision that has not been made.** The PM says so
+   explicitly: without a `CONVENTIONS.md` exception it should not be built at
+   all. Ordering needs no ruling from anybody. Starting the blocked one first is
+   how a small team ends up with a branch parked for a week.
+2. **Quick-add is the largest new surface in the backlog** — a natural-language
+   parser, a new component, a new interaction, plus (for the PM's own falsifying
+   measure) a `createdVia` migration on a repo with no migration history. It is
+   the worst possible first thing to build on an untested codebase, and the best
+   possible second thing once E-1 and E-5 exist. Note that `parseQuickAdd` is
+   the one module the PM already wants unit-tested — there will be somewhere to
+   put those tests if E-1 goes first.
+3. **Ordering is server-side and small.** An `orderBy` change, an index, a
+   client-side grouping pass. It is the cheapest change in the backlog that makes
+   the screen say something different on a Tuesday morning, and the *Overdue*
+   group earns its keep at three overdue todos, not thirty. The PM's own risk
+   note — that `Priority` sorts `low, medium, high` so `desc` gives high-first,
+   and getting it backwards is silent — is a one-line assertion in E-1's suite.
+
+So: **E-1, then E-3 and E-4, then E-2 and E-5, then backlog #2, then the lead's
+ruling, then quick-add.** Roughly a week of engineering before the first product
+feature, of which E-2 is the part the user sees and the rest is what makes E-2 —
+and everything after it — a routine change rather than a gamble.
+
+To say the disagreement plainly, since the PM was direct about theirs: the PM
+ranked "just polish what exists" as a defensible answer they chose not to give,
+on the grounds that none of the open defects is visible from the UI. True of m-1
+through m-6. Not true of m-7 — a checkbox that lags half a second is the most
+visible thing in the app, and it is the one piece of polish the PM's own backlog
+#3 already agrees with. I am asking for that one plus the scaffolding, and then
+I will build their list in their order.
+
+### E-7 — The `401` interceptor (S, hours)
+
+`http.ts`, one branch: on `401`, redirect to `/sign-in?next=/todos` with the
+§7.9 copy. Closes m-3 and gives that dead interceptor a reason to exist.
+
+### E-8 — Delete the two unreachable paths (XS)
+
+Either give the handlers a wrapper that emits `ApiErrorCode.Internal`, or write
+the exclusion into `CONVENTIONS.md` so the next reader does not trust a total
+guarantee. Same for `parseDueDate` — make it return `400`, or drop the sentinel.
+
+---
+
+## 4. The thing nobody has raised: there is no test suite, and I think that is now the top risk
+
+Not "we should have tests because teams have tests." The specific claim:
+
+**The property this app is proudest of is the only one being verified by
+judgement.** `docs/QA-REPORT.md` §7 is a genuinely excellent piece of testing —
+two real accounts, every verb, byte-identical `404`s, a check that no existence
+oracle leaks. It is also skipped-by-default. It ran in full once, then twice in
+short form, each time gated on a human classifying the diff as "not in the
+authorization path". Backlog #4 is a one-line `where` change that any reasonable
+person classifies as not in the authorization path and that can drop the owner
+clause. That is not a hypothetical; it is item four on the agreed backlog.
+
+Second claim: **QA cannot test what QA cannot reach.** §8 lists it plainly —
+failure paths, no fault injection; pointer interaction at desktop width, blocked
+by the harness; DEF-10 unreachable from the browser. M-2 in review 1 (every
+axios error showing `Network Error` instead of the copy deck) is a bug that a
+browser-driving human structurally could not have found, because it needs the
+network to break. Those are not gaps in QA's skill; they are gaps in the medium.
+
+### What the first tests should be, in order
+
+**Tier 1 — the isolation contract (~20 cases). This is the whole
+recommendation; the rest is optional.**
+Vitest, calling the exported route handlers directly with a stubbed session, or
+over HTTP against a dev server with two real cookies — either is fine, the
+former is faster. Seed users A and B. Assert, per verb:
+
+- `GET /api/todos` as B never returns A's rows, under every filter combination
+  **including `?query=` matching A's exact title** — this is the case backlog #4
+  breaks.
+- `PATCH /[id]`, `PATCH /[id]/status`, `DELETE /[id]` against A's id as B → `404`
+  with a body byte-identical to a nonexistent id.
+- Unauthenticated calls → `401` before any Prisma call.
+- `POST` with `userId` in the body → the row belongs to the session user.
+- `POST`/`PATCH` carrying `completed` → `400`, not a silent drop (DEF-06's
+  regression guard).
+
+This is `docs/QA-REPORT.md` §7 transcribed into code. QA already wrote the test
+plan; it just wrote it in prose.
+
+**Tier 2 — pure functions, no infrastructure, minutes each.**
+`sanitiseNextPath` (`src/lib/routes.ts:27`) first: it is a security function
+whose *previous* implementation carried a docstring stating an invariant it did
+not hold (M-1). `parseDueDate`'s strict-mode rejection of `2026-02-31`.
+`getErrorMessage`'s axios branch — the M-2 fix is one `??` away from regressing
+and nothing would notice. `toFieldErrors` dropping unknown paths (m-6).
+`parseQuickAdd` when it exists.
+
+**Tier 3 — one Playwright happy path.** Sign in → create → toggle → undo →
+delete → filter. Worth having eventually. I would **not** build it now: it is
+the most expensive per assertion, the flakiest, and it duplicates the one thing
+human QA is genuinely good at.
+
+**What I would not test at all:** component rendering, HeroUI behaviour, copy
+strings. The copy deck changes weekly and snapshot tests of it would be pure
+tax.
+
+### Cost, stated honestly
+
+- Vitest + config + a two-user seed + the Tier 1 suite: **~2 days**, then roughly
+  15 minutes per new route thereafter.
+- Tier 2: **half a day**, and it is the half-day with the best ratio in this
+  document.
+- CI: there is no `.github/` at all. A 20-line workflow running
+  `tsc --noEmit`, `lint`, `build`, `vitest` on every PR into `develop`:
+  **~2 hours.** GitHub Actions free minutes cover a suite this size.
+- **Database: no new paid service.** Neon's free tier includes branching, so the
+  suite runs against a throwaway branch; a local Postgres container works too.
+  Nothing here asks for money.
+- Playwright, if we ever do Tier 3: another 1–2 days plus ongoing flake
+  maintenance. Deferred deliberately.
+
+Total for what I am actually asking for: **two and a half days plus two hours of
+CI**, against a backlog the PM budgets at three to four days for its first item
+alone.
+
+### The counter-argument, and why I do not buy it here
+
+"A four-person team on a 1,400-line UI does not need a test suite; tests are how
+small teams slow themselves down." I would normally agree, and if the property at
+risk were "does the filter chip render", I would not be writing this section.
+The property at risk is "can user A read user B's data", the app's entire
+promise, and the current control for it is a person looking at a diff and
+deciding. Test the invariant, not the interface.
+
+---
+
+## 5. What I would stop doing
+
+Direct, as asked.
+
+### 4.1 — Stop confirming creates and updates. Rewrite the rule as "confirm the irreversible."
+
+`CONVENTIONS.md` → Mutation UX mandates a confirm dialog for every create, update
+and delete. It already has two exceptions carved into it (toggle, sign-in), the
+PM is asking for a third (quick-add), and backlog #5 will ask for a fourth
+(reschedule). **A rule with four exceptions is not a rule; it is a list of the
+cases nobody has argued about yet.**
+
+The rule the team actually wants is the one the exceptions all share: *confirm
+what cannot be undone.* Delete confirms. Bulk delete confirms, with a count.
+Sign-up confirms. Creating a todo does not destroy anything, and an update is
+reversible by another update. Rewriting it that way costs one paragraph, makes
+quick-add need no dispensation at all, and stops the lead being asked to
+adjudicate each new feature individually.
+
+This is your document and your call. I am telling you the cost of leaving it as
+written is a standing tax on the PM's roadmap, paid one ruling at a time.
+
+### 4.2 — Stop letting `CONVENTIONS.md` describe an architecture that does not exist
+
+The folder-layout block still lists `src/server/todo.action.ts` and
+`src/service/` as "client-facing wrappers that call server actions". The Forms
+section still says "The same zod schema is re-validated **inside the server
+action**." There are no server actions. The trust boundary is the route handler,
+and `CONVENTIONS.md` says so correctly two sections later, in direct conflict
+with itself.
+
+A style doc that is wrong about naming is an annoyance. A style doc that is wrong
+about **where the trust boundary is** is a hazard, because it is the first thing
+a new contributor reads and the sentence it gets wrong is the security-relevant
+one. `src/lib/http.ts:6-9` repeats the same false claim in the codebase itself.
+
+Related, and already filed as m-7 last review: three `refactor:` commits
+(`d73a708`, `0588137`, `26b55ef`) amended this document to bless the structure
+they introduced. Convention changes should be their own `docs:` commit, and
+ideally yours.
+
+### 4.3 — Stop rewriting the docs wholesale each pass
+
+`docs/` is now roughly 2,500 lines of prose against 1,400 lines of component
+code, and one commit (`d36b00a`) carried an 851-line full rewrite of
+`QA-REPORT.md` bundled with three code fixes. The content is good — QA's
+canvas-compositing contrast measurement is better than most teams' — but a
+report that replaces itself every pass loses its own history, and it is being
+paid for in review attention that the code is not getting.
+
+Two concrete swaps: QA's contrast methodology should be a **script** in the repo,
+not a paragraph re-typed each pass; and the isolation matrix should be §4's Tier
+1 suite, not a table. Both are the same information, executable, and diffable.
+
+### 4.4 — Stop treating "tsc + lint + build + Senior review" as the definition of done
+
+`WORKFLOW.md` §Definition of done lists four gates, three of which are type and
+syntax checks that, as my own review headers keep noting, "cover what those
+checks cannot see". The fourth is me. That is a single point of failure with a
+bad night, and it is the reason §4 exists. Add `vitest` as gate 5 once it exists;
+until then, at least be explicit that the isolation battery is a **release gate**
+QA may not skip on judgement, whatever the diff looks like.
+
+---
+
+## 6. What I am not proposing
+
+- **Not TanStack Query, MSW, or a component-test harness.** New dependencies with
+  their own conventions, on a fixed stack, for a team this size. E-3 gets most of
+  the first one's value for a day and no new package.
+- **Not a rewrite of anything.** Every file in `src/` is legible and most of it
+  is better than legible. The authorization work is the best thing in the repo
+  and none of the above touches it.
+- **Not error tracking / observability tooling.** Sentry's free tier would cover
+  this app, but it is a third-party beacon on private todo text and a decision
+  for the PM, not a chore. Vercel's own function logs cover E-7's `500` case for
+  now.
+
+---
+
+# Code review — `fix/add-refresh-gap` → `develop`
+
+Reviewer: Senior engineer
+Date: 2026-08-16
+Range: `git diff develop...fix/add-refresh-gap` (`4020b9b`…`f7c1232`, 3 commits)
+Gate: `npx tsc --noEmit` clean, `npm run lint` clean — re-run against `f7c1232`.
+This review covers what those cannot see.
+
+I proposed the Mutation UX rewrite myself, as did the PM, the designer and QA
+independently. That makes me a poor judge of the decision, so this reviews the
+implementation only. Nothing below argues about whether the rule should have
+changed.
+
+## 1. Undo authorization and payload correctness — clean
+
+Traced both undo paths end to end.
+
+- `undoSave` (`TodoFormModal.tsx:93-107`) calls `updateTodo` / `deleteTodo` from
+  `src/service/todo.service.ts:32-48` — the same functions the original write
+  calls, through the same axios instance. There is no second route, no
+  client-supplied user id, no shortcut. `undoToggle`
+  (`TodoListScreen.tsx:166-182`) likewise re-runs `PATCH /api/todos/[id]/status`.
+- The endpoints are session-scoped. `PATCH` and `DELETE`
+  (`src/app/api/todos/[id]/route.ts:31-81`) both call `getSession()` first and
+  return `401` before any read, then scope the write itself with
+  `where: { id, userId: session.user.id }` through `updateMany` / `deleteMany`.
+  Another user's row matches zero rows and comes back `404`, never as data. An
+  undo is exactly as privileged as the write it reverses.
+- **`saved.id` is the right id.** `POST /api/todos` returns
+  `toTodoResponse(todo)` with `201` (`route.ts:103`); `PATCH` re-reads through
+  `findOwnedTodo` and returns `toTodoResponse` (`[id]/route.ts:60-64`);
+  `toTodoResponse` (`util.ts:17-27`) always carries `id`. `createTodo` and
+  `updateTodo` return `response.data` untouched, so `saved.id` in
+  `handleValidSubmit` (`TodoFormModal.tsx:124-126`) is the server's own id for
+  the row just written, in both branches.
+- **The edit-undo payload round-trips exactly.** `toFormValues`
+  (`TodoFormModal.tsx:35-44`) reduces `dueAt` through
+  `toDueDateInputValue(iso) = iso.slice(0, 10)`, and the server re-parses with
+  `dayjs.utc(value, "YYYY-MM-DD", true)` (`src/lib/todo.ts:93-106`). Every
+  `dueAt` in the database was written through that same parser, so an undo
+  cannot shift a date by a timezone. `note` round-trips through
+  `note === "" ? null : note`. `completed` is not a member of `TodoFormValues`
+  and both write routes reject a body that so much as mentions it
+  (`util.ts:54-56`, `[id]/route.ts:39`), so an edit-undo cannot flip a
+  checkbox — which is correct, since an edit cannot either.
+- **Failure is reported, not swallowed.** Both branches `await` before their
+  success toast, and the `catch` surfaces `getErrorMessage`. A todo deleted by
+  other means first gives `notFoundResponse()` → `404` → axios rejects →
+  `Couldn’t undo that. Try again.` Honest.
+
+`previousValues` is also captured from the right object.
+`TodoFormModal.tsx:121` reads the `todo` prop before the `await`, and `todo` is
+`editingTodo`, set by `openEdit` from the row as last fetched. I checked the
+remount question, because the modal is keyed on `editingTodo?.id ?? "create"`
+and that key does not change when the same row is edited twice: it does not
+matter, because `Modal.Backdrop` is a react-aria `ModalOverlay`, which returns
+`null` when closed (`react-aria-components/dist/private/Modal.mjs:96`). `TodoForm`
+therefore remounts on every open and picks up fresh `defaultValues`, and
+`editingTodo` is replaced by `openEdit` on each click. The *capture* is right.
+
+What is wrong is the *window* it stays live in — M-1 and M-2.
+
+## Blocker
+
+None.
+
+## Major
+
+**M-1 — `TodoFormModal.tsx:134-140` and `TodoListScreen.tsx:195-201`: the Undo
+toast is never dismissed when pressed, and neither undo handler guards
+re-entry.**
+`ToastActionButton`
+(`node_modules/@heroui/react/dist/components/toast/toast.js:256-270`) spreads
+`actionProps` onto a plain `Button` and does not close the toast; the default
+timeout is 4000 ms (`toast/constants.js:13`). So Undo stays live and pressable
+for four seconds *after it has already run*. Two consequences, both real:
+
+- **Create-undo pressed twice tells the user it failed when it succeeded.**
+  `DELETE` #1 returns `204`; `DELETE` #2 hits `result.count === 0` and returns
+  `notFoundResponse()` (`[id]/route.ts:78`), which `undoSave`'s catch turns into
+  `toast.danger("Couldn’t undo that. Try again.")` — landing directly under the
+  green `Todo removed`. The user is invited to retry an action that already
+  worked. This is the inverse of the "silently does nothing while claiming
+  success" case, and just as misleading.
+- **Toggle-undo pressed twice re-opens m-4.** `pendingTodoIds` is a `Set` of
+  ids, not a count (`TodoListScreen.tsx:92-104`). Both presses call
+  `markPending(todo.id)` and produce one entry; the first request's
+  `finally { clearPending(todo.id) }` (`:180`) then removes it while the second
+  PATCH is still in flight, re-enabling the row mid-request. The `Set` fixes two
+  *different* rows racing, which is what m-4 described; it cannot represent two
+  operations on the *same* row, and the toast is now a second way to start one.
+
+Fix: `toast.success` returns the queue key and `toast.close(key)` exists
+(`toast-queue.js:65-67,164`) — capture the key and close it as the first
+statement of every Undo `onPress`. That closes both symptoms with one change.
+If you also want the row state to be honest under concurrency, make pending a
+`Map<string, number>` refcount rather than a `Set`.
+
+**M-2 — `TodoFormModal.tsx:93-107, 121, 136-139`: edit-undo is a blind
+overwrite, and a later edit is destroyed while the toast reports success.**
+Each success toast closes over the values as of *its own* save, and lives for
+four seconds. Edit X from V0 to V1 (toast A holds V0); within four seconds edit
+X again from V1 to V2 (toast B holds V1); press toast A's Undo → `PATCH` writes
+V0. V2 is gone with no warning and the toast says `Todo “V0” restored`. The
+same shape reaches further: create A, edit A, then press the *create* toast's
+Undo — the edited todo is deleted.
+Nothing on the wire can catch this. `toTodoResponse` (`util.ts:17-27`) does not
+expose `updatedAt`, so there is no version token for the PATCH to compare, and
+the route's `updateMany` is unconditional last-writer-wins by design.
+Why it matters: this is the one place on the branch where the user loses typed
+work and is told the opposite. It is also the case the new rule leans on —
+"Undo actually puts things back" is the argument in `CONVENTIONS.md`.
+Fix: dismiss any outstanding Undo toast for a todo id when a new write targets
+that id. A `Map<todoId, toastKey>` held in `TodoListScreen` (which already owns
+the ids, and already owns `undoToggle`) is the natural home; lifting undo
+ownership out of the modal also removes the oddity of a closed modal running
+mutations. M-1's fix does not cover this on its own — that one only stops the
+*same* toast firing twice.
+
+**M-3 — `TodoFormModal.tsx:97,100`: the Undo copy is improvised inline, against
+the convention this branch rewrote.**
+`docs/CONVENTIONS.md` → Mutation UX (unchanged by this branch on that point):
+"Exact strings come from the copy deck in `docs/DESIGN.md`. If a string is
+missing there, add it to that file rather than improvising inline."
+`docs/DESIGN.md` §7.13 covers the *toggle* Undo only (`Undo`, `Couldn’t undo
+that. Try again.`); neither `Todo “…” restored` nor `Todo removed` appears
+anywhere in the deck, and the +206 lines this branch adds to `DESIGN.md` do not
+add them.
+`Todo removed` additionally names no record, against the same section's "names
+the specific record … not a generic 'Success'" — `undoSave` is not given the
+title on the create path.
+Fix: add both strings to the deck, and pass the created todo's title into
+`undoSave` so the create-undo toast can name it.
+
+**M-4 — five comments now describe a flow that no longer exists.**
+`docs/WORKFLOW.md` makes this the primary lens: "a comment restating it goes
+stale and starts lying." All five are load-bearing orientation for a reader.
+
+- `TodoFormModal.tsx:30-33` — "once the user confirms, on the confirm dialog's
+  own action". There is no confirm dialog in this file.
+- `TodoFormModal.tsx:54-58` — the component's own doc comment: "Submitting only
+  opens the confirm dialog; the mutation runs after the user confirms." That is
+  now the exact opposite of what the component does, and it is the first thing
+  anyone reads.
+- `form/TodoForm.tsx:38-41` — "hands validated values to the parent, which runs
+  the confirm-then-mutate flow".
+- `TodoListScreen.tsx:184` — "The one mutation with no confirm dialog". Three
+  now have none.
+- `TodoRow.tsx:109` — "until the confirmed mutation lands" now reads as a
+  reference to the dialog that was removed.
+
+Fix: rewrite all five against the current rule. `TodoForm.tsx` and
+`TodoFormModal.tsx:54-58` are the two that actively mislead.
+
+## Minor
+
+**m-1 — `TodoListScreen.tsx:107-115`: `removeTodoLocally` can double-decrement
+transiently.**
+The *choice* of counts is right, and worth stating because it is not obvious:
+`GET /api/todos` computes `totalCount` and `completedCount` over the whole user
+(`api/todos/route.ts:65-66`), unfiltered, while `todos` is the filtered list. So
+`-1` on a delete is correct whatever filter is active, and `wasCompleted` gates
+the second decrement correctly. No permanent drift.
+The updater is unconditional, though. If a filter change refetches between the
+`DELETE` leaving and its response arriving, the fresh `result` already excludes
+the row and its counts already reflect the delete — and then the updater
+decrements again. `reloadSilently()` on the next line corrects it one round trip
+later, so it is a flicker, not a corruption.
+If the following refetch *fails*: `loadError` is set, `hasTodos` (`:375`) goes
+false, and the counts are hidden entirely rather than shown wrong. That path is
+fine as it stands.
+Fix: `const wasPresent = current.todos.some((todo) => todo.id === todoId);` and
+return `current` unchanged when it is not.
+
+**m-2 — `TodoListScreen.tsx:375`: `hasTodos` is a variable declared after the
+`useEffect`.**
+`docs/CONVENTIONS.md` → Component body order is state → variables → functions →
+`useEffect` last, and the worked example in that section uses
+`const hasTodos = …` as its illustration of group 2. Move it up beside
+`filterKey`.
+
+**m-3 — `TodoListScreen.tsx:80,373`: `filterKey` duplicates the effect's
+dependency list.**
+`` `${status}|${priority}|${query}` `` and `[status, priority, query,
+reloadToken]` are two independent statements of "the filters changed". A fifth
+filter means remembering both, and forgetting the string is silent — no
+skeleton, stale rows — where forgetting the dep array is at least lint-visible.
+The adjust-during-render pattern itself is correct and the comment justifying it
+(`:82-86`) is exactly the kind of note the workflow asks for; this is only about
+the two sources of truth. Fix: build the filter values once and derive both the
+key and the deps from it.
+
+**m-4 — `TodoRow.tsx:97-103`: `pointer-events-none` is still on the row while the
+new comment explains why it was insufficient.**
+DEF-12's fix added `isDisabled` and `aria-busy` but did not remove the class,
+and the comment reads as though it had. The next reader will either delete the
+class believing the comment or trust the class and skip `isDisabled` on a new
+control. It also suppresses the row's hover affordance and the disabled buttons'
+tooltips while pending. Fix: drop the class now that every control is
+`isDisabled`, or say in the comment that it is kept deliberately as a backstop.
+
+**m-5 — `TodoFormModal.tsx:103`: `onSaved()` runs only when the undo
+succeeds.**
+If the write commits but the response is lost, the list is never refreshed and
+keeps rendering state the server no longer has, while the toast says the undo
+failed. Fix: move `onSaved()` into a `finally`.
+
+**m-6 — `TodoFormModal.tsx:114-115` and `SignUpForm.tsx:56`: the double-submit
+guard reads state, not a ref.**
+`if (isPending) return` reads the render closure, so two submits dispatched
+before React re-renders both see `false`. I could not force a double write on
+create or edit, and the reason is worth recording: every field in `TodoForm`
+carries `isDisabled={isDisabled}` (`TodoForm.tsx:89,106,122,138`) and the submit
+button is `isDisabled={isPending}` (`TodoFormModal.tsx:206`), so once the first
+render lands there is nothing left to press Enter in. **Double-submit is still
+prevented on create and edit** — the confirm dialog was not what was holding it.
+Sign-up is guarded by the `if` alone: `SignUpForm.tsx:111-177` leaves all three
+fields enabled while the request is in flight, so Enter in the password field
+re-enters `onSubmit`. In practice a network round trip has elapsed and the
+re-render has landed, so it holds — but it holds by timing, not by construction,
+and a duplicate here means a second `USER_ALREADY_EXISTS` toast and a cleared
+password after a successful navigation.
+Fix: a `useRef` latch set before the first `await` in both, and
+`isDisabled={isPending}` on the sign-up fields to match `TodoForm`.
+
+**m-7 — `TodoFormModal.tsx:167-222`: the JSX is mis-indented after the fragment
+was removed.**
+`Modal.Backdrop` sits two levels in from `Modal` and the closing tags do not
+line up with their openers. Prettier is not wired into `npm run lint`, so
+nothing caught it, and it makes a 55-line block harder to scan than it was
+before the change. Reformat.
+
+## Nit
+
+**n-1 — `TodoListScreen.tsx:133-141`: `reloadSilently` is `requestReload` with a
+doc comment and no behaviour.** Two names for one action; a reader has to open
+it to confirm the "silent" one really is a pass-through. Either fold the
+rationale into the two call sites or keep only `requestReload` and
+`reloadWithSkeleton`.
+
+**n-2 — `TodoListScreen.tsx:74`: `lastFilterKey` starts `null`, so the first
+render always takes the adjust-during-render branch and re-renders once for
+nothing.** `useState(filterKey)` skips it; `isLoading` already defaults to
+`true`, so mount behaviour is unchanged.
+
+**n-3 — `TodoFormModal.tsx:93`: `undoSave(savedId, previous)` encodes "this was
+a create" as `previous === null`, positionally.** A reader has to trace the call
+site to learn what a `null` second argument means. Two functions — `undoCreate`
+and `undoEdit` — would say it outright, and each would be four lines.
+
+## Readability — `TodoListScreen.tsx` (WORKFLOW's primary lens)
+
+Plainly: **yes, a new developer can still follow it, and it is at the limit.**
+435 lines, nine `useState` calls and sixteen local arrow functions before the
+`return`. Nothing in it is obscure — the names say what they hold, no function
+needs section comments, nesting is shallow, and the comments explaining
+*why* (the `Set`, the render-time flag, the DEF-11 local removal) are the
+genuinely good part of this branch. The problem is volume, not clarity.
+
+Two splits I would make, in this order:
+
+1. **`useTodoList(filters)`** — lift `result`, `isLoading`, `loadError`,
+   `reloadToken`, `lastFilterKey`, the render-time flag, `removeTodoLocally` and
+   the fetching effect into one hook returning
+   `{ result, isLoading, loadError, reloadWithSkeleton, reloadSilently,
+   removeTodoLocally, retry }`. That is precisely the client state machine this
+   branch created, and it is the part that takes real effort to hold in your
+   head. Nothing outside it needs to know `reloadToken` exists.
+2. **`resolveEmptyState` + `noMatchingFilters`** (`:240-286`, 47 lines) — a pure
+   function of `(result, filters)` that touches no state and no handler. It
+   belongs beside `TodoEmptyState`, not in the middle of the screen's handlers.
+
+That leaves roughly 250 lines of "render the list, run the mutations", which is
+comfortably followable. I am not blocking on it — but the next thing added to
+this file should be the split, not another `useState`.
+
+## Claims checked against the code
+
+| Claim | Verdict |
+|---|---|
+| Skeleton split by mutation; create/edit and filter change show it, toggle/delete do not | True. `reloadWithSkeleton` on `onSaved` (`:416`) and `retry`; `reloadSilently` on toggle, undo-toggle and delete. |
+| The filter case raises the flag during render, not in an effect | True (`:87-90`), and correctly so — an effect would render stale rows first and trips `react-hooks/set-state-in-effect`. See m-3 on the duplicated key. |
+| `pendingTodoId` became a `Set` so two quick toggles no longer clear each other | True for two *different* rows. Not true for two operations on the *same* row — a `Set` cannot count, and the undismissed Undo toast makes that reachable. See M-1. |
+| DEF-11 — the deleted row is removed from local state on success | True (`:228`), and the counts it adjusts are the right ones. One transient double-decrement, m-1. |
+| DEF-12 — controls are `isDisabled`, row carries `aria-busy` | True — `aria-busy` at `TodoRow.tsx:101`, and checkbox, edit and delete all disabled at `:107`, `:169`, `:182`. `pointer-events-none` was kept, not replaced — m-4. |
+| Mutation UX: delete confirms; create, edit, toggle, sign-in, sign-up do not | True. `ConfirmDialog` survives only on delete (`TodoListScreen.tsx:419-431`, `isDestructive`), and is gone from `SignUpForm` and `TodoFormModal`. Matches the rewritten table in `CONVENTIONS.md`. |
+| Undo runs the same endpoints with the same authorization, never a shortcut | True. Verified against every write route — §1. |
+| Create-undo deletes by the id the server returned | True, and failure is surfaced. §1. |
+| Edit-undo writes back the values held when the form opened | True at the moment of capture. Not true four seconds later — M-2. |
+| Double-submit still prevented now the dialog is gone | True on create and edit (fields and button disabled). Guard-only on sign-up — m-6. |
+| Conventions: arrow functions, import grouping, naming | Clean throughout the diff. Body order — m-2. |
+
+## Verdict
+
+**Request changes.**
+
+Merge-blocking: **M-1** (Undo stays armed after use — a false failure message on
+create-undo, and it reopens the m-4 same-row race the `Set` was meant to close)
+and **M-2** (edit-undo destroys a later edit and reports success). Both are
+symptoms of the same missing piece: an Undo affordance that outlives the state
+it was built for. Closing the toast on press and on any subsequent write to the
+same id fixes both, and is a small change.
+
+**M-3** and **M-4** are cheap and should ride along in the same push — M-4
+especially, since two of those comments now tell a new reader the opposite of
+what the code does, and this branch is the one that made them false.
+
+The rest can follow as separate commits.
+
+The parts I went looking hardest at came back clean: authorization on both undo
+paths is exactly the original write's, the ids are the server's own, the edit
+payload round-trips without losing a date or a note, and no path leaves a row
+permanently disabled — every `markPending` has a matching `clearPending` in a
+`finally`, the delete flag clears in one too, and the fetch effect's `isCurrent`
+guard (`:348-373`) correctly drops a response that lost its race. The DEF-11
+local removal is the right instinct and picked the right counts. The reasoning
+comments on the `Set` and the render-time flag are the best documentation in the
+file; the problem is the four older ones next to them that nobody updated.
+
+---
+
+# Re-review — `fix/add-refresh-gap` → `develop` (fix commit `dc45f6a`)
+
+Reviewer: Senior engineer
+Date: 2026-08-16
+Range: `git show dc45f6a`, re-read against `git diff develop...fix/add-refresh-gap`
+Gate: `npx tsc --noEmit` clean, `npm run lint` clean, re-run against `dc45f6a`.
+
+I proposed the single-owner restructuring in M-2's fix note, so this pass
+deliberately checks the shape I asked for rather than accepting it. Where it
+holds I say why; where it does not, it is because I traced it, not because I
+went looking for something to find.
+
+## Do M-1 and M-2 close?
+
+**M-2 — yes, for every ordering where the second write has landed.** Traced:
+
+- Edit X (toast A, `previous` = V0) → edit X again (toast B, `previous` = V1).
+  Edit 2's `handleSaved` (`TodoListScreen.tsx:217`) calls `showUndoableSuccess`
+  → `dismissUndo(saved.id)` (`:127`) before arming B. Toast A is off screen and
+  out of the map. Pressing it is not possible. The V2-destroying overwrite is
+  gone.
+- Create A → edit A → press the *create* toast's Undo. Same mechanism:
+  `saved.id` on the edit is the created row's id, so the create toast is
+  dismissed. Gone.
+- Delete a row with an armed Undo — `handleDelete` dismisses first (`:305`).
+- Toggle a row with an armed create/edit Undo — `handleToggle` dismisses first
+  (`:277`).
+
+That is the data-loss case, and it is genuinely closed. It was the one thing on
+this branch that lost typed work while reporting success.
+
+**M-1 — narrowed, not closed.** See r-1. The window shrinks from a flat 4000 ms
+to a view-transition frame, but no guard was added and the same-row concurrency
+hole M-1's second bullet described is untouched.
+
+## Minor
+
+**r-1 — `TodoListScreen.tsx:129-137`: dismissal is used as a re-entrancy guard,
+but `undo()` runs unconditionally. M-1 residue.**
+
+```
+onPress: () => {
+  dismissUndo(todoId);
+  undo();
+},
+```
+
+`dismissUndo` (`:113-120`) early-returns when the map has no key — but `undo()`
+is outside that guard and fires either way. So the second press still runs the
+undo a second time; the only thing stopping it is whether React has unmounted
+the button yet.
+
+It usually has, and the timing is worth recording because it is why this is
+Minor and not the Major it was. `toast.close` splices the queue array
+synchronously, but the subscriber notification that re-renders React is deferred
+(`@heroui/react/dist/components/toast/toast-queue.js:29-51`): every update is
+appended to a promise chain and run inside `document.startViewTransition`. So:
+
+- No View Transitions API (Firefox, older Safari) — `fn()` runs inline, React
+  flushes at the end of the press handler, the button is gone before a second
+  press is possible. Unreachable.
+- Chrome/Edge, idle chain — the callback runs on the next frame, so the button
+  stays live roughly one frame (~16 ms). Not reachable by a human double-click.
+- Chrome/Edge, chain busy — `runNext` waits on the previous transition's
+  `finished`, not its start. Press Undo while the toast's own *add* transition
+  is still animating and the close re-render is deferred by the remainder of it
+  (~250 ms default). That is inside double-click range.
+
+The consequences are the ones I described first time and they have not changed:
+a second `DELETE` returns `404` → `Couldn’t undo that. Try again.` under the
+green `Todo “…” removed`; and both presses call `markPending` on a `Set` that
+holds ids, not counts, so the first `finally { clearPending }` (`:253`, `:272`)
+re-enables the row while the second request is in flight. Neither `undoSave`
+nor `undoToggle` has any re-entrancy guard — `TodoFormModal.handleValidSubmit`
+has `if (isPending) return` (`TodoFormModal.tsx:97`), the undo paths have
+nothing.
+
+I asked for the `Map<string, number>` refcount as the second half of M-1's fix
+and it was not done. That is a defensible call — but it is now the only thing
+holding the same-row case, and nothing in the code says so.
+
+Fix, one line, and it is the correct use of a ref (synchronous, unbatched, so
+check-and-clear is atomic against a second press in the same frame):
+
+```
+onPress: () => {
+  if (!undoToastKeys.current.has(todoId)) return;
+  dismissUndo(todoId);
+  undo();
+},
+```
+
+**r-2 — the "every write dismisses first" invariant is not true of the save
+path, and today it holds only by the modal's z-order.**
+`TodoListScreen.tsx:105-107` states it outright — "every write dismisses the
+outstanding Undo for its row before starting" — and `docs/DESIGN.md` §7.15 makes
+it absolute: "A later write to the same todo dismisses the earlier toast, so an
+Undo can never restore a record past a change the user made after it."
+
+Toggle and delete do dismiss before starting (`:277`, `:305`). **Save does not.**
+`TodoFormModal.handleValidSubmit` has no `dismissUndo` and no way to reach one;
+the dismissal happens in `handleSaved`, which runs only *after* the write
+resolves (`TodoFormModal.tsx:106-111`). So for the whole duration of a second
+edit's round trip, the first edit's Undo is still armed and still points at V0.
+Press it there and V0 races V2 with no version token to arbitrate — the exact
+M-2 shape, in a window as wide as the network.
+
+I could not make it fire, and the reason is not in this codebase: while the
+modal is open its backdrop is `fixed inset-0 z-50`
+(`@heroui/styles/dist/components/modal.css:44-45`) and portals into `body` after
+`<Toast.Provider />` (`src/app/layout.tsx`), which is also `z-50`
+(`components/toast.css:4-5`). Equal z-index, later in DOM order — the backdrop
+paints over the toast, and react-aria traps focus in the dialog so the keyboard
+cannot reach the button either.
+
+So the guarantee is real today and rests entirely on a third-party overlay's
+stacking. A `placement="top"` toast region, a z-index bump, a non-modal
+quick-add (backlog #1) or a HeroUI upgrade all silently reopen it. Fix: pass
+`onSaveStart` (or hoist the submit) so the dismissal happens before the write,
+the way toggle and delete already do — then the comment and §7.15 are true by
+construction. Failing that, soften §7.15, because a doc that overstates a
+guarantee is how this becomes a Major again.
+
+**r-3 — `TodoListScreen.tsx:111`: the new `useRef` sits in the middle of the
+body, against `docs/CONVENTIONS.md` → Component body order.**
+That section is explicit that `useRef` is group 1 and that all of it goes
+"together, at the very top". `undoToastKeys` is declared at `:111`, below
+`filterKey` (group 2) and the render-time adjust block, interleaved with the
+handlers. This is a *new* violation introduced by the fix commit, of the same
+rule m-2 is already open against. Move it up with the `useState` calls; the
+doc comment can travel with it.
+
+**r-4 — `TodoFormModal.tsx:105-111`: `onSaved` is called inside the `try` that
+catches write failures.**
+If anything in `handleSaved` → `showUndoableSuccess` → `toast.*` throws, the
+modal's `catch` treats it as a failed write: `readFieldErrors` returns null and
+it raises `Couldn’t save your changes. Try again.` for a write the server
+committed, with no toast and no reload. I traced the toast path and it does not
+throw today (`queue.add`/`close` are array ops; `defaultWrapUpdate` guards
+`typeof document`), so this is structural, not live. But the modal's `catch` now
+covers the list's code as well as its own, which is precisely what moving the
+toast out was meant to stop. Move `onSaved` after the `try/catch`, or into the
+`finally` alongside the m-5 fix.
+
+**r-5 — `undoSave` reloads silently (`:249`) where `handleSaved` reloads with a
+skeleton (`:218`), for the same class of write.**
+`reloadWithSkeleton`'s own comment (`:171-177`) gives the rule: a create or an
+edit "can move the row, or drop it out of the current filter entirely", so it
+gets the skeleton. An edit-undo is an edit — it writes the same fields through
+the same endpoint and can move the row exactly as far. A create-undo is a
+delete and `reloadSilently` is right for it. So the create branch is correct
+and the edit branch contradicts the rule stated eighty lines above it. Pick one
+per branch rather than one per function.
+
+**r-6 — M-4 is four of five. `TodoRow.tsx:109` still reads "Stays in its current
+state until the confirmed mutation lands."**
+The commit message says five comments were removed. Four were:
+`TodoFormModal.tsx:30-33` and `:54-58` are rewritten and now accurate,
+`form/TodoForm.tsx:38-41` now says "performs the write and reports it", and
+`TodoListScreen.tsx:184` is gone. The `TodoRow` one — the checkbox comment,
+which is the one sitting on the control the toggle Undo is about — was missed.
+`grep -rn confirm src/app/todos src/app/sign-up` finds it in four lines flat.
+
+**m-5 (carried, unfixed, and now in four places) — the reload sits inside the
+`try`.**
+Originally `TodoFormModal.tsx:103`; the code moved, the shape did not.
+`undoSave:249`, `undoToggle:268`, `handleToggle:289` and `handleDelete:318` all
+call `reloadSilently()` as the last statement of a `try`. If the write commits
+but the response is lost, the list never refetches and keeps rendering state the
+server no longer has, while the toast says it failed. `finally` is the right
+home for all four.
+
+## Nit
+
+**r-7 — map entries are never removed when a toast expires naturally
+(`TodoListScreen.tsx:111`).** `dismissUndo` is the only thing that deletes, so
+every toast that simply times out leaves a dead key behind. I checked the two
+things that would make this matter and both come back clean: keys are
+`'_' + Math.random().toString(36).slice(2)`
+(`react-stately/dist/private/toast/useToastState.mjs:60`) — random, never
+recycled, so a stale key can never close somebody else's toast; and `close()` on
+a missing key finds `index === -1` and skips the splice. The cost is one short
+string per todo id ever written to, for the life of the mount, plus one wasted
+view transition when a stale key is closed. For a list of this size that is
+nothing. Worth a line in the comment so the next reader does not have to
+re-derive it. If you want it tidy, `toast`'s options take an `onClose` callback
+— `onClose: () => undoToastKeys.current.delete(todoId)` closes it exactly.
+
+Nothing reads the map during render, which is the thing that would have made
+`useRef` wrong here. It is read only in press handlers and `dismissUndo`. The
+ref is the right choice.
+
+**r-8 — `undoSave` passes `saved.completed` (`:246`), a snapshot from the write;
+`handleDelete` passes `pendingDelete.completed` (`:317`), the live row.**
+Both are correct today: a created todo is `completed: false`, and toggling it
+would have dismissed the create-Undo. So the count is right — but only because
+of r-1's dismissal, and the two call sites reach for different freshness of the
+same field. Worth a word.
+
+**r-9 — `docs/DESIGN.md` §7.15 is filed before §7.14.** Appended rather than
+inserted.
+
+**r-10 — `TodoFormValues` now types the undo payload across a component
+boundary (`TodoListScreen.tsx:27`).** It is `import type` off the `./form`
+barrel, so nothing is pulled in at runtime, and it is the right shape in
+practice — it is what `updateTodo` takes. The cost is that "the previous state
+of a record" is now defined by the form's field set: drop a field from
+`TodoFormValues` and `undoSave` silently stops restoring it, with no type error
+anywhere. Acceptable; note it.
+
+**r-11 — two new signatures exceed 80 columns** (`TodoListScreen.tsx:217, 236`),
+so `npx prettier --check` fails on the file. m-7's mis-indentation in
+`TodoFormModal.tsx:137-191` is also untouched. Prettier still is not wired into
+`npm run lint`, which is why neither was caught.
+
+## Status of the earlier Minors and Nits
+
+| | Status |
+|---|---|
+| m-1 — `removeTodoLocally` double-decrements transiently | **Open**, untouched (`:157-165`). |
+| m-2 — `hasTodos` declared after the `useEffect` | **Open** (`:464`), and r-3 adds a second violation of the same rule. |
+| m-3 — `filterKey` duplicates the effect's dep list | **Open** (`:86`, `:462`). |
+| m-4 — `pointer-events-none` vs the comment | **Fixed.** `TodoRow.tsx:95-99` now says the class "only stops a mouse" and that the controls are disabled outright — the backstop reading I offered. The class staying is now deliberate and documented. The tooltip/hover suppression I noted stands as a nit only. |
+| m-5 — reload runs only on success | **Open**, in four places now. Promoted to Minor above. |
+| m-6 — double-submit guard reads state, not a ref | **Open.** `SignUpForm.tsx:56` is still `if (isPending) return` and the three fields are still enabled while the request is in flight (only the button at `:179` is disabled). Unchanged by this commit. |
+| m-7 — `TodoFormModal` JSX mis-indented | **Open** (`:137-191`). Folded into r-11. |
+| n-1 — `reloadSilently` is `requestReload` with a doc comment | **Withdrawn.** There are now five call sites split across the two policies and r-5 turns on exactly that distinction. The named pair earns its keep; I was wrong to want it folded away. |
+| n-2 — `lastFilterKey` starts `null` | **Open** (`:80`). |
+| n-3 — `undoSave` encodes "this was a create" positionally | **Open** (`:236`), though `handleSaved` naming `isEdit` (`:220`) makes the call site readable now. Downgrade in urgency, not withdrawn. |
+
+## What the restructuring got right
+
+Saying this because I proposed it and should be equally concrete about the parts
+that came back clean:
+
+- The ownership move is correct and the comment at `:98-110` explains *why* in
+  the register `docs/WORKFLOW.md` asks for. `TodoFormModal` no longer runs a
+  mutation after it has closed, which was the oddity underneath M-2.
+- `showUndoableSuccess` dismissing before it arms means the map holds at most
+  one live key per row by construction, not by discipline at the call sites.
+  That is the property that closes M-2, and it is enforced in one place.
+- `useRef` is right: no render reads it, and check-and-clear on a ref is exactly
+  what r-1 needs to be atomic. A `useState` map here would have been the bug.
+- Ordering in `handleValidSubmit` is sound. `closeForm()` and `onSaved()` are
+  both after the `await` and both synchronous; the toast is an imperative global
+  queue, not React state, so batching cannot drop it and the modal closing
+  cannot race it. No path reaches `onSaved` without a resolved `saved`.
+- Failure paths stayed where they belong: field errors keep the form open in the
+  modal, generic write failures toast from the modal while it is still on
+  screen, undo failures toast from the list. Nothing reports from a component
+  that is gone.
+- Every `markPending` still has a matching `clearPending` in a `finally`
+  (`:253`, `:272`), including both undo paths. No row can be left permanently
+  disabled.
+- M-3 is closed properly — §7.15 carries all six strings and `Todo “{title}”
+  removed` now names its record.
+- No stale closure: `saved` and `previous` are arguments captured at
+  toast-creation time, which is what an undo needs, and `removeTodoLocally` /
+  `markPending` / `clearPending` all use functional `setState`, so a handler
+  captured from an older render still computes off current state.
+- No race between `reloadWithSkeleton` and the toast. Both reloads bump the same
+  `reloadToken`, and the effect's `isCurrent` guard (`:459-461`) drops the
+  loser. I looked for a case where the Undo lands mid-skeleton and the row gets
+  no pending affordance; `pendingTodoIds` survives the reload, so the row shows
+  pending as soon as it renders.
+
+## Verdict
+
+**Approve with comments.**
+
+M-2 is closed — the data-loss case, where the user lost typed work and was told
+the opposite, does not reproduce in any ordering I could reach. M-3 is closed.
+M-4 is four of five. Nothing here is merge-blocking.
+
+The one I would want in before this merges is **r-1**, because it is a single
+line, because the design premise of the whole restructuring is that dismissal
+guards re-entry and right now it does not, and because I cannot rule out the
+~250 ms window when the close transition queues behind the toast's own entry
+animation. **r-6** is a four-line grep and finishes M-4. **r-3** should not
+survive its own commit.
+
+**r-2** is the one to think about rather than patch reflexively. The invariant
+is true today and false by construction — it holds because a third-party modal
+backdrop happens to occlude the toast region at equal z-index. Either make the
+save path dismiss before it writes, like toggle and delete already do, or stop
+claiming the absolute in `DESIGN.md` §7.15. I would do the former; it is the
+same two lines that would have made this uniform in the first place.
+
+Everything else can follow. The accumulating count is what I would actually
+watch: m-1, m-2, m-3, m-5, m-6, m-7, n-2 and n-3 are all still open, all in the
+same two files, and this pass added five more. The `useTodoList` split I
+described last time is now overdue — `TodoListScreen.tsx` is 523 lines and the
+undo ownership is the third state machine living in it.

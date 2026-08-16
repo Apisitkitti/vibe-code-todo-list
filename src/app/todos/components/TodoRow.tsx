@@ -94,13 +94,20 @@ export const TodoRow = ({
 }: TodoRowProps) => {
   return (
     <li
+      // `pointer-events-none` only stops a mouse. A keyboard user could hold
+      // Space and fire the out-of-order PATCHes m-4 describes, so the controls
+      // are disabled outright and the row announces itself as busy
+      // (QA DEF-12).
+      aria-busy={isPending}
       className={`group flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-surface-hover ${
         isPending ? "pointer-events-none opacity-60" : ""
       }`}
     >
       <Checkbox
+        isDisabled={isPending}
         isSelected={todo.completed}
-        // Stays in its current state until the confirmed mutation lands.
+        // Not optimistic: the box holds its current state until the server
+        // confirms the flip, so it never shows something that did not happen.
         onChange={(isSelected) => onToggle(todo, isSelected)}
         aria-label={
           todo.completed
@@ -160,6 +167,7 @@ export const TodoRow = ({
             size="sm"
             isIconOnly
             className={ICON_BUTTON_SIZING}
+            isDisabled={isPending}
             aria-label={`Edit "${todo.title}"`}
             onPress={() => onEdit(todo)}
           >
@@ -172,6 +180,7 @@ export const TodoRow = ({
             size="sm"
             isIconOnly
             className={ICON_BUTTON_SIZING}
+            isDisabled={isPending}
             aria-label={`Delete "${todo.title}"`}
             onPress={() => onDelete(todo)}
           >
