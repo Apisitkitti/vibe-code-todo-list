@@ -17,6 +17,13 @@ import {
 const tooLongMessage = (field: string, maxLength: number) =>
   `Keep the ${field} under ${maxLength} characters.`;
 
+/**
+ * The wrong-type message, which is a different mistake from being too long.
+ * Answering `{"note": 5}` with "keep the note under 2000 characters" describes
+ * a limit the caller never came near (QA DEF-09).
+ */
+const mustBeTextMessage = (field: string) => `The ${field} must be text.`;
+
 const PRIORITY_INVALID_MESSAGE = `Choose a priority: ${PRIORITY_VALUES.map(
   (priority) => PRIORITY_LABELS[priority].toLowerCase(),
 ).join(", ")}.`;
@@ -47,7 +54,7 @@ export const todoFormSchema = z.object({
     .min(1, "Enter a title.")
     .max(TITLE_MAX_LENGTH, tooLongMessage("title", TITLE_MAX_LENGTH)),
   note: z
-    .string(tooLongMessage("note", NOTE_MAX_LENGTH))
+    .string(mustBeTextMessage("note"))
     .trim()
     .max(NOTE_MAX_LENGTH, tooLongMessage("note", NOTE_MAX_LENGTH))
     .default(""),
