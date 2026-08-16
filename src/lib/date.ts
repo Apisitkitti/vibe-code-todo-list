@@ -18,20 +18,38 @@ const toUtcDay = (value: dayjs.Dayjs) => {
 };
 
 /**
- * Due dates are stored at UTC midnight, so they are compared as calendar days
- * rather than instants. `now` is read in its own local calendar day, which is
- * the day the user believes they are in. Copy per `docs/DESIGN.md` §7.4.
+ * Whole days from the user's today to the due day, or `null` when the value is
+ * not a date at all: `-1` is yesterday, `0` today, `1` tomorrow.
+ *
+ * This is the one place the app decides what "today" means, and both callers
+ * that need to — the row's label and the list's grouping — read it from here
+ * rather than each deriving it. Due dates are stored at UTC midnight, so they
+ * are compared as calendar days rather than instants, while `now` is read in
+ * its own *local* calendar day, which is the day the user believes they are
+ * in. Comparing the two as instants is what would make a todo due today read
+ * as overdue for anyone west of UTC.
  */
-export const formatDueDate = (iso: string, now: Date = new Date()): DueDateDisplay => {
+export const dueDayOffset = (iso: string, now: Date = new Date()): number | null => {
   const due = dayjs.utc(iso);
 
-  if (!due.isValid()) {
+  if (!due.isValid()) return null;
+
+  return toUtcDay(due).diff(toUtcDay(dayjs(now)), "day");
+};
+
+/**
+ * The words the row shows for a due date, per `docs/DESIGN.md` §7.4. The
+ * day arithmetic itself belongs to `dueDayOffset` above.
+ */
+export const formatDueDate = (iso: string, now: Date = new Date()): DueDateDisplay => {
+  const dayOffset = dueDayOffset(iso, now);
+
+  if (dayOffset === null) {
     return { label: "", isOverdue: false };
   }
 
-  const dueDay = toUtcDay(due);
+  const dueDay = toUtcDay(dayjs.utc(iso));
   const todayDay = toUtcDay(dayjs(now));
-  const dayOffset = dueDay.diff(todayDay, "day");
 
   const isOverdue = dayOffset < 0;
 

@@ -18,6 +18,7 @@ import {
   unauthorizedResponse,
 } from "./errors";
 import {
+  TODO_LIST_ORDER_BY,
   mentionsCompleted,
   readJsonBody,
   toTodoListResponse,
@@ -58,10 +59,9 @@ export const GET = async (request: NextRequest) => {
   }
 
   const [todos, totalCount, completedCount] = await Promise.all([
-    prisma.todo.findMany({
-      where,
-      orderBy: [{ completed: "asc" }, { createdAt: "desc" }],
-    }),
+    // `where` is untouched by the ordering change — it still starts from the
+    // session user's id and nothing was added to or moved inside it.
+    prisma.todo.findMany({ where, orderBy: TODO_LIST_ORDER_BY }),
     prisma.todo.count({ where: { userId: session.user.id } }),
     prisma.todo.count({ where: { userId: session.user.id, completed: true } }),
   ]);

@@ -2912,3 +2912,374 @@ Rare, but it is the residual flake, and it is worth knowing about before someone
 spends another day on it. `fix/undo-window` incidentally reduces it, which is
 the only true thing that branch ever said about CI — and not a reason to keep
 it. Keep it for the product reason.
+
+---
+
+# Senior review — `feature/due-date-ordering` → `develop`
+
+**2026-08-16.** Two commits (`c188789` docs, `3a3dbe8` feat), 14 files,
++1150/−42. The branch reports a great deal of its own evidence, so this pass
+re-derives the load-bearing claims rather than restating them. Everything
+below marked "verified" was run or read; everything marked "unproven" was not
+provable from the branch.
+
+## What I ran
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | clean |
+| `npm run lint` | clean |
+| `npx vitest run` | **187 passed** (matches the claim exactly) |
+| `npx vitest run` at `TZ=Asia/Tokyo`, `America/New_York`, `Pacific/Kiritimati` | 187 passed in all three |
+| `npx playwright test --list` | **38 tests in 5 files** (grouping.spec: 4 specs × 2 projects = 8) |
+| `npx playwright test e2e/grouping.spec.ts` | 8 passed |
+| Mutation: `nulls: "last"` → `"first"` | 6 red — tests can fail |
+| Mutation: `priority: "desc"` → `"asc"` | 3 red — tests can fail |
+| Mutation: local-day `now` → UTC-day `now` | **187 green at `TZ=UTC`**; 12+ red at `TZ=Pacific/Kiritimati` |
+
+Source files were restored byte-for-byte after each mutation; the only dirty
+path in the tree is `docs/PRD.md`, which is the PM's and which I did not touch.
+
+## 1. The ordering claim — it holds, and here is the proof
+
+The author's claim is that `dueAt asc, nulls last` already produces
+overdue → today → upcoming → no-date for *any* `now`, so the client's sections
+are cuts in the server's one sequence rather than a re-sort. **True**, and
+true for a stronger reason than the branch states.
+
+Let `g(row)` be the section rank a row lands in: 0 overdue, 1 today,
+2 upcoming, 3 no-date, 4 completed.
+
+- `completed asc` is the **leading** sort key, so completed rows form a
+  contiguous suffix of the result, and `todoGroupId` maps every one of them —
+  dated or not, overdue or not — to rank 4, which `TODO_GROUP_IDS` places
+  last. The completed cut is exact by construction.
+- Inside the active block, `dueDayOffset` is
+  `utcCalendarDay(dueAt) − localCalendarDay(now)`. For a fixed render,
+  `localCalendarDay(now)` is **a single constant subtracted from every row**.
+  `utcCalendarDay(instant)` is monotone non-decreasing in the instant, and the
+  three thresholds (`< 0`, `= 0`, `> 0`) are cuts on that monotone value.
+  Therefore `g` restricted to dated active rows is monotone non-decreasing in
+  `dueAt`. `nulls: "last"` places rank 3 after all of them.
+- A monotone non-decreasing rank read over an ascending sort yields
+  **contiguous runs**. Every section is therefore a contiguous slice of the
+  server's sequence, and no row can render outside the section it sorts into.
+
+Note what the constant does and does not do: the viewer's timezone can move
+*where* the cuts fall, but it cannot *reorder* them, because it shifts every
+row's offset by the same amount. That is why the property survives any `now`
+and any offset, and it is a sturdier argument than "we checked the cases".
+
+The three boundaries specifically:
+
+- **Due at exactly UTC midnight tonight** — not a special case. It is one more
+  instant; the rank stays monotone in it.
+- **Due a second ago** — `parseDueDate` accepts only strict `YYYY-MM-DD` and
+  builds it in UTC, so the column holds nothing but UTC midnights. Even if it
+  did not, a row with a clock time groups by its UTC day and sorts within that
+  day, so the cut still cannot be crossed. Pinned by
+  `todoGroups.test.ts:117` and `todoDates.test.ts` ("clock time inside the
+  value is ignored").
+- **Local and UTC calendar days on different dates** — see the constant
+  argument. Verified empirically at UTC−10, UTC−4, UTC+9 and UTC+14: 187 green
+  at every offset.
+
+Two things could break the invariant, and neither is present: the client
+re-sorting (it does not — `groupTodos` preserves arrival order, pinned at
+`todoGroups.test.ts:203`) and an optimistic local mutation reordering rows
+(there is none — `handleToggle` awaits the server and calls
+`reloadSilently()`; the delete path removes a row but never moves one).
+
+**One residual, and it is cosmetic.** `groupTodos` is called with a default
+`now = new Date()` at render time, so a tab left open across the viewer's
+local midnight keeps yesterday's cuts until the next refetch. The cuts stay
+internally consistent — one `now` per call — so no row lands outside its own
+section; the sections are merely a day stale. Not worth a timer. Worth a
+sentence in `todoGroups.ts` so the next reader does not go looking for a bug.
+
+## 2. The two definitions of "today" — extraction is clean
+
+`formatDueDate` is unchanged in behaviour, verified line by line against
+`develop`: same `isValid` gate (now expressed as `dayOffset === null`), same
+`dueDay`, same `todayDay`, same `dayOffset`, same four branches, same
+same-year/other-year format switch. QA's earlier verification still stands.
+The one boundary that could have moved — the invalid-input early return —
+returns the identical `{ label: "", isOverdue: false }`.
+
+See **m4** for the one wart the extraction left behind.
+
+## 3. The index
+
+**Shape is right.** `(userId, completed, dueAt)` matches the query: `WHERE
+userId = ?` always, `AND completed = ?` under the status filter, then `ORDER
+BY completed, dueAt`. Postgres btrees are ASC NULLS LAST by default, so
+`nulls: "last"` is served *by the index* rather than forcing a sort — a
+detail the branch gets right without saying so, and the reason `nulls:
+"first"` would have been the more expensive choice as well as the wrong one.
+`priority desc, createdAt desc` are not in the index and will need a sort (or
+incremental sort) within ties; that is correct — do not widen the index for
+it.
+
+**Dropping `[userId, completed]` is safe.** It is a strict leading prefix of
+the new index, so every plan it served is still served, including the
+`onDelete: Cascade` from `user` which needs `userId` alone. The schema comment
+is accurate.
+
+**`prisma db push` against production is not the no-downtime operation
+described** — see **M2**. The claim is the one part of §3 I will not sign.
+
+## Blocker
+
+None. I found no user-visible defect, no isolation gap, and no error in the
+ordering rule.
+
+## Major
+
+**M1 — CI cannot detect the loss of the property this branch is built on.**
+
+`date.ts`, `todoGroups.ts`, `todoDates.test.ts` and `grouping.spec.ts` each
+carry a comment naming the same defect as the thing the design exists to
+avoid: comparing the stored UTC-midnight `dueAt` against `now` as an *instant*
+rather than against the viewer's local calendar day. I introduced exactly that
+defect — `toUtcDay(dayjs(now))` → `toUtcDay(dayjs.utc(now))` — and the suite
+reported **187 passed** under `TZ=UTC`. Under `TZ=Pacific/Kiritimati` the same
+one-token mutation reddens 12+ tests immediately.
+
+`ubuntu-latest` runs at UTC and `.github/workflows` sets no `TZ`. So the whole
+timezone argument is currently guarded by nothing that runs anywhere.
+
+This is not the tests' fault in construction — building every `now` from the
+local `Date` constructor is the right call and is what makes them *portable*.
+It is that portable and *discriminating* are different properties, and only
+the first was achieved. I measured it: across the 27 `(now, dueAt)` pairs the
+date tests use, the number that distinguish the correct implementation from
+the instant-comparison bug is 0 at UTC, 9 at UTC−4/UTC+9/UTC−10, and 18 at
+UTC+14.
+
+Fix is one line. Either set a non-UTC `TZ` in `vitest.config.ts`'s `env`, or —
+better, because it also covers the Playwright half, whose `localDay()` helper
+has the identical blindness — add `TZ` to the CI job env and run the date-
+sensitive suites at two offsets, one either side of UTC. `Pacific/Kiritimati`
+(UTC+14) and `Pacific/Honolulu` (UTC−10) are the widest pair and both are
+DST-free, so they will not start failing twice a year for an unrelated reason.
+
+**M2 — the production index swap, and what I want run.**
+
+`prisma db push` is not a no-downtime index replacement:
+
+- `CREATE INDEX` without `CONCURRENTLY` takes a `SHARE` lock on `todo` and
+  holds it for the whole build — every insert, update and delete on the table
+  blocks for the duration.
+- `DROP INDEX` without `CONCURRENTLY` takes `ACCESS EXCLUSIVE`, which blocks
+  reads too and will queue behind any in-flight query, taking every new
+  request with it while it waits.
+- `db push` gives no ordering guarantee between the drop and the create. A
+  window with neither index is a window of sequential scans on the hottest
+  query in the app.
+- There is no `prisma/migrations/` directory at all. `db push` applies
+  *whatever the schema file currently says* against production, with no
+  reviewable artifact and no record. That is tolerable on a test database and
+  is not a production change-control story.
+
+What I want run, in this order, off-peak:
+
+1. `CREATE INDEX CONCURRENTLY IF NOT EXISTS "todo_userId_completed_dueAt_idx"
+   ON "todo" ("userId", "completed", "dueAt");`
+   — outside a transaction (`CONCURRENTLY` cannot run inside one). The name is
+   the one Prisma generates, confirmed against the test database, so a later
+   `db push` sees it as already present.
+2. `SELECT indisvalid FROM pg_index WHERE indexrelid =
+   '"todo_userId_completed_dueAt_idx"'::regclass;` — a failed concurrent build
+   leaves an **invalid** index that still costs every write and serves no
+   read. Do not skip this.
+3. `EXPLAIN (ANALYZE, BUFFERS)` the real list query against production-sized
+   data, and keep the output. The branch offers no plan evidence; on the test
+   database the plan is a `Seq Scan` over 7 rows, which proves nothing in
+   either direction.
+4. Only then: `DROP INDEX CONCURRENTLY IF EXISTS "todo_userId_completed_idx";`
+5. `npx prisma db push` last, as a no-op reconciliation — and read its
+   printed plan before confirming it.
+
+Create before drop, never the reverse.
+
+## Minor
+
+**m1 — the joint invariant is argued in prose and tested nowhere.** §1 above is
+the branch's central claim, and both halves of it are tested in isolation:
+`ordering.test.ts` pins the server's sequence, `todoGroups.test.ts` pins the
+cuts. Nothing asserts that the cuts *are cuts*. The existing "every todo lands
+in exactly one section" test checks the **set**, not the sequence, so a
+non-monotone section added later — a "This week" between Upcoming and
+No date, say — would pass every unit test and ship a row rendering outside its
+own heading. Three lines in `ordering.test.ts` would close it: fetch a mixed
+list through `GET`, then assert
+`groupTodos(body.todos).flatMap((g) => g.todos)` **equals** `body.todos` —
+identity, not same-membership. That assertion *is* the claim, and it is the
+one test in the branch I would actually ask for.
+
+**m2 — `TodoListScreen` grew again, and `useTodoList` still has not happened.**
+561 lines on `develop`, **566** here. (`REVIEW.md` asked for the split when the
+file was 523; the number in the brief, 435, is older still.) `TodoGroupedList`
+is the **right seam and well drawn** — data plus callbacks in, no fetching, no
+state, no knowledge of filters — but it is a *rendering* seam, and the debt in
+this file is *state*: fetch/loading/error, the pending set, the undo ownership,
+the delete confirmation, the modal and the filters all still live here. The
+branch took ~23 lines of JSX out and put 13 back as `rowPendingIds`. Not worse
+in kind; marginally worse in size, and the third pass in a row to leave it
+that way. Next touch, the hook, no exceptions.
+
+**m3 — `tests/api/isolation.test.ts` cites `docs/QA-REPORT.md` §7; the matrix
+is §3.** Verified: §3 is "Cross-user isolation — re-proved independently",
+§3.1 is "The matrix"; §7 is "Where the suites are thin". **Fix it now, in this
+branch.** It is pre-existing, but it is a wrong pointer in the one file whose
+entire purpose is to be believed without being re-derived, and this branch is
+what made the repo self-contradictory: the new `ordering.test.ts` cites §3
+correctly, twelve lines of prose apart from a file citing §7 for the same
+thing. A reader who follows the wrong one lands in a section about test gaps
+and concludes the isolation suite is aspirational. One line.
+
+**m4 — the ISO string is parsed twice.** `formatDueDate` calls `dueDayOffset`,
+which does `dayjs.utc(iso)`, then at `date.ts:51` does `dayjs.utc(iso)` again
+for `dueDay`. Harmless, but it undercuts the extraction's own argument — the
+point was one definition, and there are now two parses of the same string four
+lines apart. Either have `dueDayOffset` return the parsed day alongside the
+offset, or let `formatDueDate` keep its own parse and drop the redundant one.
+
+**m5 — the section `<ul>`s are not labelled by their headings.** The rationale
+in `TodoGroupedList` argues for separate lists precisely so a screen reader
+reports a real count per section (§8.4.3) — but with no `aria-labelledby` the
+announcement is "list, 3 items" with no indication of *which* section. Point
+the `<ul>` (or the `<section>`) at the heading's id and it becomes "Overdue,
+list, 3 items". Same reasoning the branch already made, one attribute short of
+finishing it.
+
+**m6 — the single-section comment overstates.** "the markup collapses to what
+shipped before this change — one `<ul>` of rows" — it does not; it renders
+`<div><section><ul>`. An unnamed `<section>` is not exposed as a region by AT,
+so this is harmless in effect, but the comment claims an equivalence the DOM
+does not have. Either skip the wrapper when `!showHeadings` or soften the
+sentence.
+
+## Nit
+
+**n1** — `rowPendingIds` allocates a fresh `Set` on every render while a delete
+is in flight. Irrelevant at this size; the name reads well and the docblock
+earns its place. Noted only so nobody "optimises" it later without reading why
+the delete is tracked separately.
+
+**n2** — `GROUP_HEADINGS_IN_ORDER` in `e2e/support/copy.ts` is a plain
+`string[]` while its `src` twin `TODO_GROUP_IDS` is `as const`. Cosmetic
+asymmetry between two lists that are meant to stay in step.
+
+**n3** — comment density. `TODO_LIST_ORDER_BY` carries a 30-line docblock over
+a 6-line array, and `todoGroups.ts` is 103 lines of which roughly half are
+prose. Most of it is genuinely *why* and I would keep it — the `nulls`
+default, the enum declaration order, the deliberate rank of priority below the
+date are all things a reader would otherwise "fix" by accident, which is
+exactly what `WORKFLOW.md` asks comments to prevent. But
+"`createdAt desc` — the last resort … newest first" restates the code, and I
+flag the ratio so it does not silently become the house norm.
+
+## Test quality — the specific questions
+
+**Do the 44 new unit tests cover the boundaries or the easy middle?** The
+boundaries, and with the right instincts: local midnight from both sides
+(`23:59:59` and `00:00:00`), a clock time inside a stored value, completion
+overriding an overdue date, an unparseable `dueAt`, the empty list, the
+single-section collapse, and the ids-in-render-order contract. `ordering.test.ts`
+runs against real Postgres rather than a JS comparator, which is the correct
+call — `nulls: "last"` and enum `desc` are only observable there, and both
+mutations I ran went red, so these are tests that can fail. The one boundary
+that is *not* covered is the timezone offset itself (**M1**) and the one
+property that is not covered is the join between the halves (**m1**).
+
+**Are the Playwright specs asserting structure?** Yes, and the reported
+false-pass fix is real and correct. `groupHeadings` is
+`getByRole("heading", { level: 2 })` and `section()` filters `main section` by
+`getByRole("heading", { name, exact: true })` — neither can match the status
+filter's `Completed` button, which is a `button`. The replacement assertion in
+the no-headings spec (`main ul` count 1, plus its listitem count) is the right
+shape: it pins the *structure* that would change, not the absence of text.
+I re-ran all 8 and they pass.
+
+**Does the same trap exist elsewhere?** No. I grepped every `getByText` /
+`hasText` / heading locator in `e2e/`. Every remaining `hasText` is scoped to a
+toast or a listitem, and `fixtures.ts` already carries a note about the
+unscoped-listitem hazard. The only other heading assertions name "Your todos",
+"Welcome back", the edit-modal heading and the delete-confirm heading — none
+collides with the five section strings. Confirmed there are no other `<h2>`s
+in `<main>`: the page heading is `level={1}` and the group headings are the
+only `level={2}` in the app.
+
+## Isolation — both claims verified, and it is a good idea
+
+**The `where` clause is untouched.** Verified in the diff: the only change to
+`route.ts`'s list query is `orderBy` and a comment. Nothing was added to,
+removed from, or moved inside `where`, and every count still re-derives
+`userId` from `session.user.id` independently.
+
+**The ordering tests double as isolation checks.** Also true, and better than
+claimed. The seeded stranger holds `dueDay(-3650)` at `priority: high` and an
+undated `high` — under the new rule those are the two rows that would lead the
+list, so a lost scope surfaces them at the *top* rather than hiding them in a
+tail nobody asserts on. Most assertions are exact `toEqual` arrays, which fail
+on any extra row regardless of position, and three tests check the scope
+explicitly, including `?query=STRANGER` returning `[]`. Reusing an ordering
+suite as an isolation tripwire only works when the foreign rows sort first, and
+this branch arranged exactly that. Keep the pattern.
+
+## Rulings on the two questions raised
+
+**1. `docs/QA-REPORT.md` §7 vs §3 in `isolation.test.ts` — fix it now.**
+Not noise. Full reasoning at **m3**. One line, in this branch.
+
+**2. PM's #2b, the dated header with due/overdue counts — follow, do not
+block, and do not drop.**
+
+Three reasons, and the third is the one that matters:
+
+- **Scope.** It is a `TodosHeader` copy-and-format change. Putting it in a diff
+  whose entire story is ordering violates `WORKFLOW.md`'s one-logical-change
+  rule and makes this branch harder to review, not easier.
+- **PM's own framing.** `PM-PROPOSAL.md` §3 says #2b "only earns its place once
+  #2's buckets exist, so it ships with #2, not before". That condition is
+  satisfied *the moment this merges*, not before it. Shipping #2b in the next
+  branch honours the sequencing; cramming it in here does not improve on it.
+- **"`groupTodos` already produces the counts" is only half true, and the other
+  half is a real design question that has not been asked yet.** `groupTodos`
+  gives the `Today` and `Overdue` section lengths **for the rows currently on
+  screen** — which is the *filtered* list. The header sits above the filters,
+  so with `status=completed`, `priority=high`, or a search active, the line
+  would read `3 due today · 1 overdue` as a statement about the user's day
+  while actually describing whatever slice they are looking at. That
+  `GET /api/todos` deliberately returns `totalCount` and `completedCount`
+  *unfiltered* shows the codebase has already met this problem once and
+  decided against filter-scoped headline numbers. So #2b needs either
+  unfiltered due/overdue counts from the server (a small route change, not
+  zero) or an explicit product decision that the line is filter-scoped. That is
+  a question worth ten minutes with the PM — and it is a second reason not to
+  bolt it onto this branch, where it would be answered by accident.
+
+It stays XS once that is settled. Do not drop it.
+
+## Verdict
+
+> **Approve with comments.**
+
+Merge into `develop` — the ordering rule is correct and I can prove it, the
+extraction is behaviour-preserving, the isolation claims hold, the seam is the
+right one, and the tests can fail. QA can start on it as it stands.
+
+Two things before this reaches `main`:
+
+1. **M1**, the CI timezone matrix. One line. I would take it in this branch;
+   an immediate follow-up is acceptable, a "later" is not — the branch's
+   central property is currently unguarded in the only place that runs.
+2. **M2**, the index rollout as the five ordered steps above rather than
+   `prisma db push`. This is a production-deploy concern by definition, so it
+   belongs at the `develop` → `main` gate.
+
+**m3** is a one-line fix and should ride along with this branch. **m1** is the
+one test I would genuinely like written. Everything else is a follow-up, and
+**m2** is now the third consecutive pass to defer `useTodoList` — the next
+branch to touch `TodoListScreen.tsx` does the hook first.

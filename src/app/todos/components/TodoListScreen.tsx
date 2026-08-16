@@ -28,8 +28,8 @@ import type { TodoFormValues } from "./form";
 import { TodoEmptyState } from "./TodoEmptyState";
 import { TodoFilters } from "./TodoFilters";
 import { TodoFormModal } from "./TodoFormModal";
+import { TodoGroupedList } from "./TodoGroupedList";
 import { TodoListSkeleton } from "./TodoListSkeleton";
-import { TodoRow } from "./TodoRow";
 
 const TODOS_PATH = "/todos";
 const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
@@ -355,6 +355,18 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     }
   };
 
+  /**
+   * The rows that should render as busy: the ones with a mutation in flight,
+   * plus the one a confirmed delete is currently running against. The delete
+   * is tracked separately because its pending state belongs to the dialog, not
+   * to the row.
+   */
+  const rowPendingIds = (): ReadonlySet<string> => {
+    if (!isDeleting || !pendingDelete) return pendingTodoIds;
+
+    return new Set(pendingTodoIds).add(pendingDelete.id);
+  };
+
   /** Reached from two branches: an explicit priority filter, and the fallback. */
   const noMatchingFilters = (): EmptyStateCopy => ({
     heading: "No todos match these filters",
@@ -441,34 +453,27 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       );
     }
 
+    /*
+      Space between rows rather than rules between them, and the rows cut into
+      urgency sections. Each row is already a rounded pill on hover, and
+      hairlines running between floating pills made the list read as a ruled
+      table that had been rounded by mistake — the contradiction the designer
+      raised.
+      Space is not the boundary, though: the rows share `--surface` with this
+      Card, so the gap alone left nothing to see at rest. The boundary is the
+      row's own outline (`TodoRow`); the gaps only keep the outlines apart.
+    */
     return (
-      /*
-        Space between rows rather than rules between them. Each row is already
-        a rounded pill on hover, and hairlines running between floating pills
-        made the list read as a ruled table that had been rounded by mistake —
-        the contradiction the designer raised.
-        Space is not the boundary, though: the rows share `--surface` with this
-        Card, so the gap alone left nothing to see at rest. The boundary is the
-        row's own outline (`TodoRow`); this gap only keeps the outlines apart.
-      */
-      <ul className="flex flex-col gap-1.5 p-2">
-        {result.todos.map((todo) => (
-          <TodoRow
-            key={todo.id}
-            todo={todo}
-            isPending={
-              pendingTodoIds.has(todo.id) ||
-              (isDeleting && pendingDelete?.id === todo.id)
-            }
-            showTooltips={isDesktop}
-            onToggle={(target, nextCompleted) => {
-              void handleToggle(target, nextCompleted);
-            }}
-            onEdit={openEdit}
-            onDelete={setPendingDelete}
-          />
-        ))}
-      </ul>
+      <TodoGroupedList
+        todos={result.todos}
+        pendingTodoIds={rowPendingIds()}
+        showTooltips={isDesktop}
+        onToggle={(target, nextCompleted) => {
+          void handleToggle(target, nextCompleted);
+        }}
+        onEdit={openEdit}
+        onDelete={setPendingDelete}
+      />
     );
   };
 
