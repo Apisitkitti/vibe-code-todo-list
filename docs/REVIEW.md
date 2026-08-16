@@ -2203,3 +2203,159 @@ of being merely noisy.
 Both branches can merge independently once their own blockers clear. Neither
 should merge on the strength of being green, which is the whole reason I ran the
 mutations rather than the suites.
+
+---
+
+# Sign-off pass — both branches re-reviewed after fixes
+
+Narrow pass: confirm the three blockers per branch are closed and that nothing
+new broke. I did not re-review the suites.
+
+## `test/isolation-suite` — **Approve**
+
+**B-1 (CI never reached the tests).** Closed, and I verified it the hard way
+rather than taking the run on trust. I wrote my own runner that parses
+`.github/workflows/ci.yml` with PyYAML and executes the `verify` job's `run:`
+steps in order under the job's own `env:`, with `.env` moved aside.
+
+- *Negative control first.* With `BETTER_AUTH_URL` / `BETTER_AUTH_SECRET`
+  dropped from the job env, the Build step dies exactly as diagnosed:
+  `Failed to collect page data for /api/auth/[...all]`, caused by
+  `BETTER_AUTH_URL must be set in production` at `src/lib/auth.ts:33`. So the
+  blocker was real and the fix is load-bearing, not decorative.
+- *With the committed env.* All steps pass: db push, lint, build, typecheck,
+  and `test:run` — **6 files, 143 tests, all green.** (I skipped `npm ci` and
+  used the existing `node_modules`; it is the one step whose behaviour I did
+  not independently exercise.)
+
+The placeholder values are the right call. Nothing in CI serves traffic, the
+suite overrides the secret from `vitest.config.ts`, and a real secret would be
+a real secret in a public build log. The comment says so.
+
+**B-2 (two surviving mutations).** Both now die, at exactly the counts
+reported — I re-ran them myself:
+
+| Mutation | Result |
+| --- | --- |
+| `.strict()` removed from `todoStatusSchema` | **3 failed**, 140 passed |
+| `mentionsCompleted` → `return false` | **6 failed**, 137 passed |
+
+`writeContract.test.ts` checks each rejection by its *effect* as well as its
+status, which is the property that matters: a 400 that still wrote half the
+body is the original DEF-06 bug wearing a different number.
+
+**B-3 (indistinguishability tests were status-only).** The re-reads fire. I
+dropped `userId` from each write's scope in turn:
+
+| Sabotage | Failures |
+| --- | --- |
+| `/status` `updateMany` scope | **2** — incl. `PATCH …/status answers identically` |
+| `PATCH [id]` `updateMany` scope | **2** — incl. `PATCH …/[id] answers identically` |
+| `DELETE [id]` `deleteMany` scope | **3** — incl. `DELETE …/[id] answers identically` |
+
+Previously each was 1. The added `readTodo` assertions are what catch it: the
+404 comes from the scoped re-read that runs *after* the write, so the status
+codes agree perfectly while the row is being rewritten. The corrected header
+comment now names the two groups that deliberately assert less, and says why.
+The count concession (4, not 5) matches what I measured.
+
+**Nothing broke.** `git diff origin/develop -- src/` is empty. Full suite green.
+
+## `test/e2e-harness` — **Approve**
+
+**B-1 (false-success sites).** Closed, and it was eight, not seven — I count
+eight `expectNoFalseSuccess` call sites, all in `fault-injection.spec.ts`. I
+did not reuse the author's sabotage; I wrote my own, adding the success toast
+to the `catch` of `handleToggle` and `handleDelete` in `TodoListScreen.tsx` —
+the app lying to the user about a mutation that failed.
+
+- *Before:* 16 desktop specs green in 41.4s.
+- *Under my sabotage:* **both sabotaged specs fail, in 1.5s and 1.7s**, with
+  the intended message — `a failed mutation reported success: "Todo "…" marked
+  complete"` / `"… deleted"`. The other 8 stayed green, so the assertion is
+  discriminating rather than merely loud.
+
+Fast failure is the point. The old retrying form sat and watched the toast
+self-expire and then reported a pass at 6.5s. Reading once, after the failure
+and the durable state are already asserted, is the correct fix, and the
+docstring on `expectNoFalseSuccess` explains why so the next person does not
+"tidy" it back into a retrying assertion.
+
+**B-2 (defaulted to production).** Closed, and stronger than claimed. I probed
+`resolveTestDatabaseUrl` directly:
+
+| Input | Result |
+| --- | --- |
+| nothing set | resolves `postgresql://postgres@127.0.0.1:5432/todo_app_test` |
+| the app's real `DATABASE_URL` | **refused** — same as the app's URL |
+| same, one char changed | **refused** — hosted host (`neon.tech`) |
+| local but named `todo_app` | **refused** — not `*_test` |
+
+Note the second and third rows: aiming at production is refused twice over, by
+independent rules, so defeating the identity check alone does not get you
+there. `playwright.config.ts` resolves this at config load and hands it to the
+dev server via `webServer.env`, which is the half a teardown-side guard cannot
+cover. **Production verified untouched after all my runs: 17 users, 23 todos,
+and zero accounts matching any test-shaped address.**
+
+**B-3 (desktop only).** The Pixel 7 project runs **14 real specs, all passing**
+— 16 minus the 2 pointer specs it deliberately ignores. It is not silently
+skipping. 16 + 14 = 30. The exclusion is correct and the comment justifies it:
+the pointer specs assert hover affordances that by design do not exist at that
+breakpoint, and Pixel 7 emulates touch.
+
+**`globalSetup` verifying instead of pushing.** I agree with the judgement, and
+would have asked for it if they had not. A test run should not reshape a
+database as a side effect of starting, and `db push` is destructive with a
+blast radius that depends entirely on where it is pointed. Verifying the five
+tables and failing with the exact `createdb` / `db push` commands to run is
+strictly better. This is the one change that was not asked for and it improves
+the branch.
+
+**Nothing broke.** `git diff origin/develop -- src/` is empty. Both projects
+green.
+
+## The shared-database hazard — **not a blocker; document it**
+
+The Playwright author was right to flag it and wrong about the direction. I
+checked it two ways.
+
+*By reading.* Every destructive statement on either side is scoped, and the two
+namespaces are disjoint:
+
+- Vitest deletes `user WHERE email ENDS WITH '@isolation.test'` /
+  `'@contract.test'`, and todos by `userId`. It does not truncate.
+- Playwright deletes one account at a time by **full string equality** on an
+  address matching `/^e2e-[a-z0-9]+-\d+@e2e\.invalid$/`, resolved to a single
+  `user.id` first. `.invalid` is RFC 2606 reserved.
+
+Neither suite can match the other's rows. The word "truncate" in the Vitest
+guard's prose oversells what `deleteTestUsers` does.
+
+*By running.* I ran the full Playwright desktop suite and six back-to-back
+Vitest runs against the same `todo_app_test` **simultaneously**: 16 specs
+passed, and 143/143 passed six times over. No interference in either direction.
+Both suites also tore down cleanly — the only rows left in the test database
+predate this session by eleven hours.
+
+So: a documented constraint, not a fix. One line in the README is enough. When
+both branches land, the two `testDatabaseUrl.ts` twins should be merged into a
+single shared module — the Playwright file's own header already says so, which
+is the right instinct.
+
+## Verdicts
+
+**`test/isolation-suite` — approve.**
+**`test/e2e-harness` — approve.**
+
+All six blockers are closed, each verified independently rather than by
+re-reading the authors' reports, and every claim I checked matched what was
+stated — including the two corrections the authors volunteered against their
+own earlier numbers. Neither branch touches `src/`. Both are clean.
+
+Carried forward, not blocking: **MI-9** still stands — `ci.yml` lives on the
+isolation branch and runs `npm run test:run` only, so **merging the E2E branch
+does not put Playwright in CI.** That should be a deliberate decision, said out
+loud, not a thing everyone discovers in a month. Both branches touch
+`package.json` / `package-lock.json`, so whichever merges second conflicts
+trivially.
