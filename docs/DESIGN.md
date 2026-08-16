@@ -50,7 +50,7 @@ Reference them in Tailwind v4 arbitrary-value syntax, e.g.
 | Text on a surface | `--surface-foreground` | Inside `Card`. |
 | Muted / secondary text | `--muted` | Due dates, helper copy, empty-state body. |
 | Border | `--border` | Card and input borders. |
-| Softer border | `--border-secondary` | Row dividers inside a card. |
+| Softer border | `--border-secondary` | The todo row's outline (§4.4). Measured 1.71:1 light / 1.78:1 dark against `--surface`. |
 | Divider line | `--separator` | Used by `Separator`. |
 | Accent (brand) | `--accent` | Primary buttons, links, active filter. |
 | Text on accent | `--accent-foreground` | |
@@ -377,19 +377,25 @@ simply not setting `fullWidth` and using `className="w-full sm:w-auto"` instead)
 </div>
 ```
 
-**The list.** A single `Card` containing a `<ul>`; each todo is an `<li>`
-separated by a 1px bottom border, **not** by `Separator` components (one
-element per row is cheaper and avoids a stray element in the a11y tree).
+**The list.** A single `Card` containing a `<ul>`; each todo is an `<li>` drawn
+as an outlined pill, spaced by `gap-1.5` — **not** separated by `Separator`
+components and **not** by `divide-y` (see §4.4 for why the outline moved onto
+the row, and §8.7 for the measurements). One element per row is cheaper and
+avoids a stray element in the a11y tree.
 
 ```tsx
 <Card>
   <Card.Content className="p-0">
-    <ul className="divide-y divide-[var(--border-secondary)]">
+    <ul className="flex flex-col gap-1.5 p-2">
       {todos.map(t => <TodoRow key={t.id} todo={t} />)}
     </ul>
   </Card.Content>
 </Card>
 ```
+
+The `p-2` on the `<ul>` is what keeps the outermost pills off the Card's own
+edge; without it the first and last row's outline sits on top of the Card
+border.
 
 **Responsive.**
 
@@ -405,8 +411,17 @@ element per row is cheaper and avoids a stray element in the a11y tree).
 
 Fixed left-to-right order: **checkbox → title (+ note) → priority → due date → edit → delete.**
 
+**The row is an outlined pill.** `rounded-2xl border border-border-secondary
+px-4 py-3.5`, with `hover:bg-surface-hover` as a hover *state* layered on top —
+not as the boundary. The outline is what separates one row from the next; the
+`gap-1.5` on the `<ul>` only keeps two outlines from touching. Both are needed:
+drop the outline and the list has no boundary at all at rest, because the rows
+and the Card behind them are the same `--surface`. §8.7 has the measurements and
+the reasoning; the short version is that the outline is 1.71:1 light / 1.78:1
+dark, and no surface token can beat 1.20:1.
+
 ```tsx
-<li className="group flex items-start gap-3 px-4 py-3 hover:bg-[var(--surface-hover)]">
+<li className="group flex items-start gap-3 rounded-2xl border border-border-secondary px-4 py-3.5 hover:bg-surface-hover">
   <Checkbox
     isSelected={todo.completed}
     onChange={onToggle}
@@ -709,9 +724,9 @@ and takes `animationType`: `"shimmer" | "pulse" | "none"` (default from
 `--skeleton-animation`, which is `shimmer`).
 
 ```tsx
-<ul className="divide-y divide-[var(--border-secondary)]" aria-busy="true" aria-label="Loading todos">
+<ul className="flex flex-col gap-1.5 p-2" aria-busy="true" aria-label="Loading todos">
   {Array.from({ length: 4 }).map((_, i) => (
-    <li key={i} className="flex items-center gap-3 px-4 py-3">
+    <li key={i} className="flex items-center gap-3 rounded-2xl border border-border-secondary px-4 py-3.5">
       <Skeleton className="size-5 rounded-[var(--radius)]" />
       <Skeleton className="h-4 flex-1 rounded-[var(--radius)]" />
       <Skeleton className="h-5 w-16 rounded-[var(--radius)]" />
@@ -720,8 +735,9 @@ and takes `animationType`: `"shimmer" | "pulse" | "none"` (default from
 </ul>
 ```
 
-Match the skeleton row geometry to the real row (`px-4 py-3`, `gap-3`) so
-nothing shifts on swap.
+Match the skeleton row geometry to the real row (`px-4 py-3.5`, `gap-3`, and
+the 1px outline) so nothing shifts on swap. The border counts: leaving it off
+the skeleton moves every row by 2px when the real list arrives.
 
 **In-button pending.** `Spinner` — only `.Root`; `size`:
 `"sm" | "md" | "lg" | "xl"`; `color`: `"current" | "accent" | "success" | "warning" | "danger"`.
@@ -753,6 +769,54 @@ Three tiers, and each error belongs to exactly one:
 
 An unexpected exception is caught by an `error.tsx` boundary showing the
 page-scoped Alert plus `Try again` (calls `reset()`).
+
+---
+
+### 4.10 Toast actions — the first moments are dead
+
+**Constraint, not a bug we introduced.** Design in-toast affordances around it.
+
+HeroUI runs *every* toast queue update — each add and each close — inside
+`document.startViewTransition` (`dist/components/toast/toast-queue.js`, the
+default `wrapUpdate`). While a view transition is running, the browser paints
+the `::view-transition` snapshot layer over the page, and **that layer takes the
+hit-testing**. The real toast underneath is mounted, painted and focusable, but
+a pointer press lands on the snapshot and never reaches the button.
+
+So for roughly the **first 350–400ms of a toast's life its action button is
+visible and completely inert.** The 350ms is the slide animation in
+`styles/dist/components/toast.css`; the rest is frame overhead.
+
+Three things follow, and each of them is a design constraint:
+
+- **It is pointer-only.** Keyboard activation does not hit-test, so a user who
+  tabs to Undo and presses Enter is unaffected. The failure is invisible to
+  keyboard testing and to unit tests that call `onPress` directly — it only
+  reproduces with a real pointer inside the window.
+- **A repeat write to the same todo doubles the window.** We dismiss a row's
+  outstanding Undo before raising the new one, and the queue *serialises*
+  transitions in a promise chain — one at a time, by design, because the View
+  Transitions API aborts a transition that starts while another is live. The
+  close animates, then the add animates, so the second toast's Undo is dead for
+  roughly twice as long.
+- **The dead window has no visual tell.** The button looks armed the whole
+  time. A user who presses immediately gets nothing, and the only feedback
+  available to them is pressing again.
+
+**What this means for design.** Do not put a *time-critical* action in a toast
+and expect the first press to land — the affordance the user reaches for
+fastest is the one most likely to be swallowed. Our Undo survives this only
+because its timeout is generous relative to the dead window; a short-lived toast
+with an action would be substantially worse. If a future affordance needs to be
+live on the first frame, the escape hatch is a `ToastQueue` constructed with an
+explicit `wrapUpdate: fn => fn()` (the option is public), which trades the slide
+animation for a correct hit target. **That trade is worth making the moment an
+action matters more than the animation** — and I would take it now if the Undo
+timeout were ever shortened.
+
+Related, and the same shape of problem: `toast.close()` does not unmount
+immediately for the same reason, which is why `TodoListScreen` guards
+double-presses on the *key* rather than on the toast's presence.
 
 ---
 
@@ -1035,6 +1099,10 @@ update, toggle and delete is confirmed first and reports its outcome in a
 toast that names the record. These success-toast strings supersede the
 generic ones in §7.5 and §7.6.
 
+Any toast here that carries an action (the Undo toasts, §7.13 and §7.15) is
+subject to §4.10: **the action does not respond to a pointer for the first
+~400ms.** Read §4.10 before adding another one.
+
 | Slot | String |
 |---|---|
 | Confirm cancel (all) | `Cancel` |
@@ -1266,6 +1334,16 @@ designed; a ruled table with rounded hover reads as two people editing. Also
 `rounded-2xl` is a literal forbidden by §2.3 — it must be
 `rounded-[var(--radius)]`. Amend §4.3 and §4.4 to match.
 
+> **Done, with one correction and one addition — see §8.7.** The correction:
+> `rounded-2xl` is **not** a forbidden literal. HeroUI redefines Tailwind's
+> radius scale in terms of the theme
+> (`--radius-2xl: calc(var(--radius) * 2)`, `themes/shared/theme.css`), so
+> `rounded-2xl` already resolves to a token and rescales with `--radius`.
+> Changing it to `rounded-[var(--radius)]` would make the pill *less*
+> token-driven and a quarter of the radius. I was wrong; it stays.
+> The addition: dropping `divide-y` on its own left the list with no boundary
+> at rest, so the row now carries its own outline. §8.7 has the numbers.
+
 **2 — Every row wears a chip, so no row stands out.**
 `PriorityChip` renders `variant="soft"` for all three levels and `medium` is the
 schema default, so a typical list is a column of near-identical warning-tinted
@@ -1345,6 +1423,98 @@ state and the `line-through`, not by the chip.
   the row's hover and focus states become the only row boundary — worth
   re-measuring `--surface-hover` against `--surface` in both themes, since
   DEF-08's light-mode headroom was already thin (3.25:1 on a hovered row).
+  **(c) is answered and closed by §8.7** — the measurement came back worse than
+  I feared, and the row now has an outline so that hover is no longer load
+  bearing.
 
 **If exactly one thing is taken from this note, take §8.3.** Everything in §8.4
 makes the app look better; §8.3 makes it feel like it is on your side.
+
+---
+
+### 8.7 The row boundary — decision record
+
+§8.4.1 was taken: `divide-y` is gone, the rows are spaced pills. In §8.6 I asked
+QA to re-measure what that left behind. The answer came back worse than I
+expected, and this section records what I did about it. **This is the spec for
+the row boundary; §4.3, §4.4 and §4.8 now describe the outcome.**
+
+**What the measurements said.** All ratios computed from HeroUI's own token
+graph — the surface levels resolve through `color-mix(in oklab, …)` against
+`--surface-foreground`, composited before comparing, not eyeballed:
+
+| Pair | Light | Dark |
+|---|---|---|
+| `--surface-hover` vs `--surface` (the hover pill) | 1.20 : 1 | 1.19 : 1 |
+| `--surface-secondary` vs `--surface` | 1.15 : 1 | 1.13 : 1 |
+| `--surface-tertiary` vs `--surface` | 1.20 : 1 | 1.18 : 1 |
+| `--border` vs `--surface` | 1.35 : 1 | 1.21 : 1 |
+| `--border-secondary` vs `--surface` (**chosen**) | **1.71 : 1** | **1.78 : 1** |
+| `--border-secondary` vs `--surface-hover` | 1.42 : 1 | 1.50 : 1 |
+| `--border-tertiary` vs `--surface` | 2.38 : 1 | 2.66 : 1 |
+
+**Why spacing alone was not enough.** Separation by whitespace is a perfectly
+good pattern, and I would normally defend it. It works because the rows sit on a
+*different plane* from their container — a card on a page, a tile on a canvas —
+and the plane, not the gap, is the boundary. These tokens cannot give us a
+plane: the strongest surface-on-surface pair in the theme is 1.20:1, and the
+rows share `--surface` with the Card they sit in, so `gap-1.5` was six pixels of
+the row's own colour. That is not whitespace separation. That is no boundary,
+dressed as one. And because hover does not exist on touch and we have no
+row-level focus style, a phone had no separation in **any** state.
+
+**Not an accessibility blocker, and nobody should argue it as one.** The `<li>`
+elements carry the list semantics regardless of how they are painted; a screen
+reader gets item counts and boundaries either way. Nor does WCAG 1.4.11
+apply — a divider between two blocks of text is not a control boundary or a
+meaningful graphic, and each row's *content* meets contrast on its own. This was
+purely a question of visual perception, which is exactly why it was mine to
+answer rather than QA's.
+
+**The decision: outline the row.** `border border-border-secondary` on the
+`<li>`, keeping `rounded-2xl`, `gap-1.5` and `hover:bg-surface-hover`.
+
+Its merits, in the order I weighed them:
+
+- It is **the same token and the same strength as the rule it replaced** —
+  `divide-y divide-border-secondary` was 1.71:1 light, and this is 1.71:1 light
+  / 1.78:1 dark. Nobody is being asked to accept a weaker boundary than what
+  already shipped; the ink simply follows the pill's shape instead of cutting
+  across it. That is what makes this not a revert: the contradiction §8.4.1
+  identified — hairlines running between floating pills — does not come back.
+- It works **at rest, in both themes, with no pointer**, which is the mobile
+  case and the one that was fully broken.
+- It **demotes hover to a hover state**, which is what a hover state should be.
+  1.20:1 is thin, but it no longer has to carry structure — it only has to say
+  "this row, the one under your cursor", and against a boundary that is already
+  visible, it does.
+- The two cues are **additive**. The gap and the outline reinforce each other,
+  where the old list had a rule and nothing else.
+
+**Rejected, and why.**
+
+- *Revert to `divide-y`.* Restores the boundary at identical contrast but
+  reinstates exactly the contradiction §8.4.1 was right about.
+- *Keep it as-is and write down that the weaker boundary is acceptable.* I
+  cannot write that honestly. 1.00:1 at rest is not a weak boundary, it is the
+  absence of one, and on mobile there is no second state to fall back to.
+- *Put the rows on `--surface-secondary` or `--surface-tertiary`.* The obvious
+  "different plane" move, and the tokens will not do it: 1.13–1.20:1.
+- *`--border-tertiary`* (2.38 / 2.66). Legible, and too loud. A perimeter is
+  four sides of ink where a divider was one; at this strength eight rows read as
+  eight boxes — a table of cards, which is further from the intent than the
+  hairlines were. `--border-secondary` is the ceiling here, not the floor.
+- *A shadow.* Non-starter: `--surface-shadow` is `0 0 0 0 transparent inset` in
+  dark mode by design, so a shadow-based boundary would exist in one theme only.
+- *A colour of our own, mixed from `--foreground`.* Available — the checkbox
+  fix (DEF-08) does exactly this at 50% for a real control boundary that must
+  clear 3:1. A row divider does not have that requirement, and inventing a
+  colour where a semantic token fits is how a token system stops meaning
+  anything.
+
+**On `--field-border-width: 0px`.** Worth naming, since it caught us once
+already: it is a *field* default, and this is a plain border utility on an
+`<li>`, so it does not apply. The DEF-08 trap was a HeroUI form control whose
+border width the theme zeroed out from under us. Any future boundary drawn on a
+HeroUI field — not on our own element — has to set its width explicitly and be
+measured, not assumed.
