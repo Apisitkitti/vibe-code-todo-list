@@ -1117,3 +1117,209 @@ which would tell the user their todo was deleted.
 Punctuation notes: use the typographic apostrophe (`'`) in contractions
 (`don't`, `can't`, `Couldn't`) and curly double quotes around interpolated
 titles in prose. Use the ellipsis character `…`.
+
+---
+
+## 8. Design note: drag-and-drop and the completion control
+
+*2026-08-16 — UX/UI. Opened as an answer to "should the completion checkbox be
+replaced by drag and drop?", rewritten after the lead reframed the question to
+"how do we make this application genuinely more appealing to use?". §8.1
+disposes of the original question; everything after it answers the real one.
+Several proposals below revise things I specified in this document myself, and
+each says so.*
+
+### 8.1 Drag and drop — no, and it was never the question
+
+Replacing the checkbox with a drag gesture would trade a labelled,
+keyboard-operable, screen-reader-announced binary control for a spatial gesture
+with no accessible equivalent: it breaks §6.3 (there is no element left to
+measure, which retires the 44×44 target QA verified twice — `docs/QA-REPORT.md`
+§2.5, DEF-01), §6.8 (react-aria's keyboard drag mode moves items to positions,
+it cannot express "this sets a boolean"), §6.9 (a gesture has no
+`motion-reduce` variant), and it collides head-on with vertical touch scrolling
+— the disambiguating long-press would make the app's most repeated action its
+slowest. Separately, *reordering* is a different feature wearing the same
+costume: `prisma/schema.prisma` has no ordering column, `docs/PRD.md` §4 lists
+drag-and-drop reordering as out of scope for v1, HeroUI v3 ships no `GridList`
+(the collection components are `list-box`, `menu`, `table`, `tag-group`), and a
+handle cannot fit beside three 44 px targets in a 343 px content column at
+375 px — so it would be pointer-only with a separate mobile path forever. If PM
+ever wants reordering, it is a schema migration plus a scoped endpoint plus a
+second ordering system competing with the priority filter, and it should be
+argued on those terms. **The checkbox stays. Nothing below depends on this.**
+
+### 8.2 Why the app feels plain — the actual diagnosis
+
+The app is not plain because it lacks ornament. It is plain because **it asks
+permission constantly and answers slowly**, and no amount of visual polish
+fixes that.
+
+Adding a todo today is: press `New todo` → a modal opens → fill four fields →
+press `Add todo` → **a second modal** asks `Add this todo?` → confirm → the
+entire list is replaced by a skeleton → the list returns. Two modals, three
+confirmations of the same intent, and a full-screen loading state, to write the
+words "Buy milk". Checking a todo off is worse in a subtler way: the checkbox
+does not move until the server answers (`TodoRow.tsx`: *"Stays in its current
+state until the confirmed mutation lands"*), so the single most satisfying
+micro-interaction in any todo app — the tick landing under your finger — is
+instead a short dead pause.
+
+Both of those contradict **§1 of this document, which I wrote**: *"Optimistic
+and quiet. State changes apply immediately… Never show a spinner for an action
+that finishes in under 300 ms."* The implementation is neither optimistic nor
+quiet, and the confirm-modal convention in `docs/CONVENTIONS.md` is what pushed
+it there. That is the gap to close. Appeal, in an app you touch fifty times a
+day, is mostly **latency and ceremony**; hierarchy and colour are second-order
+and are handled in §8.4.
+
+### 8.3 The first move — and I would take only this one if forced
+
+**Delete the confirmation modal on create and on edit. Make the toggle
+optimistic. Never blank the list after a mutation.** One ruling, three changes,
+and the app changes character.
+
+**8.3.1 Confirms on create and edit — remove.**
+`docs/CONVENTIONS.md` → Mutation UX makes a confirm modal mandatory for every
+create and update, and §7.11/§7.12 of this document encode the strings, so this
+is a lead ruling and I am arguing against it directly rather than around it.
+The rule's purpose — do not commit something by accident — is already served
+for create and edit by the form itself: the user typed the content and pressed
+a labelled button that says exactly what it will do. The confirm shows them
+nothing the previous screen did not. The lead has already reasoned this way
+once, about sign-in (§7.12: *"It creates nothing and is undone by signing
+out"*), and create and edit are **more** reversible than sign-in — both are
+undone by editing or deleting, and both already report by toast.
+
+Keep the confirm for **delete** only: destructive, irreversible, correctly
+specified in §4.6, and verified by QA (`docs/QA-REPORT.md` §6 — Cancel focused
+first, Escape cancels, focus returns to the trigger).
+
+*Accessibility:* this **removes** a focus trap rather than adding one, and
+removes a second dialog whose heading duplicated the first. No rule in §6 is
+touched. §7.11's `Create confirm …` / `Update confirm …` rows and §7.12 in full
+would be struck; the success toasts stay exactly as they are.
+
+**8.3.2 The toggle must move on press.**
+Flip `completed` in local state immediately, render the row's completed styling
+at once, and revert on failure with the existing `Couldn't update the todo. Try
+again.` toast. The `Undo` action in the success toast (§7.13) is unchanged and
+still re-runs the scoped endpoint. This is what §1 already promised. The row's
+current `opacity-60 pointer-events-none` pending treatment should then apply
+only to *delete*, where the row is about to vanish and a stable, dimmed row is
+honest; on a toggle it is now visible latency for its own sake.
+
+*Accessibility:* `aria-checked` flips with the visual state instead of lagging
+behind it, which is strictly more correct for a screen reader. §6.4's "checkbox
+state **and** `line-through`" pairing is unchanged.
+
+**8.3.3 Stop replacing the list with a skeleton.**
+`TodoListScreen` calls `reloadWithSkeleton()` after a create or an edit, which
+blanks every row on screen to report a change to one of them. The skeleton
+earns its place exactly once — the first load, where there is nothing to
+preserve (§4.8). After a mutation, refetch underneath the rendered list and let
+the row change in place. A create can prepend the new row optimistically; an
+edit already knows the new values. Nothing flashes, scroll position survives,
+and the app stops re-introducing itself every time you use it.
+
+**Together these three remove one modal, one dead pause and one full-page flash
+from the single most common path in the product.** That is the strongest first
+move available, and it costs nothing in §6.
+
+### 8.4 Then, in order: the visual work
+
+Ranked. Each is small, and none costs an accessibility rule.
+
+**1 — The row contradicts itself, and that is what looks unfinished.**
+`TodoRow.tsx` gives each `<li>` `rounded-2xl hover:bg-surface-hover`, while
+`TodoListScreen.tsx` wraps them in `divide-y divide-border-secondary`: a
+rounded hover pill drawn inside a hard-ruled table. **§4.3, which I wrote,
+specifies the dividers and is the half that is wrong.** Take the pills: drop
+`divide-y`, put `p-2` on the `<ul>`, keep the rounded hover, and separate rows
+by space instead of rules. A list of soft rows with breathing room reads as
+designed; a ruled table with rounded hover reads as two people editing. Also
+`rounded-2xl` is a literal forbidden by §2.3 — it must be
+`rounded-[var(--radius)]`. Amend §4.3 and §4.4 to match.
+
+**2 — Every row wears a chip, so no row stands out.**
+`PriorityChip` renders `variant="soft"` for all three levels and `medium` is the
+schema default, so a typical list is a column of near-identical warning-tinted
+chips and `High` has nothing to be loud against. Render `low` and `medium` as
+`variant="tertiary"` and keep `high` at `variant="soft" color="danger"`. The
+word and the shape glyph (`▲`/`■`/`▼`) are untouched, so **§6.4 holds exactly as
+written** — this changes only how loud the tint is. Cheapest single change that
+makes the list look considered, and it is the direct fix for "everything looks
+the same".
+
+**3 — Give the list a shape: a completed section, with a real heading.**
+With `status=all`, completed rows simply appear below the active ones and a
+screen-reader user gets no signal that the list changed character halfway down.
+Render a `Separator` plus `<Typography.Heading level={2}>Completed</…>` between
+the groups, only when the status filter is `all` and both groups are non-empty.
+This is an accessibility **gain** — a real heading to navigate by — it makes the
+ordering rule visible instead of implicit, and it gives a long list the
+structure it currently lacks. Needs one copy-deck string (`Completed`).
+
+**4 — Make progress visible once, at the top.**
+`{done} of {total} done` is a number nobody feels. Put a `Meter` under the page
+heading — verified compound: `.Root .Track .Fill .Output`, with `color` and
+`size` (`dist/components/meter/index.d.ts`) — using the existing string as its
+accessible output rather than as a second label. One accent bar, at the one
+place in the app where the accent means something. This is the only ornament I
+would add, and it earns its place by reporting real state.
+
+**5 — `Today` should not look like `Mar 4, 2027`.**
+Overdue gets `⚠` and a warning tint (§4.4); everything else is uniform muted
+grey, so the single most actionable date in the app is as quiet as a date two
+years out. Give `Today` `--accent-soft-foreground`, keeping the literal word as
+the carrier of meaning. §6.4 unaffected.
+
+**6 — Four empty states, one calendar icon.**
+`TodoEmptyState` takes only `heading`/`body`/`actionLabel`, so `No matches`
+shows a calendar with a tick. Add an icon slot and give the search-empty state
+`IconSearch` (shipped, already listed in §5). The empty state is the first
+screen a new account sees; it should not look like a fallback.
+
+**7 — Motion, deliberately small.**
+The only additions I want: a 150 ms transition on the title's
+`line-through`/muted change when a todo completes, and a 150 ms fade-in on a
+newly inserted row. Both `motion-reduce:transition-none`, per §6.9. That is the
+whole budget. No list reflow animations, no springs — this is a tool, and a
+tool that wobbles is annoying by the tenth use.
+
+### 8.5 One default I think is wrong, and one thing to remove
+
+**Default priority.** `medium` is the schema default and the form's default
+(§4.5), so almost every todo is medium and the priority chip carries almost no
+information across a real list. I would rather the create form defaulted to
+**low** — the honest state of a task nobody has triaged — which would make
+`medium` and `high` mean something the moment a user sets one. This changes no
+schema constraint (`priority` still defaults to `medium` server-side for a
+payload that omits it); it changes what the form pre-selects. **This is a PM
+call, not mine** — it is a claim about how users triage, and I would want them
+to weigh in.
+
+**Remove: the priority chip on completed rows.** Once a todo is done, its
+priority is history and it is competing for attention with the active rows above
+it. Hiding it on completed rows only removes a chip from an already-struck-out
+title, and §6.4 is unaffected because completion is carried by the checkbox
+state and the `line-through`, not by the chip.
+
+### 8.6 What I would ask PM and QA
+
+- **PM.** (a) Does dropping the create/edit confirm modal (§8.3.1) need a
+  formal reopen of the Mutation UX ruling in `docs/CONVENTIONS.md`, or can the
+  lead simply rule it as they ruled sign-in? (b) The default-priority question
+  in §8.5. (c) For the record: is drag-and-drop reordering being reopened
+  against `docs/PRD.md` §4, or is §8.1 the end of it?
+- **QA.** (a) An optimistic toggle needs the **failure** path tested, and
+  `docs/QA-REPORT.md` §8 lists failure paths as never yet exercised ("no fault
+  injection"). I would not ship §8.3.2 without one injected 500 proving the row
+  reverts and the toast fires. (b) Is a `Meter` inside the heading row still
+  clear of horizontal scroll at 320 px? (c) After §8.4.1 removes `divide-y`,
+  the row's hover and focus states become the only row boundary — worth
+  re-measuring `--surface-hover` against `--surface` in both themes, since
+  DEF-08's light-mode headroom was already thin (3.25:1 on a hovered row).
+
+**If exactly one thing is taken from this note, take §8.3.** Everything in §8.4
+makes the app look better; §8.3 makes it feel like it is on your side.

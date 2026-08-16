@@ -695,3 +695,503 @@ The rest can follow as separate commits.
 
 The authorization work is solid and the `/status` split is the right call — I
 found nothing to fault in session handling, ownership scoping or the Undo path.
+
+---
+
+# Engineering proposals
+
+Author: Senior engineer
+Date: 2026-08-16
+Read against: the working tree of `fix/add-refresh-gap`, `docs/PM-PROPOSAL.md`,
+`docs/QA-REPORT.md` §7–§9, `docs/CONVENTIONS.md`, `docs/WORKFLOW.md`, and my own
+two reviews above.
+
+The round's question is **how we make this app genuinely more appealing to use.**
+Engineering has two answers product cannot give: one about why it feels slow, and
+one about why shipping the nice things is currently expensive.
+
+**The recommendation, up front:** the single change that makes this app feel like
+a different product is **stop making the user wait for a network round trip to
+see the result of their own click.** Every mutation in `TodoListScreen.tsx` today
+awaits a `PATCH`, then triggers a *second* full-list `GET` before anything moves
+on screen. That is the sluggishness, it is measurable rather than a feeling, and
+§2 sets out exactly where the milliseconds go. It is also, not coincidentally,
+the review finding (m-7) that has been open longest and been deferred three
+times.
+
+**And the thing that has to come with it:** before that lands — and before
+backlog #1, #2 or #4 — put automated tests under the two things a human cannot
+reliably re-check: **cross-user scoping in `src/app/api/todos/**`, and the list
+state machine in `TodoListScreen.tsx`**. Not on principle. Because of one
+specific fact: the strongest quality claim in this repo, the isolation matrix in
+`docs/QA-REPORT.md` §7, is re-proved **by a person deciding a diff looks safe**.
+That decision was made correctly twice. Backlog #4 is the diff where it gets made
+wrong. And optimistic updates are precisely the class of change that a
+browser-driving human cannot verify — you cannot see a revert-on-failure without
+breaking the network on purpose, which `docs/QA-REPORT.md` §8 says QA has no way
+to do.
+
+That is the honest engineering answer to "make it nicer": the nicest single
+change we can make is also the one we currently have no way to prove is correct.
+Two and a half days of test scaffolding is what turns it from a risk into a
+routine change — and then keeps doing that for every appealing thing after it.
+
+---
+
+## 1. What worries me, ranked
+
+### 1.1 — The isolation guarantee is verified by human judgement, and the backlog contains the exact diff that defeats it
+
+`docs/QA-REPORT.md` §7 runs the short form on the reasoning "the diff under test
+touches exactly two files … no route handler, no session code, no Prisma query
+changed." That is sound reasoning and it was the right call both times. Now read
+`docs/PM-PROPOSAL.md` #4 — search notes as well as titles. It is **one line** in
+`src/app/api/todos/route.ts:56-58`, changing
+
+```ts
+where.title = { contains: query, mode: "insensitive" };
+```
+
+into an `OR`. A one-line change to a `where` clause is exactly the diff a
+reviewer and a tester both classify as small. It is also the only diff in the
+whole backlog that can silently remove `{ userId: session.user.id }` from the top
+level of the filter. The PM spotted this and asked for "a security-minded review
+and a test" — there is nowhere for that test to go.
+
+Everything else on this list is a cost. This one is the only unbounded loss.
+
+### 1.2 — `TodoListScreen.tsx` is a hand-rolled data-fetching library, and the next three backlog items all land in it
+
+417 lines, nine `useState`, a `reloadToken` counter, a render-phase `setState`
+guarded by `lastFilterKey` (`:87-90`), a manual `isCurrent` race guard
+(`:331-355`), and now two reload variants with a paragraph of prose each
+explaining which callers may use which. Every one of those is a re-implementation
+of something a query library does: staleness, cancellation, loading state,
+invalidation. Each piece is correct — I have checked them all — and each was
+added to fix a real bug (m-4, m-8, the refresh gap). That is the tell. It is
+accreting invariants that live only in comments.
+
+PM backlog #1, #2 and #3 all edit this file, and #3 (optimistic toggle) adds
+local mutation of `result.todos` on top of a refetch token. The PM's own decision
+memo says it plainly: "two unreviewed behaviour changes landing in it at once is
+exactly how a subtle refetch bug ships." Correct — and sequencing them does not
+make the file smaller.
+
+### 1.3 — The API imports its trust boundary from a UI component folder
+
+`src/app/api/todos/route.ts:5` and `[id]/route.ts:3`:
+
+```ts
+import { todoFormSchema } from "@/app/todos/components/form";
+```
+
+`src/app/api/todos/errors.ts:3-6` does the same for `isTodoFieldName` and
+`TodoFieldErrors`. The dependency arrow points server → client-route-UI. Today
+that is only ugly. It stops being only ugly the moment a second producer of the
+same payload appears — which is backlog #1, quick-add — because then "the form's
+schema" and "the API's contract" are no longer the same idea, and the file that
+defines the trust boundary sits three directories inside a route's presentation
+layer where nobody expects to find a security-relevant module.
+
+`CONVENTIONS.md` → Forms still says "The same zod schema is re-validated inside
+the server action", which is a third name for the same object in an architecture
+that has no server actions.
+
+### 1.4 — There is no migration history, and the next two features need schema changes
+
+`prisma/` contains `schema.prisma` and nothing else. `package.json` has
+`db:push`, no `migrate`. Backlog #2 wants `@@index([userId, dueAt])`; the PM's
+success measure #5 wants a `createdVia` column; #7 and #8 want real tables. With
+`db push` there is no reviewable artefact for a schema change, no replay, no way
+to tell whether Neon matches `schema.prisma`, and an index added by hand in one
+environment is invisible in the diff. This is cheap to fix once and expensive to
+fix after four undocumented pushes.
+
+### 1.5 — A `401` mid-session is a dead end (m-3, still open)
+
+`src/lib/http.ts:28-31` is an interceptor that does nothing:
+
+```ts
+http.interceptors.response.use(
+  (response) => response,
+  (error) => Promise.reject(error),
+);
+```
+
+The comment says it is the "single hook point for cross-cutting concerns" — and
+the one genuinely cross-cutting concern in the app is sitting unhandled. When a
+session expires with the list open, the user gets an Alert titled "Couldn't load
+your todos" and a **Try again** button that will fail identically, forever. It is
+the only state in the app with no exit.
+
+### 1.6 — Two declared-but-unreachable paths that document guarantees the code does not make
+
+- `ApiErrorCode.Internal` (`src/lib/apiError.ts:19, 51-54`) is never constructed.
+  No handler has a `try`/`catch`, so a Neon blip returns Next's HTML 500 with no
+  `message` — the exact case `CONVENTIONS.md` → One error shape says cannot
+  happen. QA has this as DEF-10, open from inspection only, because QA has no way
+  to inject the fault.
+- `parseDueDate`'s `"invalid"` sentinel (`src/lib/todo.ts:93-101`) is handled in
+  both write handlers as `dueAt: parsedDueAt === "invalid" ? null : parsedDueAt`
+  (`route.ts:97`, `[id]/route.ts:54`) — i.e. if it ever *were* reachable, an
+  invalid date would silently clear the field instead of returning `400`. The
+  schema makes it unreachable today. A `Date | null | "invalid"` return type is
+  the shape that invites this; a discriminated result or a thrown error does not.
+
+### 1.7 — Nits still open from review 1 and 2
+
+`isTodoPriority` (`src/lib/todo.ts:64`) has no callers. `src/lib/http.ts:6-9` and
+`TodoListScreen.tsx:51-54` still cite server actions for code that uses none.
+`docs/STACK.md` still says Prisma 6.19 against `^7.9.1`. None of these will hurt
+anyone; they are the comments a newcomer trusts first.
+
+---
+
+## 2. What the app is actually slow at, and why
+
+The lead asked for the real cost rather than a feeling. Here it is, traced.
+
+### 2.1 — Every mutation costs two sequential round trips before anything moves
+
+`handleToggle` (`TodoListScreen.tsx:174-201`): `await toggleTodo(...)` — one
+`PATCH` — then `reloadSilently()` bumps `reloadToken`, which re-runs the effect
+at `:330-355`, which issues a fresh `GET /api/todos`. The checkbox does not move
+until **both** land, because nothing is applied locally. Same shape in
+`undoToggle`, `handleDelete` and `TodoFormModal.onSaved`.
+
+Cost per toggle, on Vercel + Neon, in order:
+
+1. `PATCH /api/todos/[id]/status` — `getSession()` (a `session` table read),
+   `updateMany`, then a **second** query, `findOwnedTodo`, to build the response
+   (`status/route.ts:61-70`). Three DB round trips inside one request.
+2. `GET /api/todos` — `getSession()` again, then three queries in parallel
+   (`route.ts:60-67`): `findMany`, `count`, `count`.
+
+So one checkbox click is **two HTTP requests, two session lookups and seven
+database queries**, and the response body of the first one — the authoritative
+updated row — is thrown away. On a good desktop connection that is perhaps
+250–400 ms and reads as "fine". On a phone on mobile data, two sequential
+round trips to a serverless function plus a Neon connection is comfortably
+half a second to a second of a checkbox that does not tick. That is the thing
+users describe as "it feels slow", and it is the most-repeated action in the app.
+
+**Yes — this is what makes it feel sluggish.** Not render performance, not bundle
+size, not Prisma. Sequential round trips on the interaction that happens most.
+
+### 2.2 — What I would do instead, in the order I would do it
+
+1. **Apply the toggle locally and immediately** (m-7, PM backlog #3). Flip the
+   row in `result.todos`, revert in `catch`. The row already has its
+   `opacity-60 pointer-events-none` treatment for exactly this
+   (`TodoRow.tsx`) — `docs/DESIGN.md` §4.8 specified this pattern and it was
+   never wired up. Perceived latency goes from ~500 ms to zero.
+2. **Use the response body instead of refetching.** `toggleTodo` and
+   `updateTodo` already return the authoritative `TodoItemData`
+   (`todo.service.ts:32-44`). Splice it into the list. That deletes the second
+   round trip entirely for toggle, undo and edit. Note this is a *narrower*
+   claim than the PM's backlog #3, and it agrees with the PM's own later
+   correction: a **create** genuinely can change membership and ordering, so
+   create keeps its refetch. Delete needs only the counts.
+3. **Return the counts from the write routes**, or derive them client-side. The
+   only reason a delete refetches at all is the `{completed} of {total} done`
+   header. That is arithmetic, not a query.
+4. **Collapse the write handlers' two queries into one.** Prisma 7 allows
+   non-unique filters in `update`'s `where`, so
+   `prisma.todo.update({ where: { id, userId }, data })` returns the row in one
+   statement (catch `P2025` → `404`). This is m-5 from review 2, still open. It
+   removes a query *and* closes the window where a concurrent delete turns a
+   successful write into a `404`.
+
+Items 1–3 are the felt difference. Item 4 is server-side hygiene that rides
+along.
+
+### 2.3 — The other real latency, and it is not on this list by accident
+
+The **initial** load of `/todos` is a server-rendered shell that then fetches its
+own data from the client (`page.tsx` renders `TodoListScreen`, which `GET`s in an
+effect). So first paint is a skeleton, always, even though the server rendering
+that page already has a session and a database connection in hand. That is a
+waterfall the architecture chose deliberately —
+`CONVENTIONS.md` → "Server actions — auth only" mandates it — and unpicking it
+means revisiting that rule, which is a bigger conversation than this document.
+I am **not** proposing it now. I am recording that it is the second-largest
+latency in the app so that nobody re-discovers it as a surprise, and noting that
+§2.2 gets the felt win without touching it.
+
+### 2.4 — What is *not* slow, so nobody optimises it
+
+The list query is three queries with no N+1 and hits the `[userId, completed]`
+index. Rendering is a flat `<ul>` with no memoisation problems at realistic
+sizes. `?query=` search is debounced (`TodoFilters.tsx:80`). Bundle size is
+unremarkable. None of these is worth an hour until the app has thousands of rows
+per user — and when it does, the first thing to break is the un-indexed `ILIKE`
+on notes that backlog #4 adds, not anything that exists today.
+
+---
+
+## 3. What I would build next, ranked — and where I disagree with the PM
+
+I agree with the PM's read of the product. I disagree with the order.
+
+### E-1 — API contract tests, before backlog anything (M, ~2 days)
+
+See §4. Half the headline, and the half that makes E-2 safe to do.
+
+### E-2 — Make the list respond instantly (S–M, 1–2 days) — the other half
+
+§2.2 items 1–3, on top of E-3's hook. This is m-7 plus the PM's backlog #3
+narrowed to what the PM's own decision memo still stands behind. It is the
+cheapest change in this document that a user can feel, and the only one of my
+proposals that is visible from the outside.
+
+It should not ship without E-1, and I want to be explicit about why rather than
+hiding behind process: optimistic state has exactly one failure mode — the
+revert — and `docs/QA-REPORT.md` §8 records that QA has **no fault injection**.
+A human cannot verify revert-on-failure through a browser. Today that is fine
+because nothing is optimistic and the row "already shows the truth"
+(`TodoListScreen.tsx:194`). The moment we apply changes locally, we have a
+correctness property with no verifier. Two tests cover it.
+
+### E-3 — Move the todo schema to `src/lib/todo.schema.ts` (S, half a day)
+
+One file move plus imports. The form imports it, both write handlers import it,
+`errors.ts` imports `TODO_FIELD_NAMES` from it. Do it **before** quick-add, not
+after, because after means doing it while a second caller is being written.
+
+### E-4 — Extract `useTodoList` from `TodoListScreen` (S–M, 1–2 days)
+
+A hook in `src/app/todos/hooks/useTodoList.ts` owning `result`, `isLoading`,
+`loadError`, `reloadToken`, `lastFilterKey`, the effect and the race guard,
+returning `{ result, isLoading, error, reload, reloadQuietly, retry }`. The
+screen keeps the dialogs, the pending set and the rendering. No new dependency,
+no behaviour change, reviewable in one sitting.
+
+I considered proposing TanStack Query instead, which is what this file is
+imitating, and I am not proposing it: it is a new dependency with its own
+conventions on a fixed stack, and the hook gets 80% of the value for a day. If
+the app ever grows a second list screen, revisit.
+
+### E-5 — Swap `db push` for `prisma migrate` (S, half a day) — before backlog #2
+
+`prisma migrate dev` locally, `prisma migrate deploy` in the Vercel build, one
+baseline migration generated from the current schema. Do it while the schema is
+still the one everybody agrees on.
+
+### E-6 — Backlog #2 (due-date ordering) **before** backlog #1 (quick-add)
+
+This is my one real disagreement, and I want to argue it rather than assert it.
+
+The PM's case for quick-add first is that ordering is worth little while `dueAt`
+is mostly null, and quick-add is what populates `dueAt`. That is a good argument
+and it may well be right about the product. It is the wrong thing to *start*,
+for three engineering reasons:
+
+1. **Quick-add is blocked on a decision that has not been made.** The PM says so
+   explicitly: without a `CONVENTIONS.md` exception it should not be built at
+   all. Ordering needs no ruling from anybody. Starting the blocked one first is
+   how a small team ends up with a branch parked for a week.
+2. **Quick-add is the largest new surface in the backlog** — a natural-language
+   parser, a new component, a new interaction, plus (for the PM's own falsifying
+   measure) a `createdVia` migration on a repo with no migration history. It is
+   the worst possible first thing to build on an untested codebase, and the best
+   possible second thing once E-1 and E-5 exist. Note that `parseQuickAdd` is
+   the one module the PM already wants unit-tested — there will be somewhere to
+   put those tests if E-1 goes first.
+3. **Ordering is server-side and small.** An `orderBy` change, an index, a
+   client-side grouping pass. It is the cheapest change in the backlog that makes
+   the screen say something different on a Tuesday morning, and the *Overdue*
+   group earns its keep at three overdue todos, not thirty. The PM's own risk
+   note — that `Priority` sorts `low, medium, high` so `desc` gives high-first,
+   and getting it backwards is silent — is a one-line assertion in E-1's suite.
+
+So: **E-1, then E-3 and E-4, then E-2 and E-5, then backlog #2, then the lead's
+ruling, then quick-add.** Roughly a week of engineering before the first product
+feature, of which E-2 is the part the user sees and the rest is what makes E-2 —
+and everything after it — a routine change rather than a gamble.
+
+To say the disagreement plainly, since the PM was direct about theirs: the PM
+ranked "just polish what exists" as a defensible answer they chose not to give,
+on the grounds that none of the open defects is visible from the UI. True of m-1
+through m-6. Not true of m-7 — a checkbox that lags half a second is the most
+visible thing in the app, and it is the one piece of polish the PM's own backlog
+#3 already agrees with. I am asking for that one plus the scaffolding, and then
+I will build their list in their order.
+
+### E-7 — The `401` interceptor (S, hours)
+
+`http.ts`, one branch: on `401`, redirect to `/sign-in?next=/todos` with the
+§7.9 copy. Closes m-3 and gives that dead interceptor a reason to exist.
+
+### E-8 — Delete the two unreachable paths (XS)
+
+Either give the handlers a wrapper that emits `ApiErrorCode.Internal`, or write
+the exclusion into `CONVENTIONS.md` so the next reader does not trust a total
+guarantee. Same for `parseDueDate` — make it return `400`, or drop the sentinel.
+
+---
+
+## 4. The thing nobody has raised: there is no test suite, and I think that is now the top risk
+
+Not "we should have tests because teams have tests." The specific claim:
+
+**The property this app is proudest of is the only one being verified by
+judgement.** `docs/QA-REPORT.md` §7 is a genuinely excellent piece of testing —
+two real accounts, every verb, byte-identical `404`s, a check that no existence
+oracle leaks. It is also skipped-by-default. It ran in full once, then twice in
+short form, each time gated on a human classifying the diff as "not in the
+authorization path". Backlog #4 is a one-line `where` change that any reasonable
+person classifies as not in the authorization path and that can drop the owner
+clause. That is not a hypothetical; it is item four on the agreed backlog.
+
+Second claim: **QA cannot test what QA cannot reach.** §8 lists it plainly —
+failure paths, no fault injection; pointer interaction at desktop width, blocked
+by the harness; DEF-10 unreachable from the browser. M-2 in review 1 (every
+axios error showing `Network Error` instead of the copy deck) is a bug that a
+browser-driving human structurally could not have found, because it needs the
+network to break. Those are not gaps in QA's skill; they are gaps in the medium.
+
+### What the first tests should be, in order
+
+**Tier 1 — the isolation contract (~20 cases). This is the whole
+recommendation; the rest is optional.**
+Vitest, calling the exported route handlers directly with a stubbed session, or
+over HTTP against a dev server with two real cookies — either is fine, the
+former is faster. Seed users A and B. Assert, per verb:
+
+- `GET /api/todos` as B never returns A's rows, under every filter combination
+  **including `?query=` matching A's exact title** — this is the case backlog #4
+  breaks.
+- `PATCH /[id]`, `PATCH /[id]/status`, `DELETE /[id]` against A's id as B → `404`
+  with a body byte-identical to a nonexistent id.
+- Unauthenticated calls → `401` before any Prisma call.
+- `POST` with `userId` in the body → the row belongs to the session user.
+- `POST`/`PATCH` carrying `completed` → `400`, not a silent drop (DEF-06's
+  regression guard).
+
+This is `docs/QA-REPORT.md` §7 transcribed into code. QA already wrote the test
+plan; it just wrote it in prose.
+
+**Tier 2 — pure functions, no infrastructure, minutes each.**
+`sanitiseNextPath` (`src/lib/routes.ts:27`) first: it is a security function
+whose *previous* implementation carried a docstring stating an invariant it did
+not hold (M-1). `parseDueDate`'s strict-mode rejection of `2026-02-31`.
+`getErrorMessage`'s axios branch — the M-2 fix is one `??` away from regressing
+and nothing would notice. `toFieldErrors` dropping unknown paths (m-6).
+`parseQuickAdd` when it exists.
+
+**Tier 3 — one Playwright happy path.** Sign in → create → toggle → undo →
+delete → filter. Worth having eventually. I would **not** build it now: it is
+the most expensive per assertion, the flakiest, and it duplicates the one thing
+human QA is genuinely good at.
+
+**What I would not test at all:** component rendering, HeroUI behaviour, copy
+strings. The copy deck changes weekly and snapshot tests of it would be pure
+tax.
+
+### Cost, stated honestly
+
+- Vitest + config + a two-user seed + the Tier 1 suite: **~2 days**, then roughly
+  15 minutes per new route thereafter.
+- Tier 2: **half a day**, and it is the half-day with the best ratio in this
+  document.
+- CI: there is no `.github/` at all. A 20-line workflow running
+  `tsc --noEmit`, `lint`, `build`, `vitest` on every PR into `develop`:
+  **~2 hours.** GitHub Actions free minutes cover a suite this size.
+- **Database: no new paid service.** Neon's free tier includes branching, so the
+  suite runs against a throwaway branch; a local Postgres container works too.
+  Nothing here asks for money.
+- Playwright, if we ever do Tier 3: another 1–2 days plus ongoing flake
+  maintenance. Deferred deliberately.
+
+Total for what I am actually asking for: **two and a half days plus two hours of
+CI**, against a backlog the PM budgets at three to four days for its first item
+alone.
+
+### The counter-argument, and why I do not buy it here
+
+"A four-person team on a 1,400-line UI does not need a test suite; tests are how
+small teams slow themselves down." I would normally agree, and if the property at
+risk were "does the filter chip render", I would not be writing this section.
+The property at risk is "can user A read user B's data", the app's entire
+promise, and the current control for it is a person looking at a diff and
+deciding. Test the invariant, not the interface.
+
+---
+
+## 5. What I would stop doing
+
+Direct, as asked.
+
+### 4.1 — Stop confirming creates and updates. Rewrite the rule as "confirm the irreversible."
+
+`CONVENTIONS.md` → Mutation UX mandates a confirm dialog for every create, update
+and delete. It already has two exceptions carved into it (toggle, sign-in), the
+PM is asking for a third (quick-add), and backlog #5 will ask for a fourth
+(reschedule). **A rule with four exceptions is not a rule; it is a list of the
+cases nobody has argued about yet.**
+
+The rule the team actually wants is the one the exceptions all share: *confirm
+what cannot be undone.* Delete confirms. Bulk delete confirms, with a count.
+Sign-up confirms. Creating a todo does not destroy anything, and an update is
+reversible by another update. Rewriting it that way costs one paragraph, makes
+quick-add need no dispensation at all, and stops the lead being asked to
+adjudicate each new feature individually.
+
+This is your document and your call. I am telling you the cost of leaving it as
+written is a standing tax on the PM's roadmap, paid one ruling at a time.
+
+### 4.2 — Stop letting `CONVENTIONS.md` describe an architecture that does not exist
+
+The folder-layout block still lists `src/server/todo.action.ts` and
+`src/service/` as "client-facing wrappers that call server actions". The Forms
+section still says "The same zod schema is re-validated **inside the server
+action**." There are no server actions. The trust boundary is the route handler,
+and `CONVENTIONS.md` says so correctly two sections later, in direct conflict
+with itself.
+
+A style doc that is wrong about naming is an annoyance. A style doc that is wrong
+about **where the trust boundary is** is a hazard, because it is the first thing
+a new contributor reads and the sentence it gets wrong is the security-relevant
+one. `src/lib/http.ts:6-9` repeats the same false claim in the codebase itself.
+
+Related, and already filed as m-7 last review: three `refactor:` commits
+(`d73a708`, `0588137`, `26b55ef`) amended this document to bless the structure
+they introduced. Convention changes should be their own `docs:` commit, and
+ideally yours.
+
+### 4.3 — Stop rewriting the docs wholesale each pass
+
+`docs/` is now roughly 2,500 lines of prose against 1,400 lines of component
+code, and one commit (`d36b00a`) carried an 851-line full rewrite of
+`QA-REPORT.md` bundled with three code fixes. The content is good — QA's
+canvas-compositing contrast measurement is better than most teams' — but a
+report that replaces itself every pass loses its own history, and it is being
+paid for in review attention that the code is not getting.
+
+Two concrete swaps: QA's contrast methodology should be a **script** in the repo,
+not a paragraph re-typed each pass; and the isolation matrix should be §4's Tier
+1 suite, not a table. Both are the same information, executable, and diffable.
+
+### 4.4 — Stop treating "tsc + lint + build + Senior review" as the definition of done
+
+`WORKFLOW.md` §Definition of done lists four gates, three of which are type and
+syntax checks that, as my own review headers keep noting, "cover what those
+checks cannot see". The fourth is me. That is a single point of failure with a
+bad night, and it is the reason §4 exists. Add `vitest` as gate 5 once it exists;
+until then, at least be explicit that the isolation battery is a **release gate**
+QA may not skip on judgement, whatever the diff looks like.
+
+---
+
+## 6. What I am not proposing
+
+- **Not TanStack Query, MSW, or a component-test harness.** New dependencies with
+  their own conventions, on a fixed stack, for a team this size. E-3 gets most of
+  the first one's value for a day and no new package.
+- **Not a rewrite of anything.** Every file in `src/` is legible and most of it
+  is better than legible. The authorization work is the best thing in the repo
+  and none of the above touches it.
+- **Not error tracking / observability tooling.** Sentry's free tier would cover
+  this app, but it is a third-party beacon on private todo text and a decision
+  for the PM, not a chore. Vercel's own function logs cover E-7's `500` case for
+  now.
