@@ -11,8 +11,7 @@ import {
   toFieldErrors,
   unauthorizedResponse,
 } from "../../errors";
-import { TodoResponse } from "../../model";
-import { findOwnedTodo, readJsonBody } from "../../util";
+import { findOwnedTodo, readJsonBody, toTodoResponse } from "../../util";
 
 /**
  * Completion has its own route so it cannot be confused with a field edit.
@@ -66,5 +65,5 @@ export const PATCH = async (
 
   if (!todo) return notFoundResponse();
 
-  return NextResponse.json(TodoResponse.from(todo));
+  return NextResponse.json(toTodoResponse(todo));
 };

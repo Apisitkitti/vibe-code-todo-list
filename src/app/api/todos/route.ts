@@ -16,8 +16,7 @@ import {
   toFieldErrors,
   unauthorizedResponse,
 } from "./errors";
-import { TodoListResponse, TodoResponse } from "./model";
-import { readJsonBody } from "./util";
+import { readJsonBody, toTodoListResponse, toTodoResponse } from "./util";
 
 const STATUS_PARAM = "status";
 const PRIORITY_PARAM = "priority";
@@ -62,7 +61,7 @@ export const GET = async (request: NextRequest) => {
   ]);
 
   return NextResponse.json(
-    new TodoListResponse(todos, totalCount, completedCount),
+    toTodoListResponse(todos, totalCount, completedCount),
   );
 };
 
@@ -89,5 +88,5 @@ export const POST = async (request: NextRequest) => {
     },
   });
 
-  return NextResponse.json(TodoResponse.from(todo), { status: 201 });
+  return NextResponse.json(toTodoResponse(todo), { status: 201 });
 };

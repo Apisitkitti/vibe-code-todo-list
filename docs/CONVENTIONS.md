@@ -179,21 +179,32 @@ style problem.
 
 ### Splitting an API folder
 
-Each `src/app/api/<resource>/` folder keeps its shapes in two files beside
-the handlers:
+Each `src/app/api/<resource>/` folder keeps one route per operation, and the
+shared code beside them in two files:
 
 ```
 src/app/api/todos/
-  route.ts        # GET, POST
-  [id]/route.ts   # PATCH, DELETE
-  model.ts        # data model — row → JSON, request body reading
-  errors.ts       # error model — status responses, field-error mapping
+  route.ts               # GET (list), POST (create)
+  [id]/route.ts          # PATCH (save fields), DELETE
+  [id]/status/route.ts   # PATCH (toggle completion)
+  util.ts                # row → response body, shared reads, body parsing
+  errors.ts              # status responses, field-error mapping
 ```
 
-- **`model.ts`** — the success side: turning a database row into the JSON the
-  client consumes, and reading the request body.
+- **One route per operation.** Changing a record's status is its own route,
+  not a branch inside the update handler. When one handler serves two
+  intents it has to guess from the body shape, and a body that half-matches
+  gets half-applied — a `200` that looks like a save but silently dropped
+  something. Each route also rejects the other's body and names the route
+  that wants it.
+- **`util.ts`** — the success side: turning a database row into the response
+  body, the reads the handlers share, and reading the request body.
 - **`errors.ts`** — the error side: `401` / `404` / `400` responses, their
   messages, and the zod-issue → field-error mapping.
+
+There is no per-API model file. Response types are the canonical ones in
+`src/lib/<resource>.ts`, which the client already uses — a second declaration
+of the same record is only something to keep in sync.
 
 Name the error file `errors.ts`, **not** `error.ts`. Anything called
 `error.*` under `app/` is Next's error-boundary convention and the build

@@ -12,8 +12,7 @@ import {
   toFieldErrors,
   unauthorizedResponse,
 } from "../errors";
-import { TodoResponse } from "../model";
-import { findOwnedTodo, readJsonBody } from "../util";
+import { findOwnedTodo, readJsonBody, toTodoResponse } from "../util";
 
 /**
  * `completed` belongs to the status route. Accepting it here and dropping it
@@ -71,7 +70,7 @@ export const PATCH = async (request: NextRequest, context: RouteContext<"/api/to
 
   if (!todo) return notFoundResponse();
 
-  return NextResponse.json(TodoResponse.from(todo));
+  return NextResponse.json(toTodoResponse(todo));
 };
 
 export const DELETE = async (_request: NextRequest, context: RouteContext<"/api/todos/[id]">) => {
