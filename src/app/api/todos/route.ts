@@ -14,11 +14,10 @@ import {
 
 import {
   badRequestResponse,
-  readJsonBody,
   toFieldErrors,
-  toTodoItemData,
   unauthorizedResponse,
-} from "./response";
+} from "./errors";
+import { readJsonBody, toTodoItemData } from "./model";
 
 const STATUS_PARAM = "status";
 const PRIORITY_PARAM = "priority";

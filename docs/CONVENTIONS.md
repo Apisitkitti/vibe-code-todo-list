@@ -177,6 +177,28 @@ Every route handler under `src/app/api/**` must, in this order:
 A route handler that skips any of these three is a security defect, not a
 style problem.
 
+### Splitting an API folder
+
+Each `src/app/api/<resource>/` folder keeps its shapes in two files beside
+the handlers:
+
+```
+src/app/api/todos/
+  route.ts        # GET, POST
+  [id]/route.ts   # PATCH, DELETE
+  model.ts        # data model — row → JSON, request body reading
+  errors.ts       # error model — status responses, field-error mapping
+```
+
+- **`model.ts`** — the success side: turning a database row into the JSON the
+  client consumes, and reading the request body.
+- **`errors.ts`** — the error side: `401` / `404` / `400` responses, their
+  messages, and the zod-issue → field-error mapping.
+
+Name the error file `errors.ts`, **not** `error.ts`. Anything called
+`error.*` under `app/` is Next's error-boundary convention and the build
+fails with "must be a Client Component".
+
 ## Services
 
 - `src/service/` holds the layer the UI calls. A service function does one

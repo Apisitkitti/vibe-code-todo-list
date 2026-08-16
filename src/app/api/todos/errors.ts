@@ -1,4 +1,3 @@
-import type { Todo } from "@/generated/prisma/client";
 import type { ZodError } from "zod";
 
 import { NextResponse } from "next/server";
@@ -7,25 +6,19 @@ import {
   isTodoFieldName,
   type TodoFieldErrors,
 } from "@/app/todos/components/form";
-import { TODO_NOT_FOUND_MESSAGE, type TodoItemData } from "@/lib/todo";
+import { TODO_NOT_FOUND_MESSAGE } from "@/lib/todo";
 
 /**
- * Shared response shapes for `/api/todos`. Every error body carries a
- * `message` the client can hand straight to `getErrorMessage`, and validation
- * failures add `fieldErrors` keyed by form field name.
+ * The error model for `/api/todos`. Every error body carries a `message` the
+ * client can hand straight to `getErrorMessage`, and validation failures add
+ * `fieldErrors` keyed by form field name. Success shapes live in `./model.ts`.
+ *
+ * Named `errors.ts`, not `error.ts`: anything called `error.*` under `app/`
+ * is Next's error-boundary convention and has to be a Client Component.
  */
 
-export const toTodoItemData = (todo: Todo): TodoItemData => {
-  return {
-    id: todo.id,
-    title: todo.title,
-    note: todo.note,
-    priority: todo.priority,
-    completed: todo.completed,
-    dueAt: todo.dueAt ? todo.dueAt.toISOString() : null,
-    createdAt: todo.createdAt.toISOString(),
-  };
-};
+const MALFORMED_REQUEST_MESSAGE = "That request wasn’t valid.";
+const SESSION_EXPIRED_MESSAGE = "Sign in again to continue.";
 
 /**
  * First message per field, so each input shows one error.
@@ -51,7 +44,7 @@ export const toFieldErrors = (error: ZodError): TodoFieldErrors => {
 };
 
 export const unauthorizedResponse = () => {
-  return NextResponse.json({ message: "Sign in again to continue." }, { status: 401 });
+  return NextResponse.json({ message: SESSION_EXPIRED_MESSAGE }, { status: 401 });
 };
 
 /** Used for a missing todo and for one owned by somebody else, identically. */
@@ -69,12 +62,7 @@ export const badRequestResponse = (fieldErrors: TodoFieldErrors) => {
   const [firstMessage] = Object.values(fieldErrors);
 
   return NextResponse.json(
-    { message: firstMessage ?? "That request wasn’t valid.", fieldErrors },
+    { message: firstMessage ?? MALFORMED_REQUEST_MESSAGE, fieldErrors },
     { status: 400 },
   );
-};
-
-/** `request.json()` throws on a malformed body; the caller gets `null`. */
-export const readJsonBody = async (request: Request): Promise<unknown> => {
-  return await request.json().catch(() => null);
 };

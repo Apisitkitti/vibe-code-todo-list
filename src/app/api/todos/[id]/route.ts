@@ -9,11 +9,10 @@ import { parseDueDate } from "@/lib/todo";
 import {
   badRequestResponse,
   notFoundResponse,
-  readJsonBody,
   toFieldErrors,
-  toTodoItemData,
   unauthorizedResponse,
-} from "../response";
+} from "../errors";
+import { readJsonBody, toTodoItemData } from "../model";
 
 /** The toggle sends only this; it must never touch the other fields. */
 const todoToggleSchema = z.object({ completed: z.boolean() }).strict();
