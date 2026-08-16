@@ -88,6 +88,65 @@ export interface TodosScreen {
 
 const titleField = (page: Page) => page.getByRole("textbox", { name: TITLE_FIELD_LABEL });
 
+/**
+ * Waits until no toast view transition is in flight.
+ *
+ * HeroUI runs *every* toast add and close inside `document.startViewTransition`
+ * and chains them so they animate one at a time
+ * (`node_modules/@heroui/react/dist/components/toast/toast-queue.js`). While
+ * one is running the browser paints the `::view-transition` snapshot layer over
+ * the page, and that layer — not the live DOM — is what hit-testing sees. A
+ * pointer press aimed at the Undo button therefore lands on the overlay,
+ * react-aria's `usePress` never fires, and the press is silently dropped: no
+ * dismissal, no request, no follow-up toast.
+ *
+ * The trap is that a toast is *visible* the moment its transition starts, so
+ * every web-first assertion the specs already make ("the toast title is
+ * visible") is satisfied while the toast is still inert. Visible is not
+ * pressable, and only this closes that gap. Anything that raises or replaces a
+ * toast starts a fresh transition, which is why the two specs that press Undo
+ * straight after a toast *replacement* — close + add, two chained transitions —
+ * are the ones that broke on a runner slow enough to still be animating.
+ *
+ * NOT a sleep and not a retry: it waits on the animation state itself. The two
+ * quiet frames are required because the chain releases the DOM between links,
+ * so a single idle sample can land in the gap between the close and the add and
+ * report calm that is about to end — which is exactly how the click's own
+ * built-in hit-target check was fooled on CI.
+ */
+const settleToastTransitions = async (page: Page) => {
+  await page.evaluate(async () => {
+    const isTransitioning = () =>
+      document.getAnimations().some((animation) => {
+        const pseudo = (animation.effect as KeyframeEffect | null)?.pseudoElement;
+
+        return (
+          animation.playState === "running" &&
+          pseudo?.startsWith("::view-transition") === true
+        );
+      });
+
+    const nextFrame = () =>
+      new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+    /*
+      Bounded so a page that animates forever fails as the assertion it was
+      always going to fail, rather than hanging until the test timeout with
+      nothing to read. At 60fps this is ~5s, far longer than a toast chain.
+    */
+    const MAX_FRAMES = 300;
+    const QUIET_FRAMES = 2;
+
+    let quiet = 0;
+
+    for (let frame = 0; frame < MAX_FRAMES && quiet < QUIET_FRAMES; frame += 1) {
+      await nextFrame();
+
+      quiet = isTransitioning() ? 0 : quiet + 1;
+    }
+  });
+};
+
 export const createTodosScreen = (page: Page): TodosScreen => {
   /*
     HeroUI renders every toast through react-aria's Toast primitive and stamps
@@ -204,6 +263,7 @@ export const createTodosScreen = (page: Page): TodosScreen => {
   };
 
   const pressUndo = async () => {
+    await settleToastTransitions(page);
     await undoButton.click();
   };
 
