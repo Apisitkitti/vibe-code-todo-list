@@ -43,6 +43,19 @@ jobs:
       DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
       TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
 
+      # `next build` runs under NODE_ENV=production, and `src/lib/auth.ts`
+      # deliberately throws at import time when `BETTER_AUTH_URL` is unset —
+      # production must never derive its origin from the Host header. No `.env`
+      # is committed, so without these the build dies while collecting
+      # `/api/auth/[...all]` and CI never reaches the tests at all.
+      #
+      # Both values are placeholders. Nothing in CI serves traffic or issues a
+      # cookie anyone will present again: the build only needs the module to
+      # import, and the suite overrides the secret from `vitest.config.ts`.
+      # A real secret here would be a real secret in a public build log.
+      BETTER_AUTH_URL: http://localhost:3000
+      BETTER_AUTH_SECRET: ci-build-only-not-a-real-secret
+
     steps:
       - uses: actions/checkout@v4
 
