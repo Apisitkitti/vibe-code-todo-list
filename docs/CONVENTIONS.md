@@ -199,6 +199,37 @@ Name the error file `errors.ts`, **not** `error.ts`. Anything called
 `error.*` under `app/` is Next's error-boundary convention and the build
 fails with "must be a Client Component".
 
+### One error shape for the whole API
+
+`src/lib/apiError.ts` is the single source of truth for error responses.
+It owns the body shape, the status per code, and the default message per
+code:
+
+```ts
+apiError(ApiErrorCode.Unauthorized);
+apiError(ApiErrorCode.NotFound, { message: TODO_NOT_FOUND_MESSAGE });
+apiError(ApiErrorCode.BadRequest, { message, fieldErrors });
+```
+
+```json
+{ "code": "UNAUTHORIZED", "message": "Sign in again to continue." }
+```
+
+Rules:
+
+- A route handler **never** calls `NextResponse.json` for an error and never
+  writes a status code by hand. It picks an `ApiErrorCode`.
+- A resource's `errors.ts` may override the *message* to give domain wording
+  ("That todo no longer exists" rather than "That item no longer exists").
+  It may never change the shape or the status.
+- `fieldErrors` is omitted entirely when empty, so its presence always means
+  a field-level validation failure.
+- A new kind of error means a new `ApiErrorCode` in that one file — not a new
+  ad-hoc body somewhere in a handler.
+
+The client depends on this: `getErrorMessage` reads `message` and expects it
+on every error response, whatever endpoint it came from.
+
 ## Services
 
 - `src/service/` holds the layer the UI calls. A service function does one

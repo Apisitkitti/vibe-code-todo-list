@@ -1,24 +1,21 @@
 import type { ZodError } from "zod";
 
-import { NextResponse } from "next/server";
-
 import {
   isTodoFieldName,
   type TodoFieldErrors,
 } from "@/app/todos/components/form";
+import { ApiErrorCode, apiError } from "@/lib/apiError";
 import { TODO_NOT_FOUND_MESSAGE } from "@/lib/todo";
 
 /**
- * The error model for `/api/todos`. Every error body carries a `message` the
- * client can hand straight to `getErrorMessage`, and validation failures add
- * `fieldErrors` keyed by form field name. Success shapes live in `./model.ts`.
+ * The todo-specific error wording. The body shape, the status codes and the
+ * default messages all come from `@/lib/apiError`, which is the single source
+ * of truth — these are thin wrappers that only supply domain wording.
+ * Success shapes live in `./model.ts`.
  *
  * Named `errors.ts`, not `error.ts`: anything called `error.*` under `app/`
  * is Next's error-boundary convention and has to be a Client Component.
  */
-
-const MALFORMED_REQUEST_MESSAGE = "That request wasn’t valid.";
-const SESSION_EXPIRED_MESSAGE = "Sign in again to continue.";
 
 /**
  * First message per field, so each input shows one error.
@@ -43,26 +40,24 @@ export const toFieldErrors = (error: ZodError): TodoFieldErrors => {
   return fieldErrors;
 };
 
-export const unauthorizedResponse = () => {
-  return NextResponse.json({ message: SESSION_EXPIRED_MESSAGE }, { status: 401 });
-};
+export const unauthorizedResponse = () => apiError(ApiErrorCode.Unauthorized);
 
 /** Used for a missing todo and for one owned by somebody else, identically. */
-export const notFoundResponse = () => {
-  return NextResponse.json({ message: TODO_NOT_FOUND_MESSAGE }, { status: 404 });
-};
+export const notFoundResponse = () =>
+  apiError(ApiErrorCode.NotFound, { message: TODO_NOT_FOUND_MESSAGE });
 
 /**
  * A zod issue at the root of the body (malformed JSON, an array, a bare
- * string) produces no field errors. That is a malformed request, not a
- * missing todo — reporting `TODO_NOT_FOUND_MESSAGE` here would tell the user
- * their todo was deleted when nothing of the sort happened.
+ * string) produces no field errors, so there is no single field to blame and
+ * the code's own "that request wasn't valid" wording is what the user sees.
+ * Reporting `TODO_NOT_FOUND_MESSAGE` there would tell them their todo was
+ * deleted when nothing of the sort happened.
  */
 export const badRequestResponse = (fieldErrors: TodoFieldErrors) => {
   const [firstMessage] = Object.values(fieldErrors);
 
-  return NextResponse.json(
-    { message: firstMessage ?? MALFORMED_REQUEST_MESSAGE, fieldErrors },
-    { status: 400 },
-  );
+  return apiError(ApiErrorCode.BadRequest, {
+    message: firstMessage,
+    fieldErrors,
+  });
 };
