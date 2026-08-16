@@ -17,6 +17,7 @@ import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import type { TodoItemData, TodoListFilters, TodoListResult } from "@/lib/todo";
+import { replaceTodo, setTodoCompleted } from "@/lib/todoListState";
 import {
   deleteTodo,
   getTodoList,
@@ -52,6 +53,14 @@ const UNDO_WINDOW_MS = 12_000;
 /** Rendered twice: the toolbar button and the brand-new-account empty state. */
 const NEW_TODO_LABEL = "New todo";
 
+/**
+ * Failure fallbacks from the copy deck (`docs/DESIGN.md` §7.9, §7.13, §7.15),
+ * named because each is now read from more than one place: the toggle and its
+ * Undo share one code path, and both kinds of Undo report the same wording.
+ */
+const TOGGLE_FAILURE_MESSAGE = "Couldn’t update the todo. Try again.";
+const UNDO_FAILURE_MESSAGE = "Couldn’t undo that. Try again.";
+
 const EMPTY_RESULT: TodoListResult = {
   todos: [],
   totalCount: 0,
@@ -70,8 +79,12 @@ export interface TodoListScreenProps {
 }
 
 /**
- * Owns the list: it loads todos over HTTP through the service, and reloads
- * after every mutation (`docs/CONVENTIONS.md` → Server actions — auth only).
+ * Owns the list: it loads todos over HTTP through the service, and decides per
+ * mutation whether the answer is already in hand.
+ *
+ * A create refetches, because it can place a row anywhere or outside the
+ * filter entirely. A toggle does not: it applies the change locally and
+ * reconciles with the row the write returned (`runToggle`).
  */
 export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   const [result, setResult] = useState<TodoListResult>(EMPTY_RESULT);
@@ -82,8 +95,29 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   /**
    * A set, not one slot. Two quick toggles used to clear each other's pending
    * state — the second finishing wrote `null` and unlocked the first row while
-   * its request was still in flight (review m-4). That matters more now that
-   * the per-row signal is the only one these mutations show.
+   * its request was still in flight (review m-4).
+   *
+   * **What "pending" means changed when the toggle became optimistic, and the
+   * set is why it still means something.** It no longer means "we are waiting
+   * to find out what happened" — the row already shows the new state, ticked
+   * and struck through, and has moved into `Completed`. It now means *this is
+   * your change and it is not confirmed yet*, which is a different claim and
+   * still worth making: the flip on screen is a promise the server has not
+   * kept, and `opacity-60` is the only thing distinguishing it from a fact.
+   *
+   * It also stays load-bearing as a lock. `pointer-events-none` plus
+   * `isDisabled` is what stops a second press — mouse or held Space — from
+   * racing a PATCH that is still in flight and letting the two land out of
+   * order (m-4, QA DEF-12). Optimism makes that *more* likely, not less: the
+   * box now moves instantly, so a user who wants it back presses again
+   * immediately rather than waiting for the first press to visibly resolve.
+   *
+   * `docs/DESIGN.md` §8.3.2 suggests dropping the dimming from a toggle once
+   * it is optimistic. Not taken, and deliberately: §4.8 — the spec section,
+   * not the proposal — pairs `opacity-60 pointer-events-none` *with* optimism
+   * ("No spinner — these are optimistic"), and removing the treatment would
+   * remove the m-4 guard along with it. The dim is also half of what it was,
+   * because a toggle is now one round trip instead of two.
    */
   const [pendingTodoIds, setPendingTodoIds] = useState<ReadonlySet<string>>(
     new Set(),
@@ -210,10 +244,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   };
 
   /**
-   * For a toggle or a delete. The user knows exactly which row they acted on
-   * and that row already shows its own pending state, so blanking the whole
-   * list to report it is disproportionate — and it throws away their scroll
-   * position.
+   * For a delete and for the Undo of a save. The user knows exactly which row
+   * they acted on and that row already shows its own pending state, so
+   * blanking the whole list to report it is disproportionate — and it throws
+   * away their scroll position.
+   *
+   * A toggle no longer comes here at all. It has the authoritative row in
+   * hand and splices it (`runToggle`), which is the second round trip m-7 was
+   * about; this reload is for the writes that genuinely cannot say what the
+   * list should now look like.
    */
   const reloadSilently = () => {
     requestReload();
@@ -277,7 +316,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
 
       reloadSilently();
     } catch (error) {
-      toast.danger(getErrorMessage(error, "Couldn’t undo that. Try again."));
+      toast.danger(getErrorMessage(error, UNDO_FAILURE_MESSAGE));
     } finally {
       clearPending(saved.id);
     }
@@ -288,42 +327,96 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       ? `Todo “${title}” marked complete`
       : `Todo “${title}” marked not complete`;
 
-  const undoToggle = async (todo: TodoItemData, restoredCompleted: boolean) => {
+  /**
+   * The optimistic flip, and the one path both a toggle and its Undo take.
+   *
+   * Undo is a toggle — the same endpoint, the same authorization, the same
+   * value written to the same column — so it gets the same code rather than a
+   * parallel copy that can drift. The two differ in exactly two respects, and
+   * both are arguments: what they say on success, and which fallback they read
+   * when the server refuses.
+   *
+   * The sequence, and what each step costs (review m-7, §2.1–2.2):
+   *
+   *  1. Flip the row locally. Nothing is awaited first, so the box ticks under
+   *     the finger and grouping re-sections immediately — a completed todo
+   *     leaves `Overdue` and lands in `Completed` before the server agrees.
+   *  2. One `PATCH /api/todos/[id]/status`.
+   *  3. Splice the row that request *already returned* into local state. The
+   *     authoritative row used to be thrown away and a whole `GET /api/todos`
+   *     issued to fetch it again; that second round trip is gone.
+   *  4. On failure, write the previous value back. `!nextCompleted` is that
+   *     value by construction — a toggle flips, so the state before the press
+   *     is the negation of the state it asked for — and it is read from the
+   *     press rather than from the row, which may have been replaced by then.
+   *
+   * The revert is the whole risk of this design, so it is deliberately dumb:
+   * one call, one known value, no inference about what "undo" means, and no
+   * dependence on the request having failed at any particular stage.
+   * `setTodoCompleted` is a no-op when the row already holds that value, so
+   * running it is safe even if the flip never applied.
+   *
+   * A create still refetches (`reloadWithSkeleton`) and this does not, which
+   * is not an inconsistency: a create can land outside the current filter or
+   * at a position only the server's ordering can choose, while a toggle
+   * changes one boolean on a row already on screen.
+   */
+  const runToggle = async (
+    todo: TodoItemData,
+    nextCompleted: boolean,
+    onSuccess: () => void,
+    failureMessage: string,
+  ) => {
     markPending(todo.id);
+    setResult((current) => setTodoCompleted(current, todo.id, nextCompleted));
 
     try {
-      await toggleTodo(todo.id, restoredCompleted);
-      toast.success(toggledMessage(todo.title, restoredCompleted));
-      reloadSilently();
+      const saved = await toggleTodo(todo.id, nextCompleted);
+
+      setResult((current) => replaceTodo(current, saved));
+      onSuccess();
     } catch (error) {
-      toast.danger(getErrorMessage(error, "Couldn’t undo that. Try again."));
+      setResult((current) =>
+        setTodoCompleted(current, todo.id, !nextCompleted),
+      );
+      toast.danger(getErrorMessage(error, failureMessage));
     } finally {
       clearPending(todo.id);
     }
   };
 
-  const handleToggle = async (todo: TodoItemData, nextCompleted: boolean) => {
-    dismissUndo(todo.id);
-    markPending(todo.id);
+  /** Reports the flipped state with §7.11's toast, and arms no further Undo. */
+  const undoToggle = async (todo: TodoItemData, restoredCompleted: boolean) => {
+    await runToggle(
+      todo,
+      restoredCompleted,
+      () => {
+        toast.success(toggledMessage(todo.title, restoredCompleted));
+      },
+      UNDO_FAILURE_MESSAGE,
+    );
+  };
 
-    try {
-      await toggleTodo(todo.id, nextCompleted);
-      showUndoableSuccess(
-        todo.id,
-        toggledMessage(todo.title, nextCompleted),
-        () => {
-          void undoToggle(todo, !nextCompleted);
-        },
-      );
-      reloadSilently();
-    } catch (error) {
-      // Nothing changed optimistically, so the row already shows the truth.
-      toast.danger(
-        getErrorMessage(error, "Couldn’t update the todo. Try again."),
-      );
-    } finally {
-      clearPending(todo.id);
-    }
+  const handleToggle = async (todo: TodoItemData, nextCompleted: boolean) => {
+    // Before the flip, not after: the row's outstanding Undo describes a state
+    // it is leaving, and the toast region is live from the first frame now
+    // that the change is visible immediately (review M-1, M-2).
+    dismissUndo(todo.id);
+
+    await runToggle(
+      todo,
+      nextCompleted,
+      () => {
+        showUndoableSuccess(
+          todo.id,
+          toggledMessage(todo.title, nextCompleted),
+          () => {
+            void undoToggle(todo, !nextCompleted);
+          },
+        );
+      },
+      TOGGLE_FAILURE_MESSAGE,
+    );
   };
 
   const handleDelete = async () => {

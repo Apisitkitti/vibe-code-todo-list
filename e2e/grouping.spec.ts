@@ -6,9 +6,15 @@ import {
   NO_DATE_HEADING,
   OVERDUE_HEADING,
   TODAY_HEADING,
+  TOGGLE_FAILURE,
   UPCOMING_HEADING,
   markedCompleteToast,
 } from "./support/copy";
+import {
+  TODO_STATUS_URL,
+  expectNoFalseSuccess,
+  fulfilOpaqueError,
+} from "./support/assertions";
 import { expect, test } from "./support/fixtures";
 
 /**
@@ -167,6 +173,61 @@ test.describe("due-date sections", () => {
       section(page, COMPLETED_HEADING).getByRole("listitem"),
     ).toHaveText([/Overdue chore/]);
     await expect(section(page, OVERDUE_HEADING)).toHaveCount(0);
+  });
+
+  /**
+   * The half of the optimistic toggle a checkbox assertion cannot see.
+   *
+   * Sections are derived from `completed` on every render, so an optimistic
+   * flip re-sections the list *before* the server agrees — the row leaves
+   * `Overdue` the moment it is pressed. A revert that restored the boolean but
+   * left the row filed under `Completed` would be a rollback the user is still
+   * looking at. The fault injector is the one from `fault-injection.spec.ts`;
+   * the assertions are this file's, which is why the test lives here.
+   */
+  test("a refused toggle puts the row back in the section it came from", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await seedTodos(page, [
+      { title: "Overdue chore", dueAt: localDay(-3) },
+      { title: "Undated chore" },
+    ]);
+
+    const headingsBefore = [OVERDUE_HEADING, NO_DATE_HEADING];
+
+    await expect(groupHeadings(page)).toHaveText(headingsBefore);
+
+    // Held so the in-flight re-sectioning is observable, then refused.
+    let releaseToggle = () => {};
+    const toggleHeld = new Promise<void>((resolve) => {
+      releaseToggle = resolve;
+    });
+
+    await page.route(TODO_STATUS_URL, async (route) => {
+      await toggleHeld;
+      await fulfilOpaqueError(route, 500);
+    });
+
+    await todos.toggle("Overdue chore", true);
+
+    // Optimistic: the row has already moved, on nothing but the press.
+    await expect(
+      section(page, COMPLETED_HEADING).getByRole("listitem"),
+    ).toHaveText([/Overdue chore/]);
+    await expect(section(page, OVERDUE_HEADING)).toHaveCount(0);
+
+    releaseToggle();
+
+    await expect(todos.toasts.filter({ hasText: TOGGLE_FAILURE })).toBeVisible();
+
+    // And back, into the section it started in — not merely out of Completed.
+    await expect(groupHeadings(page)).toHaveText(headingsBefore);
+    await expect(
+      section(page, OVERDUE_HEADING).getByRole("listitem"),
+    ).toHaveText([/Overdue chore/]);
+    await expect(section(page, COMPLETED_HEADING)).toHaveCount(0);
+    await expectNoFalseSuccess(todos.toasts, markedCompleteToast("Overdue chore"));
   });
 
   test("priority breaks the tie inside a section, high first", async ({

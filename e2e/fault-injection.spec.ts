@@ -122,25 +122,53 @@ test.describe("fault injection — writes", () => {
     await expectNoFalseSuccess(todos.toasts, updatedToast(EDITED_TITLE));
   });
 
-  test("500 on toggle leaves the checkbox unchecked", async ({ signedIn: page, todos }) => {
+  test("500 on toggle reverts the optimistic tick", async ({ signedIn: page, todos }) => {
     await todos.createTodo(TODO_TITLE);
 
+    /*
+      Held, not fulfilled immediately, and that is the whole design of this
+      test. The toggle is optimistic now (review m-7), so there are two
+      distinct facts to prove and a fault that answers instantly can only ever
+      show the second: that the box ticked *before* the server was consulted,
+      and that it went back when the server refused. Holding the response opens
+      the in-flight window and makes the first one observable.
+
+      A gate, not a sleep — released by the test, never by a timer.
+    */
+    let releaseToggle = () => {};
+    const toggleHeld = new Promise<void>((resolve) => {
+      releaseToggle = resolve;
+    });
+
     await page.route(TODO_STATUS_URL, async (route) => {
+      await toggleHeld;
       await fulfilOpaqueError(route, 500);
     });
 
     await todos.toggle(TODO_TITLE, true);
 
+    // 1. The tick lands under the finger, with nothing confirmed.
+    await expect(todos.checkbox(TODO_TITLE)).toBeChecked();
+    // The row says the change is not yet a fact: dimmed and locked, so a
+    // second press cannot race the PATCH still in flight (review m-4).
+    await expect(todos.rowByText(TODO_TITLE)).toHaveAttribute("aria-busy", "true");
+    // Nothing has claimed success while the write is still in the air.
+    await expectNoFalseSuccess(todos.toasts, markedCompleteToast(TODO_TITLE));
+
+    releaseToggle();
+
     await expect(todos.toasts.filter({ hasText: TOGGLE_FAILURE })).toBeVisible();
     await expectNoTransportLeak(todos.toasts);
 
     /*
-      The checkbox is deliberately not optimistic (`TodoRow`: "the box holds
-      its current state until the server confirms"), so a failed toggle must
-      leave it exactly as it was — this is the assertion that would catch a
-      regression to optimistic rendering without rollback.
+      2. The revert, which is the only correctness property an optimistic
+      write has: a refused toggle must leave the row exactly as it was.
+      Removing the rollback from `runToggle`'s `catch` turns this red — the
+      box stays ticked and the app has told the user something that did not
+      happen. `docs/REVIEW.md` E-2 is the reason this test is not optional.
     */
     await expect(todos.checkbox(TODO_TITLE)).not.toBeChecked();
+    await expect(todos.rowByText(TODO_TITLE)).toHaveAttribute("aria-busy", "false");
     await expectNoFalseSuccess(todos.toasts, markedCompleteToast(TODO_TITLE));
   });
 
@@ -229,7 +257,7 @@ test.describe("fault injection — the Undo request itself", () => {
     await expectNoFalseSuccess(todos.toasts, restoredToast(TODO_TITLE));
   });
 
-  test("500 on a toggle-Undo reports failure and leaves the todo complete", async ({
+  test("500 on a toggle-Undo reverts the flip-back and leaves the todo complete", async ({
     signedIn: page,
     todos,
   }) => {
@@ -237,18 +265,37 @@ test.describe("fault injection — the Undo request itself", () => {
     await todos.toggle(TODO_TITLE, true);
     await expect(todos.checkbox(TODO_TITLE)).toBeChecked();
 
+    /*
+      Undo runs the same `runToggle` as the press it reverses, so it is
+      optimistic in the same way and must revert in the same way. Held for the
+      same reason as the toggle test above: the un-tick has to be observable
+      before the failure lands, or this only ever proves the box never moved.
+    */
+    let releaseUndo = () => {};
+    const undoHeld = new Promise<void>((resolve) => {
+      releaseUndo = resolve;
+    });
+
     // A toggle-Undo flips it back through the same status route.
     await page.route(TODO_STATUS_URL, async (route) => {
+      await undoHeld;
       await fulfilOpaqueError(route, 500);
     });
 
     await todos.pressUndo();
 
+    await expect(todos.checkbox(TODO_TITLE)).not.toBeChecked();
+    await expect(todos.rowByText(TODO_TITLE)).toHaveAttribute("aria-busy", "true");
+
+    releaseUndo();
+
     await expect(todos.toasts.filter({ hasText: UNDO_FAILURE })).toBeVisible();
     await expectNoTransportLeak(todos.toasts);
 
+    // The flip-back was refused, so the tick the first press earned comes back.
     await expect(todos.checkbox(TODO_TITLE)).toBeChecked();
-    // The flip-back never happened, so nothing may claim it did.
+    await expect(todos.rowByText(TODO_TITLE)).toHaveAttribute("aria-busy", "false");
+    // And nothing may claim the un-completion happened.
     await expectNoFalseSuccess(todos.toasts, markedNotCompleteToast(TODO_TITLE));
   });
 });
