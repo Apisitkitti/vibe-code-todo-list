@@ -89,3 +89,79 @@ jobs:
 
       - name: Test
         run: npm run test:run
+
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+
+    # A separate job, not a step on `verify`, for two reasons: it needs
+    # browsers and a server that the other job has no use for, and running the
+    # two in parallel keeps the slowest path to an answer roughly what it was.
+    # Its own Postgres, so the two suites never share a database in CI even
+    # though they share a default locally.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: todo_app_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Playwright serves the app with `next dev`, and `playwright.config.ts`
+      # hands the server `TEST_DATABASE_URL` explicitly — that override is the
+      # only thing standing between a test sign-up and a real database, so it
+      # is set here rather than left to fall through.
+      DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
+      TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
+
+      # Development mode derives the auth base URL from the request, so unlike
+      # the build job this one does not need `BETTER_AUTH_URL`. The secret is
+      # still required, since better-auth signs a real session cookie here.
+      #
+      # 32 random-looking characters, not because this value is protecting
+      # anything — the container and its accounts are destroyed with the job —
+      # but because a shorter one makes better-auth log an entropy warning on
+      # every run, and a log that always warns is a log nobody reads.
+      BETTER_AUTH_SECRET: ci4e2eXqPmZ7vK3nR8sT1wY6bD0hJ5gL
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Push the schema to the test database
+        run: npx prisma db push
+
+      # Only Chromium: both projects in `playwright.config.ts` are Chromium
+      # (desktop and an emulated Pixel 7), so the other engines would be
+      # download time spent on nothing.
+      - name: Install Playwright's browser
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      # The report is the only way to see why a browser test failed on a
+      # machine nobody can attach to. Traces, video and screenshots are already
+      # configured to be retained on failure.
+      - name: Upload the report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
