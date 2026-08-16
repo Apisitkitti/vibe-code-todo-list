@@ -19,7 +19,25 @@ A personal todo web app with individual accounts. A user signs up with a name, e
 - **Completed todo** — a todo with `completed = true`.
 - **Protected route** — any route under the app shell that renders or mutates todo data.
 - **Auth routes** — `/sign-up` and `/sign-in`.
-- **Default list order** — active todos before completed todos; within each group, `createdAt` descending (newest first).
+- **Default list order** — the one order the list is ever read in. Four keys, each breaking ties in the one above it:
+  1. `completed` ascending — active todos before completed todos.
+  2. `dueAt` ascending, **undated todos after every dated one** — the earliest date first, so the most overdue todo leads the list and the sequence runs forward through today into the future.
+  3. `priority` descending — high, then medium, then low.
+  4. `createdAt` descending — newest first.
+
+  Priority sits *below* the due date deliberately: a low-priority todo due today outranks a high-priority one due next month. Ranking priority first would return the due date to being decoration, which is the defect this order exists to remove. There is no user-facing control over this order (§4).
+- **User's today** — the calendar day of the user's own device clock. Which side of "today" a due date falls on is decided against that day, not against the server's.
+- **Due-date section** — one of five named runs of the default list order. A todo belongs to exactly one:
+
+  | Section | Heading | Contains |
+  |---|---|---|
+  | Overdue | `Overdue` | active todos whose `dueAt` falls before the user's today |
+  | Today | `Today` | active todos whose `dueAt` falls on the user's today |
+  | Upcoming | `Upcoming` | active todos whose `dueAt` falls after the user's today |
+  | No date | `No date` | active todos with no `dueAt` |
+  | Completed | `Completed` | every completed todo, whatever its due date |
+
+  Sections always appear in that order, which is the default list order with the boundaries marked: grouping never moves a todo relative to another. Completion is decided before the date, so a completed todo that is weeks past due appears under `Completed`, never under `Overdue`.
 
 Fixed field constraints from the schema (not negotiable):
 
@@ -93,7 +111,7 @@ As a signed-in user, I want to add a todo with a title and optional details, so 
 **Acceptance criteria**
 
 - Given I am on `/todos`, When the page loads, Then I see a create form (or a button that opens one) with Title, Note, Priority, and Due date fields.
-- Given I enter a title "Buy milk" and submit with all other fields untouched, When the request succeeds, Then a todo is created with `title = "Buy milk"`, `note = null`, `priority = medium`, `completed = false`, `dueAt = null`, and `userId` = my id, and it appears at the top of the list without a full page reload.
+- Given I enter a title "Buy milk" and submit with all other fields untouched, When the request succeeds, Then a todo is created with `title = "Buy milk"`, `note = null`, `priority = medium`, `completed = false`, `dueAt = null`, and `userId` = my id, and it appears in the list without a full page reload, in its place under the default list order (§2) — for an undated todo, first among the undated ones.
 - Given the Title field is empty or only whitespace, When I submit, Then no todo is created and I see the inline error "Title is required".
 - Given I enter a title longer than 200 characters, When I submit, Then no todo is created and I see the inline error "Title must be 200 characters or fewer".
 - Given I enter a note longer than 2000 characters, When I submit, Then no todo is created and I see the inline error "Note must be 2000 characters or fewer".
@@ -105,11 +123,34 @@ As a signed-in user, I want to add a todo with a title and optional details, so 
 
 As a signed-in user, I want to see all of my todos in one list, so that I know what is outstanding.
 
-**Acceptance criteria**
+**Acceptance criteria — scope**
 
 - Given I have todos, When I open `/todos`, Then I see only todos where `userId` equals my id.
 - Given another user has todos, When I open `/todos`, Then none of their todos appear in my list under any filter.
-- Given I have both active and completed todos, When the list renders with no filter applied, Then active todos appear before completed todos, and within each group newest-created appears first.
+
+**Acceptance criteria — order**
+
+The list must open on what needs attention soonest, without the user sorting or filtering anything. Each criterion below tests one key of the default list order (§2) against the key beneath it.
+
+- Given four active todos due yesterday, today, next week, and with no due date at all, When the list renders with no filter applied, Then they appear in exactly that order — the undated one last.
+- Given two active todos due on the same day, one `low` priority and one `high`, When the list renders, Then the `high` one appears first.
+- Given an active `low` priority todo due today and an active `high` priority todo due next month, When the list renders, Then the one due **today** appears first — priority never lifts a todo above an earlier due date.
+- Given two active todos with the same due date and the same priority, When the list renders, Then the more recently created appears first.
+- Given I have both active and completed todos, When the list renders with no filter applied, Then every completed todo appears after every active todo — including a completed todo whose due date is in the past, which does not rejoin the active todos.
+- Given any filter or search is applied (US-10), When the results render, Then the todos that remain are in the same default list order.
+
+**Acceptance criteria — sections**
+
+- Given I have at least one active todo with a due date and at least one without, When the list renders, Then each todo appears beneath a heading naming its section, and the headings that appear do so in the order `Overdue`, `Today`, `Upcoming`, `No date`, `Completed`.
+- Given I have no todos in a section — say nothing is due today, When the list renders, Then no `Today` heading appears and no gap is left where that section would have been. This holds for every section.
+- Given a completed todo whose due date is in the past, When the list renders, Then it appears under `Completed` and no `Overdue` section is created for it.
+- Given every todo currently shown belongs to a single section — for example I have never set a due date, so all of them are `No date`, When the list renders, Then **no heading appears at all** and the todos render as one flat list. A user who does not use due dates must see the list exactly as it was before due-date ordering shipped.
+- Given only one section is showing, When I set a due date that puts a todo into a second section, Then headings appear over both sections; and given two sections are showing, When a change leaves only one, Then the headings disappear again.
+- Given a filter or search is applied (US-10), When the results render, Then they are grouped by these same rules over only the todos that remain: a section whose todos were all filtered out shows no heading, and if the survivors all fall in one section, no heading is shown.
+- Given a section renders, When it is inspected with assistive technology, Then its heading is a level-2 heading and its rows form a list of their own, so each section can be jumped to and counted separately rather than reported as one long list spanning sections that mean different things.
+
+**Acceptance criteria — rows**
+
 - Given a todo row renders, When I look at it, Then I see its title, a completion control, its priority, its due date if set, and an indicator that a note exists if `note` is non-empty.
 - Given a todo is completed, When it renders, Then its title is visually de-emphasised (e.g. strikethrough) and this is not conveyed by color alone.
 - Given the list is loading, When data has not arrived, Then a loading state (skeleton or spinner) is shown rather than a blank screen.
@@ -121,8 +162,8 @@ As a signed-in user, I want to check off a todo, so that I can track what I fini
 **Acceptance criteria**
 
 - Given an active todo, When I activate its completion control, Then `completed` becomes `true`, the row shows the completed styling, and the change persists after a page reload.
-- Given a completed todo, When I activate its completion control again, Then `completed` becomes `false` and it returns to the active group.
-- Given the "All" filter is active, When I toggle a todo, Then it moves between the active and completed groups in the default order without a full page reload.
+- Given a completed todo, When I activate its completion control again, Then `completed` becomes `false` and it returns to the due-date section its `dueAt` puts it in (§2).
+- Given the "All" filter is active, When I toggle a todo, Then it moves between its due-date section and `Completed` (§2) without a full page reload, and both sections re-render in the default list order.
 - Given the "Active" filter is applied, When I mark a visible todo complete, Then it disappears from the filtered list.
 - Given the toggle request fails, When the error returns, Then the control reverts to its previous state and an error message is shown.
 - Given I toggle a todo, When the request is sent, Then only the todo's `completed` value changes — title, note, priority, and due date are unchanged.
@@ -180,6 +221,24 @@ As a new signed-in user with no todos, I want a clear empty state, so that I kno
 - Given I delete my only remaining todo, When the list updates, Then the empty state reappears.
 - Given I have zero todos, When the empty state renders, Then it is visually distinct from the "no todos match these filters" message in US-10.
 
+### US-12 — Dated list header
+
+As a signed-in user, I want one line above the list telling me what day it is and how much is due, so that the screen tells me where I stand before I read a single row.
+
+Not yet built. It is the follow-up to US-06's sections and ships as its own change; US-06 does not depend on it. The counts it shows are the sizes of the `Today` and `Overdue` sections the list already computes, so it adds no query and no field.
+
+**Acceptance criteria**
+
+- Given I am on `/todos` with the list loaded, When the page renders, Then a single line of text appears above the list and below the app bar, beginning with the user's today (§2) written as weekday, day of month, and month — e.g. `Saturday, 16 August`.
+- Given one or more todos are in the `Today` section, When the line renders, Then it continues ` · N due today`, where N is the number of todos in that section — `1 due today` for one, `3 due today` for three.
+- Given one or more todos are in the `Overdue` section, When the line renders, Then it continues ` · N overdue` — `1 overdue` for one, `2 overdue` for two — after the due-today clause when both are present, giving `Saturday, 16 August · 3 due today · 1 overdue`.
+- Given nothing is due today, When the line renders, Then the due-today clause is omitted entirely rather than showing `0 due today`; the same holds for the overdue clause. With neither, the line is the date alone.
+- Given a filter or search is applied (US-10), When the results render, Then the counts describe the todos currently shown, so the line and the list can never disagree about how many are due.
+- Given completed todos, When the line renders, Then they are never counted — a completed todo is in `Completed`, not in `Today` or `Overdue`, however its due date reads.
+- Given the list has not loaded yet, When the loading state is showing, Then the date is shown and the count clauses are not, so the counts never appear as zero and then change.
+- Given I have zero todos, When the empty state (US-11) renders, Then the line shows the date alone and does not imply missing data.
+- Given the line renders, When it is inspected with assistive technology, Then it is plain text, not a heading and not a control — it summarises the sections, and the sections (US-06) remain the place overdue work is actually conveyed.
+
 ---
 
 ## 4. Scope boundaries
@@ -193,6 +252,16 @@ As a new signed-in user with no todos, I want a clear empty state, so that I kno
 - Toggle complete/incomplete.
 - Delete with a confirmation dialog.
 - Filter by status (all/active/completed) and by priority (all/low/medium/high), combinable, reflected in the URL.
+- Due-date-aware default list order, with the list cut into `Overdue` / `Today` /
+  `Upcoming` / `No date` / `Completed` sections (§2, US-06). Moved in: v1
+  collected a due date on every todo and then let it change nothing, so the
+  field was decoration and the list could not answer "what now?" — the one
+  question a todo list exists to answer. This is a better *default*, not the
+  sorting control that stays out of scope; there is still nothing here for the
+  user to configure.
+- The dated list header line above the list (US-12). Moved in with the ordering
+  work because it is only meaningful once the sections exist, and once they do
+  it costs a date format and two counts the list has already computed.
 - Text search over the todo list, combinable with the filters and reflected in the URL.
 - Undo on the completion toggle, offered from its toast. Toggling is the one
   mutation with no confirmation dialog, so undo is what makes it reversible;
@@ -211,7 +280,7 @@ As a new signed-in user with no todos, I want a clear empty state, so that I kno
 - File or image attachments.
 - Email verification flow, password reset / forgot password, and account deletion.
 - Profile editing (name, avatar, password change).
-- Sorting controls, drag-and-drop reordering, and pagination or infinite scroll.
+- Sorting controls — any UI letting the user choose or change the list order — drag-and-drop reordering, and pagination or infinite scroll. The order itself is due-date-aware (above); what stays out is a control over it.
 - Bulk actions (complete all, delete all, clear completed).
 - Trash / archive / soft delete.
 - Offline support, PWA install, native apps.
@@ -239,7 +308,7 @@ As a new signed-in user with no todos, I want a clear empty state, so that I kno
 
 **NFR-08 — Validation parity.** Every field rule in section 2 is enforced server-side, with matching client-side messages. Server validation failures return a message the UI can display next to the offending field.
 
-**NFR-09 — Performance.** The todo list for a typical user (up to 200 todos) renders in a single query using the `[userId, completed]` index, with no N+1 queries. Toggle, create, edit, and delete update the list without a full page reload.
+**NFR-09 — Performance.** The todo list for a typical user (up to 200 todos) renders in a single query using the `[userId, completed, dueAt]` index — the scope plus the two leading keys of the default list order — with no N+1 queries. Sectioning adds no second query: the sections are cuts in the order that query already returns, drawn client-side because "today" is a fact about the user's clock, not about the data. Toggle, create, edit, and delete update the list without a full page reload.
 
 **NFR-10 — Build quality gate.** `npx tsc --noEmit` and `npm run lint` are clean and `npm run build` succeeds before any story is considered done (per `docs/STACK.md`).
 
@@ -260,6 +329,7 @@ As a new signed-in user with no todos, I want a clear empty state, so that I kno
 | US-09 | Delete a todo with confirmation | Must |
 | US-10 | Filter by status and priority | Should |
 | US-11 | Empty state | Should |
+| US-12 | Dated list header | Should |
 
 Non-functional priorities: NFR-01, NFR-02, NFR-03, NFR-07, NFR-10 are **Must**. NFR-04, NFR-05, NFR-08 are **Must**. NFR-06 (dark mode) and NFR-09 (performance) are **Should**.
 

@@ -85,6 +85,12 @@ model Todo {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  @@index([userId, completed])
+  /// Matches the list query in `src/app/api/todos/route.ts`: scoped by
+  /// `userId`, then ordered by `completed` and `dueAt`
+  /// (`TODO_LIST_ORDER_BY`). Replaces `@@index([userId, completed])`, which
+  /// this covers as a leading prefix — a btree on (a, b, c) already serves
+  /// (a) and (a, b), so keeping both would be one index maintained for
+  /// nothing on every write.
+  @@index([userId, completed, dueAt])
   @@map("todo")
 }

@@ -1,183 +1,366 @@
 # QA Report — Personal Todo App (v1) — **Release-gate pass on `develop`**
 
 **Date:** 2026-08-16
-**Branch:** `develop` @ `c45c0a3` (working tree clean at start and at end;
-this file is the only thing this pass changed)
+**Branch under test:** `develop` @ `cd0f869` (`Merge branch 'feature/due-date-ordering' into develop`)
+**Working tree:** clean at start; this file is the only thing this pass changed.
+**⚠ The checkout was moved to `fix/deploy-region` by something outside this session while the pass ran — see §11.1. Every result here is for `develop` @ `cd0f869`, which is unchanged.**
 **Tester:** QA
-**Purpose:** release gate. If this pass is clean, `develop` merges to `main`
-and deploys to production.
+**Purpose:** release gate. If this pass is clean, `develop` merges to `main` and deploys.
 
-Defect numbering continues from the previous passes. `DEF-01`…`DEF-12` mean
-what they meant before. New defects this pass start at **DEF-13**.
+Defect numbering continues from previous passes. `DEF-01`…`DEF-16` mean what
+they meant before. New defects this pass start at **DEF-17**.
 
 ---
 
 ## 0. Verdict, up front
 
-> ## **DO NOT SHIP — one Major blocks.**
+> ## **SHIP.**
 
-Both test suites are green, the cross-user isolation guarantee holds under an
-independent method, and all eleven user stories behave to spec on the happy
-paths. The blocker is **DEF-13**: a `401` arriving mid-session dead-ends the
-UI instead of returning the user to sign-in — and I found it is not the rare
-edge case it was assumed to be. **Signing out and pressing Back reproduces it
-every time.**
+Both suites are green at the counts expected. **DEF-13, the Major that blocked
+the last gate, is fixed** — I re-tested both of its reproductions and both now
+redirect correctly. Cross-user isolation holds under an independent method
+(31/31 checks over real HTTP). The due-date feature is correct at the two
+places I expected it to be thin: the **timezone boundary** and the
+**single-section rule**, both proved at the level a user experiences them.
 
-It is a Major, not a Critical: **no data leaks and nothing writes**. The server
-side is airtight. It is a recoverable-state bug, not a security bug. But it
-sits on US-03's acceptance criteria, which is a **Must** story, and PRD §7's
-release criteria require all Must stories to pass.
+Two new defects, **both Low, neither blocking**:
 
-Full reasoning in §9.
+- **DEF-17** — the sign-in error copy does not match the string US-02 quotes.
+  The *security* property that criterion exists to protect (no account-existence
+  oracle) is fully intact; this is a wording divergence between PRD and
+  `DESIGN.md`, and I believe the PRD is the doc that is wrong.
+- **DEF-18** — **US-05's amended criterion contradicts itself** and is not
+  executable as written. This is the one the brief asked me to look for. Detail
+  in §8; the app's behaviour is correct, the sentence is not.
+
+Neither touches a Must story's *behaviour*. Full reasoning in §9.
 
 ---
 
 ## 1. Test accounts created for this pass
 
-All in the **local `todo_app_test`** database, never production.
+All in the **local `todo_app_test`** database. Production was never connected
+to — proof in §2.
 
 | Account | Purpose |
 |---|---|
-| `qa-a-1786883778@isolation.test` | Isolation baseline, user A (owns the data) |
-| `qa-b-1786883778@isolation.test` | Isolation baseline, user B (the attacker) |
-| `qa-ui-1786883778@isolation.test` | The US-01…US-11 UI walkthrough |
-| `db-probe-1786883772@isolation.test` | One-shot probe proving my dev server wrote to the test DB |
-| `gp-1786883792@isolation.test` | One-shot probe of `GET /api/todos/[id]` (DEF-04) |
+| `db-probe-1786895251@isolation.test` | One-shot probe proving the dev server wrote to the test DB (§2) |
+| `qa-a-1786895338@isolation.test` | Isolation baseline, user A (owns the data) |
+| `qa-b-1786895338@isolation.test` | Isolation baseline, user B (the attacker) |
+| `qa-tz-plus14-1786895594297@isolation.test` | Timezone boundary at UTC+14 |
+| `qa-tz-minus11-1786895594297@isolation.test` | Timezone boundary at UTC−11 |
+| `qa-sect-1786895716916@isolation.test` | Single-section rule, both directions |
+| `qa-filt-1786895716916@isolation.test` | Grouping under filter and search |
+| `qa-midnight-1786895716916@isolation.test` | Tab left open across local midnight |
+| `qa-ui-1786895877267@isolation.test` | US-01 / US-02 / US-11 walkthrough |
+| `qa-crud-1786895877267@isolation.test` | US-05 / US-07 / US-09 walkthrough |
+| `qa-def13-1786895877267@isolation.test` | DEF-13 reproduction B |
+| `qa-copy-1786896219975@isolation.test` | US-02 error copy (DEF-17) |
+| `qa-list-1786896219975@isolation.test` | US-06 / US-08 / US-10 walkthrough |
+| `qa-d13a-1786896219975@isolation.test` | DEF-13 reproduction A |
+| `qa-order-1786896307500@isolation.test` | US-06 four-key ordering + section a11y |
+| `qa-signout-1786896307500@isolation.test` | US-03 sign out |
+| `qa-us05-1786896340775@isolation.test` | US-05 criterion (DEF-18) |
 
-Password for all: `qa-release-gate-8chars`.
-
-They use the `@isolation.test` domain deliberately, so the Vitest suite's own
-`deleteTestUsers` sweep reclaims them on its next run.
-
-### 1.1 Environment note — and a live foot-gun worth naming
-
-I ran the app on **port 3475** as instructed. Auth derives its base URL from
-the request in development, so the non-standard port caused no problems.
-
-**The foot-gun:** `.env`'s `DATABASE_URL` points at **Neon production**
-(`ep-purple-sea-…aws.neon.tech/neondb`). `npm run dev` with no override
-therefore serves the app against **production data**. Playwright is protected
-from this — `resolveTestDatabaseUrl` refuses hosted hosts, non-`*_test` names
-and the app's own URL, and `playwright.config.ts` injects the safe URL into its
-`webServer.env`. **Manual QA has no such guard.**
-
-I overrode it explicitly:
-
-```
-DATABASE_URL=postgresql://postgres@127.0.0.1:5432/todo_app_test \
-  npm run dev -- --port 3475 --hostname 127.0.0.1
-```
-
-and then *proved* the override took, rather than assuming Next's env
-precedence:
-
-| Check | Result |
-|---|---|
-| `todo_app_test` user count before a sign-up probe | 3 |
-| `POST /api/auth/sign-up/email` | `200` |
-| `todo_app_test` user count after | **4** |
-
-So every row this pass created is local. **I never pointed anything at the Neon
-URL, and I never connected to it** — which also means I am not claiming to have
-verified production's row counts, only that nothing of mine could have reached
-it.
-
-*Recommendation (not a defect):* give the dev script the same guard the test
-harness already has, or a `DEV_ALLOW_HOSTED=1` opt-in. The next person doing a
-manual pass will not think to check.
+Password for all: `qa-release-gate-8chars`. The `@isolation.test` domain is
+deliberate, so these are distinguishable from suite-created rows.
 
 ---
 
-## 2. The existing suites — **both green** (task 1)
+## 2. The production foot-gun, and proof the override held
 
-Run first, before anything else, exactly as asked.
-
-### 2.1 Vitest
+**`.env` is unchanged since I flagged it last pass.** It still reads:
 
 ```
-TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/todo_app_test npm run test:run
+DATABASE_URL="postgresql://neondb_owner:…@ep-purple-sea-azewd2z4-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?…"
+```
+
+That is a live Neon branch holding real user data, and it is what `next dev`
+loads by default. So the override is still mine to apply, and still mine to
+prove. **This remains the single most dangerous thing in the repo for anyone
+running the app locally.**
+
+I ran the app as:
+
+```
+DATABASE_URL="postgresql://postgres@127.0.0.1:5432/todo_app_test" npx next dev -p 3483
+```
+
+Next.js does not overwrite a variable already present in `process.env`, so the
+shell value wins over `.env` — but "should win" is not evidence, so:
+
+1. Created an account through the **running server on :3483**:
+   `POST /api/auth/sign-up/email` → `200`, `db-probe-1786895251@isolation.test`.
+2. Looked for it in the **local** database:
+
+```
+psql postgresql://postgres@127.0.0.1:5432/todo_app_test \
+  -tAc "select email, \"createdAt\" from \"user\" where email='db-probe-1786895251@isolation.test';"
+→ db-probe-1786895251@isolation.test|2026-08-16 15:47:32.912
+```
+
+The row the server wrote is in the **test** database. **Override confirmed.**
+Both suites resolve their own target through
+`tests/setup/testDatabaseUrl.ts` / `e2e/support/testDatabaseUrl.ts`, which
+refuse hosted hosts and any database not named `*_test`, so they were never at
+risk.
+
+**Note on the port:** the app must be driven over `http://localhost:3483`, not
+`http://127.0.0.1:3483`. Next 16's dev-origin check answers `403` to
+`/_next/static/*` when the browser's origin does not match the server's, which
+leaves the page stuck on the loading skeleton. Not a product defect — a dev
+harness detail worth knowing before someone reports a phantom bug.
+
+---
+
+## 3. The existing suites — **both green** (task 1)
+
+Run first, before anything else.
+
+### 3.1 Vitest
+
+```
+TZ=Pacific/Kiritimati npm run test:run
 ```
 
 | | |
 |---|---|
-| Result | **6 files, 143 tests, 143 passed, 0 failed** |
-| Vitest-reported duration | **2.42 s** (transform 107 ms, import 1.62 s, tests 470 ms) |
-| Wall clock incl. npm start-up | **2.81 s** |
+| Result | **8 files, 188 tests, 188 passed, 0 failed** |
+| Vitest-reported duration | **3.17 s** (transform 117 ms, import 1.95 s, tests 775 ms) |
+| Wall clock | **3.53 s** |
 
-Matches the Senior's sign-off count (143) exactly.
+**188 — matches the expected count exactly.**
 
-### 2.2 Playwright
+### 3.2 Playwright
 
 ```
-npm run test:e2e
+CI=true npm run test:e2e
 ```
 
 | | |
 |---|---|
-| Result | **30 passed, 0 failed** (16 `chromium-desktop` + 14 `chromium-mobile`) |
-| Playwright-reported duration | **1.1 m** |
-| Wall clock | **67.4 s** |
+| Result | **38 passed, 0 failed** (chromium-desktop + chromium-mobile) |
+| Playwright-reported duration | **1.2 m** |
+| Wall clock | **1:13** |
 
-Both projects ran; the Pixel 7 project ran its 14 real specs rather than
-skipping. Exit code 0.
+**38 — matches the expected count exactly.** Exit code 0, both projects ran.
 
-**Neither suite is red on `develop`, so nothing here blocks the release** and
-the rest of this pass carried its full weight.
+**Neither suite is red on `develop`, so nothing here blocks the release.**
 
-### 2.3 What I did *not* re-do
+### 3.3 An extra run the brief did not ask for
 
-I did not re-run the authors' or the Senior's mutation testing. That work is
-recorded in `docs/REVIEW.md` and was verified independently there by someone
-who wrote their own sabotages. Repeating it would spend the gate's budget
-re-proving a settled question. I spent it on §3–§6 instead, per the brief.
+Since the whole feature turns on the viewer's calendar day, I ran the Vitest
+suite at six offsets rather than one:
+
+| TZ | Offset | Result |
+|---|---|---|
+| `Pacific/Kiritimati` | +14 | 188 passed |
+| `Pacific/Chatham` | +12:45 / +13:45 | 188 passed |
+| `Asia/Bangkok` | +7 | 188 passed |
+| `UTC` | 0 | 188 passed |
+| `America/Los_Angeles` | −7 | 188 passed |
+| `Pacific/Midway` | −11 | 188 passed |
+
+Green everywhere, including a **45-minute** offset, which is the case most
+date arithmetic gets wrong. Good result.
+
+### 3.4 Where I judged the suites to be thin — and it is one specific thing
+
+**No test in either suite pins a timezone.** Vitest inherits ambient `TZ`; the
+Playwright config sets **no `timezoneId`** on either project, so the browser
+also inherits it. And `e2e/grouping.spec.ts` builds its fixture dates with
+`localDay()` — in *local* time — which is correct for the assertion but means
+the fixture and the assertion **shift together**. The spec therefore passes at
+every offset without ever discriminating between them.
+
+The CI workflow's `TZ: Pacific/Kiritimati` is doing all the work, and it is set
+on the *job*, not on the *test*. Anyone running the suite locally, or a future
+config that drops the env var, gets green tests that no longer prove the thing
+they were written to prove. §4 is where I spent the effort instead.
+
+*(Recommendation, not a defect: set `timezoneId` explicitly per Playwright
+project, and use `vi.setSystemTime` with a fixed instant in the unit tests, so
+the guarantee lives in the test rather than in the environment.)*
 
 ---
 
-## 3. Cross-user isolation — **re-proved independently** (task 3)
+## 4. The timezone boundary as a user experiences it (task 2) — **Pass**
 
-This is the one guarantee worth proving twice, so I proved it by a **different
-method** from the Vitest suite. The suite imports the route-handler functions
-and calls them in-process with mocked `next/headers`. I drove the **running dev
-server over real HTTP with `curl`**, real `Set-Cookie` session cookies, through
-the real proxy and the real Next routing layer.
+This is the headline check and it needed a real browser, because grouping is
+computed client-side from `new Date()`.
 
-Script: `isolation.sh` (scratchpad). **26 checks, 26 passed, 0 failed.**
+Method: real Chromium, `timezoneId` set per context, **and the wall clock
+pinned** with `clock.setFixedTime()` to an instant where the viewer's local
+calendar day and the UTC calendar day genuinely **disagree**. That last part is
+what makes the test discriminate — at most instants the two agree and a
+UTC-based implementation would pass by luck.
 
-### 3.1 The matrix
+### 4.1 UTC+14 — `Pacific/Kiritimati`
 
-Two fresh accounts. A creates two todos; B reaches for them.
+Pinned to `2026-08-16T11:00:00Z` → the browser's local time is
+`Mon Aug 17 2026 01:00:00 GMT+1400`.
 
-| # | Attempt (as B, signed in) | Expected | Actual |
-|---|---|---|---|
-| 1 | `GET /api/todos` | none of A's | `{"todos":[],"totalCount":0,...}` — **empty** |
-| 2 | `GET /api/todos` — A's title present? | no | not present |
-| 3 | `GET /api/todos?q=secret` (a term only in A's row) | no match | no match |
-| 4 | `PATCH /api/todos/{A1}` | `404` | **`404`** |
-| 5 | `PATCH /api/todos/{A1}/status` | `404` | **`404`** |
-| 6 | `DELETE /api/todos/{A1}` | `404` | **`404`** |
-| 7 | `DELETE /api/todos/{A2}` | `404` | **`404`** |
+| | |
+|---|---|
+| Local calendar day | **2026-08-17** |
+| UTC calendar day | **2026-08-16** |
 
-**On `GET`:** the brief asked for `GET` against A's ids. There is **no
-`GET /api/todos/[id]` route in this app** — the `[id]` route exports only
-`PATCH` and `DELETE`, so the read path is the collection endpoint. I tested
-that instead, both unfiltered and with a search term chosen to match A's row,
-which is the read surface that actually exists. `GET /api/todos/{id}` returns
-`405` for owner and stranger alike (that is **DEF-04**, already on the books as
-informational — re-observed, unchanged, and it leaks nothing: the method is
-rejected before any handler runs, identically whether signed in or out).
+| Todo (`dueAt`) | Expected section | Actual |
+|---|---|---|
+| `2026-08-17` (the user's today) | `Today` | **`Today`** ✓ |
+| `2026-08-16` (the user's yesterday) | `Overdue` | **`Overdue`** ✓ |
+| `2026-08-18` (the user's tomorrow) | `Upcoming` | **`Upcoming`** ✓ |
+| none | `No date` | **`No date`** ✓ |
 
-### 3.2 Not-found must be indistinguishable from not-yours
+A UTC-based grouping would have put the first row in `Upcoming`. It did not.
+
+### 4.2 UTC−11 — `Pacific/Midway`
+
+Pinned to `2026-08-17T05:00:00Z` → local time
+`Sun Aug 16 2026 18:00:00 GMT-1100`.
+
+| | |
+|---|---|
+| Local calendar day | **2026-08-16** |
+| UTC calendar day | **2026-08-17** |
+
+| Todo (`dueAt`) | Expected section | Actual |
+|---|---|---|
+| `2026-08-16` (the user's today) | `Today` | **`Today`** ✓ |
+| `2026-08-15` | `Overdue` | **`Overdue`** ✓ |
+| `2026-08-17` | `Upcoming` | **`Upcoming`** ✓ |
+| none | `No date` | **`No date`** ✓ |
+
+A UTC-based grouping would have called the first row `Overdue`. It did not.
+
+**14/14 checks passed.** Headings rendered in PRD order in both zones, and the
+row labels agreed with the sections (`Today`, `Tomorrow`, `Overdue — Yesterday`).
+
+**Verdict: the "user's today" definition in PRD §2 is implemented correctly, at
+a positive and a negative offset, in both directions of disagreement.**
+
+---
+
+## 5. Behaviour the suites do not cover (task 2) — **Pass**, 20/20
+
+### 5.1 The single-section rule, in both directions — **Pass**
+
+The criterion:
+
+> "Given every todo currently shown belongs to a single section … **no heading
+> appears at all** and the todos render as one flat list."
+
+| Step | Expected | Actual |
+|---|---|---|
+| Three todos, none with a due date | **zero** `<h2>` | **0** ✓ |
+| …rendered as one flat list | 1 section, 3 rows | **1 section, 3 rows** ✓ |
+| Give one of them a due date of today | headings over **both** sections | **`Today`, `No date`** ✓ |
+| Clear that due date again | headings **disappear** | **0** `<h2>` ✓ |
+
+Both directions, including the return trip the PRD explicitly calls for. **A
+user who never sets a due date sees exactly the list that shipped before.**
+
+### 5.2 Grouping under a filter and under search — **Pass**
+
+| Case | Expected | Actual |
+|---|---|---|
+| No filter | `Today`, `Upcoming`, `No date`, `Completed` | ✓ |
+| A completed **overdue** todo | under `Completed`, never `Overdue` | ✓ |
+| Two todos same day, `high` / `low` | `high` first | ✓ |
+| `?priority=high` | only sections with survivors: `Today`, `Upcoming`, `Completed` | ✓ |
+| `?status=active&priority=high` | `Today`, `Upcoming` | ✓ |
+| `?status=completed` (survivors all in one section) | **no heading at all** | **0** `<h2>` ✓ |
+| `?q=TODAY` (survivors all in one section) | **no heading at all** | **0** `<h2>` ✓ |
+| `?q=TODAY` ordering | default order preserved | `TODAY-high`, `TODAY-low` ✓ |
+| `?q=O` (survivors span sections) | headings return | all four ✓ |
+
+The single-section rule holds **under filters and under search**, not just on
+the unfiltered list — including the case where filtering *collapses* a
+multi-section list down to one.
+
+### 5.3 A tab left open across local midnight — **confirmed as described, out of scope**
+
+The PM knows and ruled this out of scope. Recording it, not filing it.
+
+Setup: `timezoneId: UTC`, clock pinned to `2026-08-16T23:50:00Z`, one todo due
+`2026-08-16` plus one undated todo (so headings render at all).
+
+| Step | Observed |
+|---|---|
+| At 23:50 | `Today`, `No date` — correct |
+| Advance the clock to 00:10 the next day, **tab untouched** | **still `Today`, `No date`** — stale |
+| Reload (any re-render) | **`Overdue`, `No date`** — correct |
+
+**Confirmed exactly as the PM described.** `groupTodos()` is called during
+render with a default of `new Date()`, and nothing subscribes to a clock tick,
+so the grouping is only as fresh as the last render. It self-corrects on any
+re-render — reload, filter change, or any mutation. No data is wrong, only the
+heading a row sits under, and only in a tab left idle across midnight.
+
+**Not filed as a defect, per the PM's ruling.** Worth a line in the release
+notes rather than a fix.
+
+---
+
+## 6. Cross-user isolation — **re-proved independently** (task 3) — **Pass**
+
+The ordering change touched the same query, so this was proved a second time by
+a **different method** from the Vitest suite. The suite imports the route
+handlers and calls them in-process with mocked `next/headers`. I drove the
+**running dev server over real HTTP with `curl`**, real `Set-Cookie` session
+cookies, through the real proxy and the real Next routing layer.
+
+Script: `isolation.sh` (scratchpad). **31 checks, 31 passed, 0 failed.**
+
+### 6.1 B reaches for A's data
+
+Two fresh accounts; A creates two todos; B signs in and reaches for them.
+
+| Attempt (as B) | Expected | Actual |
+|---|---|---|
+| `GET /api/todos` | none of A's | `"totalCount":0` — **empty** |
+| `GET /api/todos` — A's title present? | no | **not present** |
+| `GET /api/todos?query=secret` (matches only A's row) | no match | **no match** |
+| `PATCH /api/todos/{A1}` | `404` | **`404`** |
+| `PATCH /api/todos/{A1}/status` | `404` | **`404`** |
+| `DELETE /api/todos/{A1}` | `404` | **`404`** |
+| `DELETE /api/todos/{A2}` | `404` | **`404`** |
+
+**On `GET` by id:** there is still **no `GET /api/todos/[id]` route** — the
+`[id]` route exports only `PATCH` and `DELETE`, so the read surface is the
+collection endpoint, which is what I tested (unfiltered, and with a search term
+chosen to match A's row). That is **DEF-04**, unchanged and informational.
+
+### 6.2 Not-found must be indistinguishable from not-yours
 
 | Attempt | Status | Body |
 |---|---|---|
 | `PATCH` a **foreign** id | `404` | `{"code":"NOT_FOUND","message":"That todo no longer exists."}` |
-| `PATCH` a **nonexistent** id | `404` | `{"code":"NOT_FOUND","message":"That todo no longer exists."}` |
-| `PATCH /status` foreign | `404` | *identical* |
-| `DELETE` foreign | `404` | *identical* |
+| `PATCH` a **nonexistent** id | `404` | *byte-identical* |
 
-Byte-identical status and body. **No existence oracle.**
+**No existence oracle.**
 
-### 3.3 Signed out — everything `401`
+### 6.3 A path the suite does not cover: validation runs *before* ownership
+
+I found this by accident (a malformed body in my own script) and then tested it
+deliberately, because it is exactly the shape a leak takes.
+
+`PATCH /api/todos/[id]` parses the body with `todoFormSchema` **before** the
+ownership lookup. So an **invalid** body against a **foreign** id returns
+`400`, not `404`. That would be an oracle if the `400` differed between a
+foreign id and one that does not exist:
+
+| Attempt (as B, `{"note": 5}`) | Status | Body |
+|---|---|---|
+| foreign id | `400` | `{"code":"BAD_REQUEST","message":"The note must be text.","fieldErrors":{"note":"The note must be text."}}` |
+| nonexistent id | `400` | *byte-identical* |
+
+**Identical.** The validation error describes the *body*, never the *row*, so
+it cannot distinguish the two. **Not a defect** — but it is an ordering the
+suite does not pin, and a future error message that mentioned the row would
+turn it into one silently.
+
+### 6.4 Signed out — everything `401`
 
 | Endpoint | Expected | Actual |
 |---|---|---|
@@ -186,636 +369,499 @@ Byte-identical status and body. **No existence oracle.**
 | `PATCH /api/todos/{id}` | `401` | **`401`** |
 | `PATCH /api/todos/{id}/status` | `401` | **`401`** |
 | `DELETE /api/todos/{id}` | `401` | **`401`** |
-| any of the above with a **forged** cookie | `401`, not `500` | **`401`** |
+| `GET` / `PATCH` with a **forged** cookie | `401`, not `500` | **`401`** |
 
-### 3.4 No `500`s, and A's data intact afterwards
+### 6.5 A's data intact, and the guard is not simply denying everything
 
-Every status above was asserted explicitly; a `500` anywhere would have
-registered as a failure. None did.
+After every attempt by B, re-read as A: title intact, **not** overwritten by
+B's `PATCH`, `completed` **not** flipped, second todo **not** deleted, `note`
+and `priority` intact. No `500` anywhere.
 
-After every attempt by B, re-read as A:
-
-| Property | Result |
-|---|---|
-| A's todo still exists with its title | intact |
-| Title not overwritten by B's attempted `PATCH` | intact |
-| `completed` not flipped by B's `/status` | intact (`false`) |
-| A's second todo not deleted | intact |
-| `note` = `"A private note"` | intact |
-| `priority` = `"high"` | intact |
-
-And the guard is not simply denying everything — A can still operate on A's own
-rows: `PATCH /status` → `200`, `PATCH` fields → `200`, `DELETE` → `204`.
+And A can still operate on A's own rows: `PATCH /status` → `200`, `PATCH`
+fields → `200`, `DELETE` → `204`.
 
 **Verdict: NFR-01 / NFR-02 / US-04's isolation clause — Pass, by two
-independent methods.**
+independent methods. No false pass here: every status and body above was
+asserted explicitly, and the run was clean only after I fixed my own script's
+malformed payloads (§6.3), not by loosening an assertion.**
 
 ---
 
-## 4. User stories US-01 → US-11 (task 4)
-
-Walked against the **current** rules, including the changed confirm behaviour.
+## 7. User stories US-01 → US-11 (task 4)
 
 | Story | Verdict |
 |---|---|
 | US-01 — Sign up | **Pass** |
-| US-02 — Sign in | **Pass** |
-| US-03 — Sign out | **Partial** — DEF-13 |
-| US-04 — Protected routes | **Pass** (server-side); client-side gap is DEF-13 |
-| US-05 — Create a todo | **Pass** |
-| US-06 — List todos | **Pass** |
+| US-02 — Sign in | **Partial** — DEF-17 (copy only; behaviour and security correct) |
+| US-03 — Sign out | **Pass** — DEF-13 fixed |
+| US-04 — Protected routes | **Pass** — server and client |
+| US-05 — Create a todo | **Pass** — behaviour correct; the *criterion* is DEF-18 |
+| US-06 — List todos | **Pass** — including all section criteria |
 | US-07 — Toggle complete | **Pass** |
 | US-08 — Edit a todo | **Pass** |
 | US-09 — Delete with confirmation | **Pass** |
 | US-10 — Filter by status and priority | **Pass** |
 | US-11 — Empty state | **Pass** |
+| US-12 — Dated list header | **Absent by design** — not tested, confirmed not present |
 
-### 4.1 The confirm/Undo rules — verified as the new rule, not the old one
+### 7.1 US-01 — Sign up — **Pass**
 
-This is the part that changed, so I checked each mutation for **both** halves:
-does it confirm, and does its toast carry Undo? Toasts were captured with a
-`MutationObserver` so the 4 s expiry could not hide one from me.
+Fields Name/Email/Password + "Create account" + link to `/sign-in` all present.
+Empty submit → stays on `/sign-up`, **three** inline `This field is required.`
+errors. `not-an-email` → `Enter a valid email address.` 7-char password →
+`Use at least 8 characters.` Duplicate email → error shown, **email kept,
+password cleared**. Valid sign-up → redirected to `/todos`.
+`emailVerified` in the database is **`f`**, and the app is fully usable.
 
-| Action | Confirm dialog? | Toast | Undo on toast? | Skeleton? |
-|---|---|---|---|---|
-| Create | **No** ✓ | `Todo "Buy milk" added` | **Yes** ✓ | yes ✓ |
-| Edit | **No** ✓ | `Todo "Buy oat milk" updated` | **Yes** ✓ | **yes** ✓ |
-| Toggle | **No** ✓ | `Todo "Buy milk" marked not complete` | **Yes** ✓ | **no** ✓ |
-| Delete | **Yes** ✓ | `Todo "Undo me" deleted` | **No** ✓ | **no** ✓ |
-| Sign in / sign up | **No** ✓ | — | — | — |
+### 7.2 US-02 — Sign in — **Partial (DEF-17)**
 
-Every cell matches `docs/CONVENTIONS.md` → *Mutation UX — confirm what cannot
-be undone*. Notably the delete toast correctly carries **no** Undo, which is
-the rule's own consistency check: the one irreversible action is the one that
-asks first and does not pretend it can be taken back.
+Correct credentials → session and redirect to `/todos`. Wrong password and
+unknown email both stay on `/sign-in`. `?next=` is honoured: visiting
+`/todos?status=active&priority=high` signed out redirects to
+`/sign-in?next=%2Ftodos%3Fstatus%3Dactive%26priority%3Dhigh`, and after signing
+in the user **lands back on that exact filtered route**. A signed-in visit to
+`/sign-in` redirects to `/todos`.
 
-**Skeleton placement is exactly as specified:** it appears on create/edit save
-and on filter change, and does **not** appear on toggle or delete. I confirmed
-the negative cases by observing `0` skeleton nodes across a toggle and a
-delete, and the positive cases by catching 12 skeleton nodes on an edit save
-and again on a filter change.
+**The security-critical half is correct:** wrong-password and unknown-email
+produce the *byte-identical* message, so there is no account-existence oracle.
+Only the wording differs from the PRD — **DEF-17**.
 
-**Per-row pending state exists:** rows carry `aria-busy` (observed `"false"` at
-rest). The in-flight `true` window is genuinely short — local round trips were
-5–11 ms per the dev server log — so I did not catch it visually; the attribute
-and the disabled-control wiring are present, and the e2e suite asserts the
-in-flight behaviour. I am recording the attribute as **verified present**, the
-in-flight visual as **covered by the suite, not re-observed by me**.
+### 7.3 US-03 — Sign out — **Pass** (was Partial)
 
-**Deleted row disappears immediately:** confirmed. After confirming a delete the
-row was gone from the DOM in the same read that saw the toast, with the count
-already decremented (`0 of 1 done`), rather than after the refetch. This is the
-DEF-11 fix holding.
+Account menu shows the account email and a `Sign out` item. Signing out
+redirects to `/sign-in`, **deletes the session row server-side** (verified in
+Postgres: 1 → 0), and **clears the session cookie** (no session cookie remains
+in the context). The Back-button criterion now passes — see DEF-13 in §8.
 
-### 4.2 US-01 — Sign up — **Pass**
+### 7.4 US-04 — Protected routes — **Pass**
 
-- Form shows Name, Email, Password, "Create account", and a link to `/sign-in`. ✓
-- Empty submit → all three fields show `This field is required.` and **no
-  request is sent**. ✓
-- `not-an-email` → `Enter a valid email address.` ✓
-- 5-char password → `Use at least 8 characters.` ✓
-- Valid submission → account created, signed in, redirected to `/todos`. ✓
+Unauthenticated `/todos` → `/sign-in?next=…`, originally requested path
+preserved, **no todo data in the response**. Every mutation endpoint with no
+session → `401` with no write (§6.4). A foreign todo id → `404` (§6.1). The
+client-side gap that made this Partial last pass is DEF-13, now fixed.
 
-**Copy-deck vs PRD divergence (not a defect).** PRD §3 US-01 quotes
-`"Password must be at least 8 characters"` and `"Enter a valid email address"`.
-The copy deck (`docs/DESIGN.md` §7.9, lines 1003–1005) specifies
-`Use at least 8 characters.` and `Enter a valid email address.`, and
-`CONVENTIONS.md` states validation messages come from the copy deck. The app
-matches the copy deck. **The PRD's wording is stale, not the app's.** Worth one
-edit to the PRD so the next tester does not file it.
+### 7.5 US-05 — Create a todo — **Pass** (criterion issue: DEF-18)
 
-### 4.3 US-02 — Sign in — **Pass**
+Create form has Title, Note, Priority and Due date. Title-only submit stores
+`note = null`, `priority = medium`, `completed = false`, `dueAt = null`
+(verified in Postgres) and the row appears **without a full page reload**.
+Empty title → `Enter a title.` A 201-char title is rejected inline. The form
+**resets to its defaults** after a success. Priority and due date are both
+visible on the row.
 
-- Wrong password → stays on `/sign-in`, shows `Sign in failed` /
-  `That email and password don't match. Try again.` (copy deck line 1001). ✓
-- **No existence oracle.** I compared the raw API responses:
+The one thing that does *not* hold is the criterion's own trailing clause —
+see **DEF-18**. The app's ordering is right; the sentence is wrong.
 
-  | Input | Response |
-  |---|---|
-  | real account, wrong password | `401 {"message":"Invalid email or password","code":"INVALID_EMAIL_OR_PASSWORD"}` |
-  | account that does not exist | `401 {"message":"Invalid email or password","code":"INVALID_EMAIL_OR_PASSWORD"}` |
+### 7.6 US-06 — List todos — **Pass**
 
-  Byte-identical. ✓ (Same PRD-vs-copy-deck wording divergence as above; the
-  security property the AC actually protects is intact.)
-- **`?next=` is honoured.** Signing in from `/sign-in?next=%2Ftodos` landed on
-  `/todos`, not the default. ✓
+**Scope:** only my todos, under every filter (§6).
 
-### 4.4 US-03 — Sign out — **Partial** (DEF-13)
+**Order — all four keys, in one list.** Eight todos seeded in a deliberately
+wrong order, with distinct `createdAt`:
 
-- Account menu shows my email and a `Sign out` item. ✓
-- Sign out destroys the session, clears the cookie (`document.cookie` empty
-  afterwards) and redirects to `/sign-in`. ✓
-- **Back button after sign-out — fails its AC.** See DEF-13. No todo data is
-  rendered (the security half holds), but the user is **not** redirected.
-
-### 4.5 US-04 — Protected routes — **Pass** (server side)
-
-- Unauthenticated `/todos` → redirected to
-  `/sign-in?next=%2Ftodos`, no todo data in the response. ✓
-- Query strings survive: `/todos?status=active&priority=high` →
-  `/sign-in?next=%2Ftodos%3Fstatus%3Dactive%26priority%3Dhigh`. ✓
-- **Invalid (deleted) session cookie** on a fresh navigation → redirected to
-  `/sign-in`, no data. ✓ — this is `requireUser()` doing its job past the
-  cookie-presence-only proxy.
-- Direct mutation calls with no session → `401`, no write (§3.3). ✓
-- Foreign todo id → not-found, nothing exposed or changed (§3.1). ✓
-
-The client-side half of "expired session → back to sign-in" is DEF-13.
-
-### 4.6 US-05 — Create — **Pass**
-
-Created `Buy milk` with everything else untouched; read the record straight
-back from the API:
-
-```json
-{"title":"Buy milk","note":null,"priority":"medium",
- "completed":false,"dueAt":null}
+```
+["A-yesterday-med", "B-today-high", "C-today-low", "G-tie-newer",
+ "F-tie-older", "D-nextmonth-high", "E-undated-low", "H-done-overdue"]
 ```
 
-Exactly the AC's required defaults. It appeared at the top of the list with no
-full page reload, and the empty state was replaced. ✓
-
-### 4.7 US-06 — List — **Pass**
-
-- Only my own todos (§3). ✓
-- Row shows title, completion control, priority chip, due date when set. ✓
-- **Completed styling is not colour alone:** the completed title computes
-  `text-decoration-line: line-through`. ✓ (NFR-04's "never by colour alone".)
-- The priority chip carries a `■` glyph plus the visually-hidden text
-  `Priority: Medium`, so priority is not colour-alone either. ✓
-- Loading shows a skeleton rather than a blank screen. ✓
-
-### 4.8 US-07 — Toggle — **Pass**
-
-- Toggling flipped `completed`, restyled the row, and updated the accessible
-  name from `Mark "Buy oat milk" as complete` to `…as not complete`. ✓
-- **Persists across reload** — still complete after a full navigation, and the
-  header count read `1 of 1 done`. ✓
-- No confirm dialog, Undo offered, no skeleton (§4.1). ✓
-- Only `completed` changes — the `/status` route takes a `.strict()` schema of
-  exactly `{completed}` and rejects anything else, and §3 confirms title, note,
-  priority and due date survived untouched. ✓
-
-### 4.9 US-08 — Edit — **Pass**
-
-- Edit opens **pre-filled** with the row's current values (observed
-  `Edit todo` heading with the title populated). ✓
-- Saving a changed title updated the row and the toast named the new title. ✓
-- Cancel / Escape closes without mutating, and **focus returns to the
-  triggering control** (`activeElement` was a `BUTTON` after Escape). ✓
-- Scoped by `id` + `userId`; a foreign id is `404` (§3.1). ✓
-
-### 4.10 US-09 — Delete — **Pass**
-
-The confirm dialog meets every requirement in `CONVENTIONS.md` §1:
-
-| Requirement | Observed |
+| Criterion | Result |
 |---|---|
-| Opens before anything is deleted | both rows still present while open ✓ |
-| Names the specific record | `"Undo me" will be permanently deleted. This can't be undone.` ✓ |
-| Not a bare "Are you sure?" | ✓ |
-| `Cancel` focused by default | `activeElement` = `BUTTON:Cancel` ✓ |
-| Destructive confirm + Cancel present | `["Cancel","Delete"]` ✓ |
-| Correct role | `role="alertdialog"` ✓ |
-| Escape closes without mutating | ✓ (§4.9) |
+| yesterday → today → next week → undated | ✓ |
+| same due date: `high` before `low` (`B` before `C`) | ✓ |
+| **`low` due today outranks `high` due next month** (`C` before `D`) | ✓ |
+| same date + priority: newer first (`G` before `F`) | ✓ |
+| completed last, and a completed **overdue** todo does not rejoin the active ones (`H` last) | ✓ |
+| order preserved under filter and search | ✓ (§5.2) |
 
-Confirming removed the row immediately, decremented the count, closed the
-dialog, and raised a toast with **no** Undo. ✓
+**Sections:** all five render in PRD order; empty sections do not render; a
+completed past-due todo appears under `Completed` and creates no `Overdue`
+section; the single-section rule holds in both directions (§5.1).
 
-### 4.11 US-10 — Filters — **Pass**
-
-- Defaults are All / All priorities. ✓
-- Selecting `Completed` → URL becomes `/todos?status=completed`, list filters,
-  skeleton shows. ✓
-- **Filters survive a reload**: navigating directly to
-  `/todos?status=active&priority=high` restored `Active` selected
-  (`aria-checked="true"`) and the priority control reading `High`. ✓
-- Filters combine with AND — that combination matched nothing while todos
-  existed, and produced the no-match state (below). ✓
-- Results still contain only my own todos (§3.1, search included). ✓
-
-### 4.12 US-11 — Empty states — **Pass**, and all four are distinct
-
-| Situation | Copy shown |
-|---|---|
-| Zero todos | **`Nothing here yet`** / `Add your first todo and it will show up here.` / `New todo` |
-| Filter matches nothing | **`No todos match these filters`** / `Try a different status or priority.` / `Clear filters` |
-| `status=completed`, none done | **`Nothing completed yet`** / `Todos you finish will appear here.` |
-| `status=active`, none active | `All caught up` / `You have no active todos. Nice.` |
-
-- The zero-todos state is **visually distinct** from the no-match state, as its
-  AC requires. ✓
-- On the zero-todos state the **filter chrome is absent** (`[role=radio]` count
-  0) — "no filter chrome implying missing data". ✓
-- Exactly **one** `New todo` button on that screen — the empty state's CTA, with
-  the toolbar copy correctly suppressed to avoid two identical CTAs. ✓
-- Its CTA opens the create form. ✓
-- **Deleting the only remaining todo brought the empty state back**, filter
-  chrome disappearing with it. ✓
-
----
-
-## 5. The tab icon (task 5) — **Pass**
+**Accessibility of the sections** — the criterion asks for a level-2 heading
+and a list per section:
 
 | Check | Result |
 |---|---|
-| `GET /icon.svg` | **`200`**, `content-type: image/svg+xml` |
-| `<link rel="icon">` in `<head>` | `href="/icon.svg?icon.1lb78i28-6hsc.svg" sizes="any" type="image/svg+xml"` ✓ |
-| `GET /favicon.ico` | **`404`** — the old default is gone ✓ |
-| `favicon.ico` anywhere in source | none ✓ |
-| Tab title | `Todos` / `Sign in · Todos` ✓ |
+| every section heading is a real `<h2>` | **true** |
+| every section has **its own** `<ul>` | **true** |
+| no `<h2>` nested inside a `<ul>` (invalid markup) | **false** — correct |
+| headings in order | `Overdue`, `Today`, `Upcoming`, `No date`, `Completed` |
 
-The only `favicon.ico` on disk is a stale build artifact under
-`.next/dev/static/media/` — a cache leftover, not served (the live request
-`404`s) and not in source control. It will not survive a clean build. **Not a
-defect**, noted so nobody re-files it.
+**Rows:** title, completion control, priority, due date, and a note indicator
+are all present — e.g.
+`"Zeta overdue ▼ Priority: Low ⚠ Overdue — Aug 13 ✎ Has a note"`. Priority and
+overdue state carry a **glyph as well as colour** (`▼ ▲ ■`, `⚠`), so status is
+not conveyed by colour alone. A **skeleton** loading state renders before data
+arrives.
 
-The icon itself is sound for its job: a rounded square with a checkmark, colours
-as literals rather than theme tokens (correct — a favicon renders outside the
-document), drawn for 16 px.
+### 7.7 US-07 — Toggle — **Pass**
 
----
+Toggling persists (`completed = t` in Postgres) and survives a reload. Under
+the **Active** filter, completing a visible todo removes it from the list.
+**Only `completed` changed** — title, note, priority and `dueAt` verified
+unchanged in the database. A completed todo returns to its due-date section
+when toggled back (§5.2).
 
-## 6. Console and network (task 6)
+### 7.8 US-08 — Edit — **Pass**
 
-Watched throughout the whole pass.
+Edit form opens **pre-filled** with the current title and note. Clearing the
+title and saving → `Enter a title.`, no update. **Cancel (Escape) changes
+nothing** — verified in Postgres that the typed-but-cancelled value was never
+saved. Clearing the note stores **`NULL`**. Length rules match US-05.
+Ownership is scoped by `id` **and** `userId` (§6.1).
 
-### 6.1 DEF-02 — `PressResponder` warning — **still present**
+### 7.9 US-09 — Delete with confirmation — **Pass**
 
-```
-[warn] A PressResponder was rendered without a pressable child.
-       Either call the usePress hook, or wrap your DOM node with <Pressable>.
-```
+The dialog names the todo:
+`"Delete this todo? “Buy milk” will be permanently deleted. This can't be undone. Cancel Delete"`.
+**Escape cancels and nothing is deleted** (row count unchanged). Confirming
+deletes exactly one row, it disappears without a full reload, and it stays gone
+after a reload. **Focus moves inside the dialog** and **returns to the
+triggering control** after it closes (`aria-label` `Delete "Beta soon"`) —
+NFR-04 satisfied. Deleting the last todo shows the empty state.
 
-Confirmed still open, as asked — **not re-diagnosed**; the root cause is
-already pinned in the previous pass and in `REVIEW.md`. Observed on essentially
-every `/todos` render, in both my browser session (7 occurrences across the
-pass) and in the Playwright run's captured browser output. Console noise only:
-no functional impact was observed anywhere in this pass.
+### 7.10 US-10 — Filters and search — **Pass**
 
-### 6.2 Everything else
+Defaults are All / All priorities. `priority=high` shows only high.
+Filters **combine with AND**. Filter state is **in the URL and survives a
+reload**. A non-matching search shows
+`No matches — No todos match “zzzznomatch”.` with a **`Clear search`** control,
+and that message is **visually and textually distinct** from the empty state.
+Results stay in the default list order and contain only my todos.
 
-| Category | Finding |
-|---|---|
-| React errors | **none** |
-| Hydration warnings | **none** |
-| Unhandled exceptions | **none** |
-| Failed requests | only the `401`s I deliberately caused (session deleted, wrong password) |
-| Unexpected/duplicate requests | none observed |
-| Other noise | React DevTools hint, HMR connect, Vercel Speed Insights debug — all dev-only |
+### 7.11 US-11 — Empty state — **Pass**
 
-### 6.3 NFR-07 — no secrets in the client bundle — **Pass**
+`"Nothing here yet — Add your first todo and it will show up here. [New todo]"`
+— a heading, one line of guidance, a CTA, and **no filter chrome**. The CTA
+opens the create form and **focuses the Title field** (verified via
+`document.activeElement`). Creating the first todo replaces it; deleting the
+last todo brings it back. Distinct from the no-results message.
 
-Scanned for the literal `BETTER_AUTH_SECRET` value and the database password:
+### 7.12 US-12 — **absent by design, not tested**
 
-| Surface | Secret | DB password | Neon host |
-|---|---|---|---|
-| `/sign-in` HTML | 0 | 0 | 0 |
-| `.next/static` (everything client-served) | 0 | 0 | 0 |
-| whole `.next` tree | 0 | — | — |
-
-Also: **no client component imports Prisma** (cross-checked every `"use client"`
-file against `lib/prisma` / `@prisma/client` — no hits), and the only
-`NEXT_PUBLIC_*` references are `NEXT_PUBLIC_APP_URL` and
-`NEXT_PUBLIC_API_BASE_URL`, neither of which is set in `.env` and neither of
-which carries a secret.
-
----
-
-## 7. Where the suites are thin — what I found there (task 2)
-
-The four gaps I was pointed at, plus what came out of them.
-
-### 7.1 Keyboard tab-order sweep — **done, and it passes**
-
-No suite covers this. I recorded the real focus sequence with a `focusin`
-listener while sending genuine `Tab` keypresses from the top of the document,
-on `/todos` with two rows:
-
-```
-1. Switch to light theme      6. Mark "Undo me" as complete
-2. Account menu               7. Edit "Undo me"
-3. New todo                   8. Delete "Undo me"
-4. status filter (one stop)   9. Mark "Buy milk" as complete
-5. Filter todos by priority  10. Edit "Buy milk"
-6. Search todos              11. Delete "Buy milk"
-```
-
-then wraps. **The order matches the visual order exactly**, every interactive
-control is reachable, and each row's three controls are grouped together and
-correctly named with the todo's title. No keyboard traps, no off-screen stops,
-no positive `tabindex`. **NFR-04's tab-order clause: Pass.**
-
-**One thing that looked like a defect and is not.** The status filter appears to
-"skip" `Active`: Tab visits `All`, then leaves the group. That is the correct
-WAI-ARIA radio-group pattern — the group is one tab stop and arrows move inside
-it. I verified the inside works: `ArrowRight` from `All` moves focus to
-`Active`. It is a `role="radiogroup"` of `role="radio"` children. **Correct, not
-a bug** — recording it because it looks alarming in a focus trace and the next
-person will otherwise file it.
-
-**Focus indicators** are visible in both themes (confirmed on the `New todo`
-button in dark mode and throughout the sweep). **Escape** closes the modal and
-**restores focus to the trigger** (§4.9).
-
-### 7.2 Dark mode and visual coverage — **done; two contrast failures found**
-
-No suite covers this either. I measured WCAG 2.1 contrast directly from
-computed styles, compositing every translucent layer down to an opaque
-backdrop (Tailwind v4 emits `oklch`/`oklab`, and several surfaces are 12 %
-tints — naïve sampling gets these badly wrong).
-
-**Dark mode:**
-
-| Element | Ratio | Required | Result |
-|---|---|---|---|
-| `h1 "Your todos"` | 19.74 | 3 | pass |
-| Row title | 17.27 | 4.5 | pass |
-| Completed (de-emphasised) title | 6.75 | 4.5 | pass |
-| `N of M done` count | 7.72 | 4.5 | pass |
-| Status filter, selected | 7.46 | 4.5 | pass |
-| Status filter, unselected | 14.52 | 4.5 | pass |
-| Priority chip "Medium" | 9.22 | 4.5 | pass |
-| Search input text | 17.27 | 4.5 | pass |
-| **`New todo` primary button** | **3.59** | 4.5 | **FAIL — DEF-14** |
-
-**Light mode:**
-
-| Element | Ratio | Required | Result |
-|---|---|---|---|
-| `h1` | 16.25 | 3 | pass |
-| Row title | 14.73 | 4.5 | pass |
-| Completed title | 4.83 | 4.5 | pass |
-| Status filter, selected | 4.68 | 4.5 | pass |
-| **`N of M done` count** | **4.43** | 4.5 | **FAIL — DEF-15** |
-| **`New todo` primary button** | **3.59** | 4.5 | **FAIL — DEF-14** |
-
-**DEF-08 (the dark-mode checkbox fix) is still in** — the checkbox renders
-visibly in dark mode and the row/chip/title figures above are all comfortably
-clear. No regression.
-
-A correction against myself, since a false number here would be worse than
-none: my first measurement flagged the selected `All` filter at **1.51:1**.
-That was **my measurement error**, not the app's — I had treated a 12 %-alpha
-background as opaque. Composited properly it is **7.46:1** and passes. The two
-failures above survived that correction and were re-measured on the
-text-bearing leaf nodes.
-
-### 7.3 Responsive / touch targets — checked at 320, 375 and 1280
-
-| Width | Finding |
-|---|---|
-| 320 px | `scrollWidth` 320, **no horizontal scroll**, zero overflowing elements ✓ |
-| 375 px | checkbox target **44×44** ✓; all row Edit/Delete **44×44** ✓; header buttons **44×44** ✓; status filters 114×44 ✓ |
-| 1280 px | checkbox target 36×36 |
-
-**The 36×36 at desktop is intentional, not DEF-01 regressing.** The class is
-`min-h-11 min-w-11 sm:min-h-9 sm:min-w-9` — 44 px below the `sm` breakpoint
-where touch matters, 36 px above it where the pointer is a mouse. **DEF-01
-remains fixed**; I confirmed the 44 px figure at mobile width, which is the
-width its AC is about.
-
-One genuine miss at mobile width: the search field's clear button is **20×20**
-(**DEF-16**).
-
-### 7.4 The mid-session `401` — **confirmed still broken, and worse than pinned**
-
-See **DEF-13**. It is tracked in `REVIEW.md` as **m-3** and had no QA defect
-number; it has one now.
-
-### 7.5 Non-Chromium — **could not verify**
-
-Both Playwright projects are Chromium (`Desktop Chrome`, `Pixel 7`) and the
-only browser available to me here is Chromium-based. **No WebKit or Firefox
-evidence exists for this release, from the suite or from me.** Stated as an
-unknown, not as a pass. Given the app leans on react-aria and HeroUI v3 —
-libraries with real cross-engine behavioural differences in focus, press and
-overlay handling — this is the largest untested surface remaining after
-DEF-13 is fixed.
+Confirmed **not present**: no `N due today` / `N overdue` line renders above
+the list. Correct for a story marked "not yet built".
 
 ---
 
 ## 8. Defects
 
-Severity: **Critical** = data loss/leak or release-stopping; **Major** = a Must
-story's AC fails; **Minor** = real but non-blocking; **Informational** = noted.
+### DEF-13 — **Major** — **FIXED** ✅ (was the previous gate's blocker)
 
-### DEF-13 — **Major** — a `401` mid-session dead-ends; sign-out + Back reproduces it
+**Status:** **Closed.** Fixed by `dfb302f` (`fix/session-expired-redirect`).
+The fix is a `401` handler on the shared axios instance in `src/lib/http.ts`
+that assigns `signInPathWithNext(pathname + search)` — the shape suggested in
+the last report.
 
-**Status:** new number; previously tracked as `REVIEW.md` **m-3**, confirmed
-still open.
-**Affects:** US-03 (Must), US-04's expired-session clause, NFR-02's spirit.
+Both reproductions re-tested:
 
-**Expected** — `docs/PRD.md` §3 US-03:
+**Reproduction A — sign out, then Back.** Signed in through the UI (so real
+history exists — `history.length` 3), signed out, pressed Back.
 
-> "Given I have signed out, When I press the browser Back button to return to
-> `/todos`, Then I am redirected to `/sign-in` and no todo data is rendered."
+| | Last pass | **This pass** |
+|---|---|---|
+| URL after Back | `/todos?…`, dead-end panel | **`/sign-in?next=%2Ftodos`** ✓ |
+| Page content | "Couldn't load your todos" + dead `Try again` | **`"Welcome back — Sign in to see your todos."`** ✓ |
+| Todo data rendered | none | **none** ✓ |
 
-and US-04:
+**Reproduction B — session invalidated server-side mid-session.** Signed in,
+deleted the session rows in Postgres, clicked a row's completion checkbox.
 
-> "Given my session cookie is expired or invalid, When I request a protected
-> route, Then I am treated as unauthenticated and redirected to `/sign-in`."
+| | Last pass | **This pass** |
+|---|---|---|
+| Result | `401`, toast, **no redirect**, stranded on `/todos` | **redirected to `/sign-in?next=%2Ftodos`** ✓ |
+| `?next=` preserved | n/a | **yes** ✓ |
+| Anything written | no | **no** — `completed` still `f` ✓ |
 
-**Reproduction A — the ordinary one (no special setup):**
-
-1. Sign in; land on `/todos`.
-2. Open the account menu → **Sign out**. You arrive at `/sign-in`. ✓
-3. Press the browser **Back** button.
-
-**Actual:** the URL returns to `/todos?…` and the app shell renders with an
-error panel:
-
-> **Couldn't load your todos** — Sign in again to continue. — `[Try again]`
-
-The user is **not** redirected to `/sign-in`. `Try again` re-fetches, `401`s
-again, and returns the same panel — there is no control on the screen that
-leads to sign-in. The header still renders the signed-in account avatar.
-
-**Reproduction B — a session invalidated server-side mid-session:**
-
-1. Sign in, sit on `/todos` with a row visible.
-2. Invalidate the session server-side:
-   `delete from session s using "user" u where u.id = s."userId" and u.email = '<account>';`
-3. Click a row's completion checkbox.
-
-**Actual:** `PATCH /api/todos/{id}/status` → `401`. A danger toast reads
-`Sign in again to continue.` The checkbox correctly stays unchanged, the stale
-list stays on screen, and **no redirect happens**. Still on `/todos`.
-
-**What is *not* wrong, and bounds the severity:**
-
-- **No data leaks.** The Back-button page renders no todo data
-  (`/Buy oat milk/` absent from the document).
-- **Nothing writes.** The `401` is returned before any database work.
-- **No false success.** The checkbox reverts; the failure is reported honestly.
-- **A fresh navigation is handled correctly** — reloading that same URL
-  redirects to `/sign-in?next=%2Ftodos%3Fstatus%3Dactive%26priority%3Dhigh`,
-  query string preserved. The server-side guard is sound; the gap is purely
-  client-side.
-
-**Why it blocks:** it was pinned on the assumption that a mid-session expiry is
-rare. Reproduction A is not rare — it is sign out, then Back, which users do
-constantly, and it is written into US-03's AC verbatim. The user is left on a
-dead screen whose only offered action cannot succeed, while the chrome claims
-they are signed in.
-
-**Fix shape (not my call, but it is small):** the app has one shared axios
-instance at `src/lib/http.ts` with a response interceptor already in place. A
-`401` there can redirect to `signInPathWithNext(location.pathname + location.search)`
-— the sanitiser it needs already exists in `src/lib/routes.ts` and is already
-tested.
+**US-03's and US-04's criteria now pass.**
 
 ---
 
-### DEF-14 — **Minor** — primary button text fails AA in **both** themes
+### DEF-17 — **Low** — sign-in error copy does not match the string US-02 quotes
 
-**Affects:** NFR-06.
+**Status:** new.
+**Affects:** US-02 (Must) — wording only. **No security impact.**
 
-**Expected** — `docs/PRD.md` §5 NFR-06:
+**Expected** — `docs/PRD.md` US-02, twice:
 
-> "Text meets WCAG AA contrast (4.5:1 for body text) in both themes."
+> "Then I remain on `/sign-in` and see the error **"Invalid email or password"**."
 
-**Actual:** the primary button label is `rgb(252,252,252)` on `rgb(4,133,247)`
-= **3.59:1** at **14 px** (not large text, so 4.5:1 applies). Identical in light
-and dark — it is one accent token, so the theme is irrelevant.
+> "Then I see the same message **"Invalid email or password"** (no hint that the
+> account does not exist)."
 
-**Reproduction:** load `/todos` in either theme, measure the `New todo` button's
-label against its own background. Same token backs the modal's `Add todo` /
-`Save changes` submit buttons and the toast's `Undo` action, so the fix is
-one token, not four.
+**Actual:** both cases render
 
-**Note:** at 3.59:1 it clears AA for *large* text (3:1) — so darkening the
-accent slightly, or bumping the label to 16 px semibold, would each close it.
+> **"Sign in failed — That email and password don't match. Try again."**
 
----
+**Reproduction:**
 
-### DEF-15 — **Minor** — muted count text fails AA in light mode
+1. Sign up any account, then go to `/sign-in`.
+2. Enter the correct email with password `wrong-password-9` → submit.
+   → `Sign in failed / That email and password don't match. Try again.`
+3. Enter a nonexistent email with any password → submit.
+   → **the identical string.**
 
-**Affects:** NFR-06.
+**Why this is Low, not Major.** The criterion's actual *purpose* — stated in
+its own parenthesis, "no hint that the account does not exist" — is **fully
+satisfied**: I compared the two rendered strings programmatically and they are
+**identical**. `SignInForm.tsx` uses one constant
+(`INVALID_CREDENTIALS_MESSAGE`) for both branches, with a comment saying so.
+There is no account-existence oracle.
 
-**Expected:** as DEF-14 — 4.5:1 for body text in both themes.
+**And the PRD is probably the doc that is wrong.** `docs/DESIGN.md` §copy deck
+line 1065 specifies exactly the implemented string:
 
-**Actual:** the `N of M done` count beside the heading is `rgb(113,113,122)` on
-`rgb(245,245,245)` = **4.43:1** at 14 px. Marginal, but under.
+| Bad credentials | `Sign in failed` | `That email and password don't match. Try again.` |
 
-Dark mode is fine (7.72:1). Same muted token is comfortable elsewhere in light
-mode where it sits on white (`rgb(255,255,255)`) rather than the page's
-`rgb(245,245,245)`; it is the slightly darker page background that tips it
-under.
+So this is a **PRD-vs-DESIGN divergence**, not an implementation miss. The
+implemented copy is friendlier and says the same thing.
 
----
-
-### DEF-16 — **Minor** — search clear button is 20×20 at mobile width
-
-**Affects:** NFR-05.
-
-**Expected** — `docs/PRD.md` §5 NFR-05:
-
-> "Primary tap targets are at least 44x44px."
-
-**Actual:** at 375 px wide, `button.search-field__clear-button` measures
-**20×20**. Every other control on the screen is correctly 44×44 at that width
-(checkbox, Edit, Delete, header buttons, filters), which is what makes this one
-stand out as an oversight rather than a decision.
+**Recommendation:** amend US-02's two criteria to quote the copy deck, rather
+than change the code. **Does not block.**
 
 ---
 
-### Previously-filed defects — status this pass
+### DEF-18 — **Low (documentation)** — US-05's amended criterion contradicts itself and is not executable as written
+
+**Status:** new. This is the "untestable as written" the brief asked me to
+watch for. **The application behaviour is correct** — the *criterion* is not.
+
+**The criterion** — `docs/PRD.md` US-05:
+
+> "…and it appears in the list without a full page reload, **in its place under
+> the default list order (§2) — for an undated todo, first among the undated
+> ones**."
+
+**The contradiction.** The two halves cannot both be true. §2's default order
+sequences undated todos by `priority` **descending**, then `createdAt`
+descending. A new todo defaults to `priority = medium` (§2's field table). So
+whenever a `high`-priority undated todo already exists, §2 requires the new
+todo to sit **below** it — which makes "first among the undated ones" false.
+"First among the undated ones" is only true when no undated todo of higher
+priority exists, which the criterion does not say.
+
+**Reproduction:**
+
+1. Create an undated todo `EXISTING-high-undated` with priority **high**.
+2. Create an undated todo `EXISTING-low-undated` with priority **low**.
+3. Through the UI, create `NEW-default-undated` — title only, all defaults.
+
+**Actual order rendered:**
+
+```
+["EXISTING-high-undated", "NEW-default-undated", "EXISTING-low-undated"]
+```
+
+The new todo is at **index 1**, not index 0.
+
+- Against the **first** half of the criterion ("in its place under the default
+  list order") → **Pass.** `medium` correctly sorts below `high` and above
+  `low`.
+- Against the **second** half ("first among the undated ones") → **Fail.**
+
+**I graded US-05 Pass** because §2 is the normative definition, the trailing
+clause is an illustrative gloss on it, and the app matches §2 exactly. But a
+tester executing the sentence literally, as the PM asked QA to be able to do,
+gets a false failure — and the previous phrasing this replaced ("appears at the
+top of the list") was wrong for the same reason.
+
+**Recommendation:** delete the trailing clause, or restate it as "for an
+undated todo of default priority, among the undated ones and above any of lower
+priority". **Does not block.**
+
+---
+
+### Previously-known defects — status this pass
 
 | Defect | Status |
 |---|---|
-| **DEF-01** (44×44 touch target) | **Still fixed** — 44×44 confirmed at 375 px; the 36×36 at desktop is the intended `sm:` step-down, not a regression |
-| **DEF-02** (`PressResponder` warning) | **Still open**, confirmed present, console noise only — not re-diagnosed |
-| **DEF-04** (`GET /api/todos/[id]` → `405`) | **Unchanged, informational** — re-observed; identical for owner and stranger, leaks nothing |
-| **DEF-08** (dark-mode checkbox contrast) | **Still fixed** — no regression |
-| **DEF-11** (deleted row stays live until refetch) | **Fixed** — row now disappears immediately on confirm |
-| **DEF-12** (pending guard on rapid toggles) | **Not re-tested by me** — covered by the e2e suite's "Undo twice sends exactly one request", which passed |
+| **DEF-01** (44×44 touch target) | **Still fixed** — not re-measured this pass |
+| **DEF-02** (`PressResponder` warning) | **Still open — confirmed, not re-diagnosed.** Present in the Playwright run's `[browser]` output and in every one of my browser probes: `A PressResponder was rendered without a pressable child. Either call the usePress hook, or wrap your DOM node with <Pressable> component.` Console noise only; no functional impact observed |
+| **DEF-04** (`GET /api/todos/[id]` not a route) | **Unchanged, informational** — re-observed (§6.1); identical for owner and stranger, leaks nothing |
+| **DEF-08** (dark-mode checkbox contrast) | **Not re-tested this pass** |
+| **DEF-11** (deleted row stays live until refetch) | **Still fixed** — row disappears immediately on confirm (§7.9) |
+| **DEF-12** (pending guard on rapid toggles) | **Not re-tested directly** — covered by the e2e suite's "Undo twice sends exactly one request", which passed |
+| **DEF-14** (primary button contrast) | **Not re-tested this pass** — see §10 |
+| **DEF-15** (muted count contrast) | **Not re-tested this pass** — see §10 |
+| **DEF-16** (search clear button 20×20 at mobile) | **Not re-tested this pass** — see §10 |
 
 ---
 
-## 9. Ship / do not ship
+## 9. Console and network (task 5)
 
-> ## **DO NOT SHIP** until DEF-13 is fixed.
+Captured on every page across all browser probes.
 
-### What is genuinely solid
+### 9.1 Console
 
-Most of this release is in good shape, and the gate should say so plainly:
+| Message | Assessment |
+|---|---|
+| `A PressResponder was rendered without a pressable child…` | **DEF-02**, known and open. Confirmed present, not re-diagnosed. A React Aria warning; no functional impact seen in any flow I drove |
+| `Failed to load resource: … 401 (UNAUTHORIZED)` | **Expected.** The browser logging the deliberate `401`s I provoked — bad sign-in, and the DEF-13 B invalidated session |
+| `Failed to load resource: … 422 (UNPROCESSABLE_ENTITY)` | **Expected.** better-auth's response to the duplicate-email sign-up I submitted on purpose |
 
-- **Both suites green**, first run, no flakes: 143 Vitest in 2.4 s, 30
-  Playwright in 1.1 m.
-- **Cross-user isolation holds under an independent method** — 26/26 over real
-  HTTP with real cookies, `404` everywhere it should be, no `500`s, no
-  existence oracle, A's data byte-for-byte intact afterwards. This is the
-  guarantee I was most worried about and it is the one I am most confident in.
-- **The new confirm/Undo model is implemented correctly and consistently** —
-  every cell of the rule's own table checks out, including the negative cases
-  (delete offers no Undo; toggle and delete raise no skeleton).
-- **Keyboard tab order passes** a sweep nothing had run before.
-- **No secrets reach the client.** No console errors. Responsive down to 320 px.
-- The tab icon landed and the old favicon is gone.
+**No React errors, no hydration warnings, no unhandled rejections, no key
+warnings.** Apart from DEF-02 the console is clean.
 
-### Why DEF-13 still blocks
+### 9.2 Network
 
-PRD §7 release criterion 1 is "All Must stories pass their acceptance criteria."
-US-03 is a **Must**, and its Back-button AC fails by its own words. This is not
-me reading the AC uncharitably to find something: the AC anticipated this exact
-interaction and wrote down the exact expected behaviour.
+Every request ≥ 400 across the whole pass, excluding `/_next/*`:
 
-What moved it, for me, from "known issue, ship anyway" to "blocker" is
-**Reproduction A**. It had been carried as a rare mid-session expiry. It is not
-rare — signing out and pressing Back is a completely ordinary thing to do, it
-reproduces every time, and it leaves the user on a screen that says "Sign in
-again to continue" while offering no way to sign in and still showing a
-signed-in header. That is a dead end reachable in two clicks from a normal
-sign-out.
+| Request | Why |
+|---|---|
+| `422 POST /api/auth/sign-up/email` | duplicate-email test (US-01) |
+| `401 POST /api/auth/sign-in/email` | wrong-password / unknown-email tests (US-02) |
+| `401 PATCH /api/todos/{id}/status` | DEF-13 reproduction B, session deleted on purpose |
 
-I want to be precise about severity, because it would be wrong to inflate it:
-**this is not a security defect.** No data leaks, nothing writes, the server
-side refuses correctly every time, and a fresh navigation redirects properly
-with `?next=` intact. If the call were mine alone and the release were urgent, I
-would say the risk of shipping is *reputational and usability*, not *safety*.
-But it fails a Must story's stated AC, the fix is small and localised (one
-interceptor in `src/lib/http.ts`, using a sanitiser that already exists and is
-already tested), and this is a release gate rather than a judgement call about
-urgency. So: fix it, re-run both suites, and re-test the two reproductions in
-§DEF-13. That is a short loop.
-
-**DEF-14, DEF-15 and DEF-16 do not block.** They are real NFR-06/NFR-05 misses
-and should be scheduled, but they are Minor, none of them is a regression, and
-NFR-06 is a **Should** in PRD §6. DEF-14 is worth doing soon simply because it
-is one design token and it affects every primary button in the app.
-
-### Conditions I would want met before the next gate
-
-1. **DEF-13 fixed**, with both reproductions in §DEF-13 re-tested.
-2. Both suites re-run green.
-3. **A regression test for DEF-13** — the e2e harness can express this
-   directly (sign out, `goBack()`, assert the URL is `/sign-in`), and without
-   one this will come back.
-4. The **dev-server production-database foot-gun** (§1.1) given the same guard
-   the test harness already has.
+**Every non-2xx was one I deliberately caused. No unexplained failures, no
+`500`s anywhere in the pass.**
 
 ---
 
-## 10. Not tested / could not verify
+## 10. Build quality gate (NFR-10 / release criterion 4) — **Pass**
 
-Listed explicitly so none of it is mistaken for a pass.
+Not asked for, but PRD §7 makes it a release criterion, so I ran it:
+
+| Command | Result |
+|---|---|
+| `npx tsc --noEmit` | **clean**, exit 0 |
+| `npm run lint` | **clean**, no warnings or errors |
+| `npm run build` | **succeeds** — 10 routes compiled, static generation 8/8 |
+
+*(Build run with the test `DATABASE_URL` and a placeholder `BETTER_AUTH_URL` /
+`BETTER_AUTH_SECRET`, never production values.)*
+
+---
+
+## 11. Two environment events worth recording
+
+### 11.1 The checkout moved to another branch mid-pass
+
+The working tree was on **`develop` @ `cd0f869`** when this pass started and
+when every result below §10 was produced. By the time I wrote this file, the
+checkout was on **`fix/deploy-region` @ `32310b7`**. I did not run any
+`checkout`, `branch` or `commit` — the reflog shows the move and the commit
+came from outside this session:
+
+```
+32310b7 HEAD@{0}: commit: fix: run the functions in the same region as the database
+cd0f869 HEAD@{1}: checkout: moving from develop to fix/deploy-region
+```
+
+**This does not invalidate anything in this report:**
+
+- **`develop` still points at `cd0f869`** — the exact commit I tested.
+- `32310b7` touches only **`vercel.json`** and **`docs/STACK.md`**. It changes
+  **no** file under `src/`, `e2e/`, `tests/` or `prisma/`, so the application
+  and both suites are byte-identical to what I exercised.
+- It does not touch this file either, so my edit carries cleanly.
+
+**Action needed from whoever lands this:** this report is an uncommitted change
+sitting on `fix/deploy-region`. **It describes the gate for `develop`** and
+should be committed there. `docs/QA-REPORT.md` is identical across both
+branches, so `git checkout develop` carries the modification over without
+conflict. I did not switch branches myself, per the brief.
+
+Worth noting for the release decision: **`32310b7` is not covered by this
+gate.** My verdict in §12 is for `develop` @ `cd0f869`. A `vercel.json` adding
+a function region is a deployment-topology change that this pass did not
+exercise at all.
+
+### 11.2 The local Postgres was stopped mid-pass
+
+**The local Postgres stopped in the middle of this pass**, at `23:01:42 +07`,
+between probe runs. Its log records:
+
+```
+2026-08-16 23:01:42.233 +07 [66733] LOG:  received smart shutdown request
+```
+
+A *smart shutdown request* is a deliberate stop issued from outside — DBngin's
+own stop, or a `pg_ctl stop`. **It was not caused by my queries, and I issued
+no shutdown**; my session only ever ran `SELECT`s plus the one scripted
+`DELETE FROM session` for DEF-13 reproduction B. I restarted the instance with
+DBngin's own binary against its own data directory (`pg_ctl … start`), which is
+starting a stopped service, not killing one. All data was intact afterwards
+(32 users, 65 todos), and the dev server reconnected cleanly — re-verified with
+a fresh sign-up before continuing.
+
+Flagging it because **DBngin's UI may still show that instance as stopped**
+even though it is running, and because anything running against `:5432` at that
+moment would have seen connection errors that had nothing to do with this app.
+
+I stopped **only the dev server I started** (port 3483) at the end of the pass.
+Nothing else was killed.
+
+---
+
+## 12. Ship / do not ship
+
+> ## **SHIP.**
+
+**Against PRD §7's release criteria:**
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | All **Must** stories pass their acceptance criteria | **Yes** — US-01, US-03, US-04, US-05, US-06, US-07, US-09 all Pass. US-02 is Partial on **wording only**, and its behavioural and security criteria all pass |
+| 2 | A test proves User A cannot read, edit, toggle or delete User B's todo via a direct request | **Yes** — the Vitest suite, plus my independent 31-check HTTP baseline (§6) |
+| 3 | Unauthenticated access to every protected route redirects to `/sign-in` | **Yes** — server-side and, now that DEF-13 is fixed, client-side too |
+| 4 | Build quality gate green | **Yes** (§10) |
+
+**Why this ships and the last pass did not.** The last gate was blocked by one
+thing: DEF-13, a Major sitting on US-03's acceptance criteria. **It is fixed,
+and I verified the fix by both of its original reproductions rather than by
+reading the diff.** Nothing else on the blocking list survived.
+
+**The new feature is sound where it is hardest to be sound.** The timezone
+boundary — the one thing that would have been invisible at UTC and wrong for
+half the planet — is correct at **+14 and −11**, tested at instants where the
+two calendars genuinely disagree, in a real browser. The single-section rule
+holds in both directions and under filters and search. The four-key order is
+right end to end, including the case the whole change exists for: **a
+low-priority todo due today outranks a high-priority one due next month.**
+
+**Why the two new defects do not block.** Both are **Low**, and **neither is a
+code defect**:
+
+- **DEF-17** is a wording divergence where `DESIGN.md` and the implementation
+  agree with each other and the PRD disagrees with both. The security property
+  behind the criterion — no account-existence oracle — I verified holds exactly.
+- **DEF-18** is a self-contradictory acceptance criterion. The app matches PRD
+  §2, which is normative.
+
+Both are fixed by editing `docs/PRD.md`, not `src/`. Neither should hold a
+release.
+
+**What I would do in the next sprint, none of it blocking:**
+
+1. **Amend the two PRD criteria** (DEF-17, DEF-18) so the next tester is not
+   re-deriving these conclusions.
+2. **Pin the timezone in the tests, not the environment** (§3.4) — set
+   `timezoneId` per Playwright project and a fixed instant in the unit tests.
+   Today the guarantee lives in one CI env var, and a green local run proves
+   less than it appears to.
+3. **Fix `.env`** (§2). It has now survived two gates pointing a plain
+   `npm run dev` at production. It is the highest-risk item in the repo and it
+   is not a product defect, which is exactly why it keeps not getting fixed.
+4. **DEF-02**, still open, still cosmetic.
+5. **DEF-14 / DEF-15 / DEF-16** — the contrast and tap-target misses from last
+   pass, not re-tested here (§13).
+
+---
+
+## 13. Not tested / could not verify
+
+Stated plainly, so nothing here reads as a pass it did not earn.
 
 | Item | Why |
 |---|---|
-| **Space / Enter activation by keyboard** | **Harness fault.** This browser tool delivers key events with `key: ""`, `code: ""`, `keyCode: 0` for activation keys — verified directly with a `keydown` listener. `Tab`, `Escape` and `ArrowRight` arrive correctly and were used. So tab *order*, arrow navigation within the radio group, and Escape are verified; **activating a control via Space/Enter is unverified by me.** The e2e suite exercises real keyboard activation in Chromium. |
-| **Non-Chromium browsers** | No WebKit/Firefox available; both Playwright projects are Chromium. Unknown for this release (§7.5). |
-| **Undo pressed through the UI end-to-end** | The toast expires in 4 s and my tool round-trip is slower, so I could not reliably click it. I verified the **affordance** — Undo present on create/edit/toggle, absent on delete — via a `MutationObserver` that cannot miss a toast. The e2e suite verifies Undo's *behaviour* with real clicks, including double-press coalescing and a later write disarming an earlier Undo; those 30 specs passed. |
-| **`aria-busy="true"` observed in flight** | Local round trips were 5–11 ms. The attribute exists and reads `false` at rest; the in-flight state is asserted by the suite, not re-observed by me. |
-| **Flash of wrong theme on first paint (NFR-06)** | The bootstrap script is in `<head>` and applied `dark` from `localStorage` correctly on load, but I could not measure first-paint timing through this harness. Mechanism correct; flash itself unverified. |
-| **Production database state** | I never connected to it and never pointed anything at it (§1.1). I therefore assert only that my work could not have reached it — not that I inspected it. |
-| **`npm run build` / `tsc --noEmit` / `lint` (NFR-10)** | Not run in this pass. CI runs all three ahead of the tests, and the Senior verified that job end-to-end after the B-1 fix. |
-| **DEF-12** | Not re-tested directly (§8). |
-| **Mutation testing of the suites** | Deliberately not repeated (§2.3). |
-
----
-
-*Isolation script and raw captures for this pass are in the session scratchpad
-(`isolation.sh`). Working tree clean; `docs/QA-REPORT.md` is the only file this
-pass modified. My dev server on port 3475 was stopped at the end of the pass —
-by PID, and no other process was touched.*
+| **DEF-14, DEF-15, DEF-16** (contrast and tap-target defects from last pass) | **Not re-tested.** No contrast measurement or mobile-viewport pass this gate; the brief directed the effort at the due-date feature, isolation, and the story walkthrough. **Their status is unknown, not fixed** |
+| **DEF-08** (dark-mode checkbox contrast) | Not re-tested this pass |
+| **DEF-01** (44×44 touch target) | Not re-measured this pass |
+| **NFR-05 / NFR-06** (responsive, dark mode) | Not systematically re-tested. All UI work this pass was at desktop width in the default theme |
+| **DEF-12** (pending guard on rapid toggles) | Not re-tested directly; covered indirectly by a passing e2e spec |
+| **US-12** | Not built, not tested, confirmed absent (§7.12) |
+| **NFR-09** (200-todo performance, single query, no N+1) | **Not measured.** I did not seed 200 todos or count queries. The `orderBy` uses the documented index and sectioning is client-side, but I did not verify the query plan |
+| **US-05 network-failure path** ("typed values remain in the form") | **Not tested.** I did not inject a create-request failure |
+| **US-07 toggle-failure revert** | **Not tested** directly this pass; the e2e fault-injection spec covers it and passed |
+| **Mutation testing** | Not re-done. Recorded in `docs/REVIEW.md` and independently verified there; re-running it would spend the gate's budget on a settled question |
+| **Real multi-device / real-clock midnight** | Simulated with a pinned browser clock (§5.3), not observed on a device left running overnight |
