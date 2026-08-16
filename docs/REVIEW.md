@@ -2359,3 +2359,556 @@ does not put Playwright in CI.** That should be a deliberate decision, said out
 loud, not a thing everyone discovers in a month. Both branches touch
 `package.json` / `package-lock.json`, so whichever merges second conflicts
 trivially.
+
+---
+
+# Senior review — three branches → `develop`
+
+`feature/list-spacing` (`0af975f`), `fix/session-expired-redirect` (`e788781`),
+`fix/e2e-ci-failures` (`6cc55a0`). They merge independently, so each gets its
+own verdict. Also settled below: the fate of `fix/undo-window`, and the ranking
+of the product defect the CI diagnosis surfaced.
+
+## Verdicts, up front
+
+| Branch | Verdict |
+|---|---|
+| `feature/list-spacing` | **Changes requested** — one real regression (B-1), one open designer question I have now measured |
+| `fix/session-expired-redirect` | **Blocked** — merging it turns CI red (B-2), and it contradicts an unamended spec |
+| `fix/e2e-ci-failures` | **Changes requested** — the diagnosis is right and I confirmed it from source; the constant is measurably off by one (B-3) |
+| `fix/undo-window` | **Do not drop it. Re-land it as a product change**, with the CI justification removed |
+
+The diagnosis on `fix/e2e-ci-failures` is the best piece of work in this batch
+and most of my notes on it are refinements of a correct argument. The two
+`fix/…` branches both need work before they land; `feature/list-spacing` needs
+one file it forgot.
+
+## How I reviewed
+
+Read-only from the main checkout; the two worktrees were read, never checked
+out. Nothing was committed or merged.
+
+Three things I ran rather than reasoned about, because reasoning was not going
+to settle them:
+
+1. **The contrast measurement the designer asked for and nobody had done.**
+   Computed from the real token graph in
+   `node_modules/@heroui/styles/dist/themes/default/variables.css` — oklch to
+   sRGB, `color-mix(in oklab, …)` evaluated properly, WCAG relative luminance.
+   Numbers in B-1/M-1.
+2. **The HeroUI toast mechanism.** Read
+   `node_modules/@heroui/react/dist/components/toast/toast-queue.js` and
+   `@heroui/styles/dist/components/toast.css` directly.
+3. **The view-transition frame gap.** Reproduced HeroUI's `defaultWrapUpdate`
+   chaining verbatim on a static page in the project's own bundled Chromium and
+   sampled `document.getAnimations()` every frame. This is what produced B-3.
+
+`npx tsc --noEmit` is clean on `fix/session-expired-redirect`.
+
+---
+
+## Blocker
+
+**B-1 — `feature/list-spacing`: `TodoListSkeleton` was not updated, and its own
+comment now lies.**
+`src/app/todos/components/TodoListSkeleton.tsx` still renders
+`<ul className="divide-y divide-border-secondary">` with `py-3` rows and no
+`p-2`, under a comment that reads *"Row geometry matches `TodoRow` so nothing
+shifts on swap (§4.8)."* After this branch it does not match on any axis:
+`divide-y` vs `gap-1.5`, no wrapper padding vs `p-2`, `py-3` vs `py-3.5`. Over
+the four skeleton rows that is roughly 50px of height appearing at the moment
+the real list swaps in — a visible jump on every load and every
+`reloadWithSkeleton()`, which fires after each create and each edit.
+
+It is also self-defeating: the skeleton is the first thing a user sees on
+`/todos`, and it still renders the ruled-table look this branch exists to
+remove. The fix is three tokens in one file and belongs in the same commit.
+
+**B-2 — `fix/session-expired-redirect`: merging this turns CI red.**
+`e2e/fault-injection.spec.ts` → *"a mid-session 401 dead-ends: a toast, no
+redirect, no session-expired copy"* pins the current behaviour deliberately and
+asserts, among other things:
+
+```ts
+await expect(todos.toasts.filter({ hasText: UNAUTHORIZED_MESSAGE })).toBeVisible();
+await expect(page).toHaveURL(/\/todos$/);
+await expect(page.getByRole("heading", { name: "Your todos" })).toBeVisible();
+```
+
+All three fail once the interceptor lands. The spec's own header says so — *"the
+day it is fixed, this test fails and gets rewritten"* — and the commit message
+acknowledges it. It just was not done. The rewrite is the branch's proof of
+work, not a follow-up: it is the only evidence that the redirect fires at all,
+and it is cheap, because `page.context().clearCookies()` already produces a real
+server-issued 401 without any mocking. **This branch should not merge without
+that spec flipped and green.**
+
+While flipping it, assert the `?next=` round trip too — that the user lands on
+`/sign-in?next=%2Ftodos` and that signing in returns them to `/todos`. That is
+US-04 and nothing currently covers it from the client path.
+
+**B-3 — `fix/e2e-ci-failures`: `QUIET_FRAMES = 2` is exactly the width of the
+gap it is meant to bridge. It needs to be 3.**
+
+This is the one finding that changes the branch. The reasoning behind two
+frames is sound — the chain does release the DOM between links, and a single
+idle sample can land in that release — but the measured gap is **two frames,
+not one**, so requiring two consecutive quiet frames is satisfied *by the gap
+itself*.
+
+I reproduced `defaultWrapUpdate` verbatim on a static page and sampled every
+frame through a `close` + `add` pair dispatched in one task, the shape
+`showUndoableSuccess` produces:
+
+```
+runs: quiet×1, BUSY×30, quiet×2, BUSY×30, quiet×236
+interior quiet gap: 2 frames   (4/4 runs, stable)
+```
+
+Then I ran the helper under review against that same chain:
+
+```
+QUIET_FRAMES=2  ->  returns at frame ~33; next 4 frames all BUSY   4/4 trials
+QUIET_FRAMES=3  ->  returns at frame ~67; next 4 frames all quiet  0/4 trials
+QUIET_FRAMES=4  ->  same as 3
+QUIET_FRAMES=5  ->  same as 3
+```
+
+At `2` the helper returns **inside the dead zone between the close and the
+add**, and the add transition starts on the very next frame — which is the
+precise condition the branch identifies as the bug. It does not settle the
+chain; it finds the seam in it. At `3` it waits out the whole chain, every time.
+
+So: two quiet frames is **load-bearing, not superstition — and off by one.**
+The author reasoned their way to the right shape of fix and then picked the one
+value that does not work. Change `QUIET_FRAMES` to `3` and record the measured
+2-frame gap in the comment, so the number has a reason attached instead of a
+story.
+
+Two honest caveats. My probe is a synthetic page, not the app, so the constant
+should be confirmed against a real run before this is called closed — though the
+gap is a property of the chaining pattern and Chromium's transition lifecycle,
+not of the page content, so I expect it to carry. And `3` is empirical too; see
+M-5 for the state-based wait that would make the constant unnecessary.
+
+---
+
+## Major
+
+**M-1 — `feature/list-spacing`: the measurement the designer asked for, done.
+It does not clear the branch; it hands the designer a decision.**
+
+DESIGN §8.6 asked for `--surface-hover` to be re-measured against `--surface`
+once `divide-y` went, since DEF-08's light-mode headroom was already thin at
+3.25:1. Nobody had done it. Here it is.
+
+First, provenance of the 3.25:1, because it was undocumented anywhere outside
+that one sentence: it is the **checkbox control border against the hovered row
+background in light mode** — `TodoRow`'s
+`border-[color-mix(in_srgb,var(--foreground)_50%,transparent)]` composited over
+`--surface-hover`. I get **3.233:1**, which is the figure. Against the 3:1 that
+WCAG 1.4.11 asks of a control boundary that is 0.23 of headroom, and it is the
+weakest thing on the screen.
+
+**That number is unchanged by this branch** — no colour is touched. Good; it is
+not a regression. Recording it so the next person does not have to derive it
+again:
+
+| Measurement | Light | Dark | Floor |
+|---|---|---|---|
+| Checkbox border vs hovered row surround | **3.23:1** | 4.77:1 | 3:1 (1.4.11) |
+| Checkbox border vs resting row surround | 3.38:1 | 5.14:1 | 3:1 |
+| `--surface-hover` vs `--surface` — **the row boundary** | **1.20:1** | **1.19:1** | — |
+| `--border-secondary` vs `--surface` — the `divide-y` rule this removes | 1.71:1 | 1.78:1 | — |
+| Row title vs `--surface-hover` | 14.72:1 | 14.57:1 | 4.5:1 |
+
+Two things follow, and the second is the one that matters.
+
+*The hover is not a boundary.* At 1.20:1 it is roughly a third of the strength
+of the hairline it replaces, and nothing like the 3:1 a boundary that carries
+meaning would need. It reads as a tint, not an edge.
+
+*In the resting state there is now no boundary at all.* This is the part I do
+not think anyone has said out loud. `TodoRow` has no background of its own — the
+rows sit on `<Card><Card.Content className="p-0">`, which is `--surface`. With
+`divide-y` gone, `gap-1.5` is six pixels of the *same colour as the row*
+between two rows of that colour. Not a weak separator: not a separator. And the
+designer's framing — *"hover and focus become the only row boundary"* — is
+optimistic on both counts. There is no row-level focus style at all; the `<li>`
+is not focusable and `group-focus-within` only reveals the action buttons, at
+`lg:` only. And **hover does not exist on touch**, so on a phone the resting
+state is the only state and the list has no row separation whatsoever.
+
+To be clear about scope: this is what the designer asked for in §8.4.1 — drop
+`divide-y`, `p-2`, keep the rounded hover — so the branch implemented the
+instruction faithfully and the numbers are the answer to §8.6's question, not a
+finding against the author. But the answer is *no, this does not hold up*, and
+it should go back before it merges. It is not a WCAG failure (the `<li>` is not
+itself an interactive component, so 1.4.11 does not bite) — it is a legibility
+regression, and it is worse on the majority platform.
+
+The cheapest thing that keeps the pills and restores an edge is to give the row
+its own fill so the gap has something to separate — `--surface-secondary` on the
+row against `--surface` on the card. That is only 1.15:1, so it is a shape cue
+rather than a contrast one, but it is a real edge at every row in every state
+including touch. For reference, if the intent is a hover that genuinely reads as
+a state, `--surface-hover` would have to move from `92%/8%` to about **`55%/45%`**
+to clear 3:1 (3.31:1 light, 3.83:1 dark) — which is far too loud for a list
+hover, and is the honest reason a hover cannot be asked to carry this job alone.
+**Designer's call. It should be made before merge, not after.**
+
+**M-2 — `fix/session-expired-redirect`: it does not fix the reproduction QA
+actually described.**
+DEF-13's stated path is sign out, press Back — bfcache. A bfcache restore
+replays no requests. Nothing in the app listens for `pageshow`
+(`grep` for `pageshow`/`visibilitychange` across `src/` returns nothing), and
+this interceptor only fires on an actual 401 *response*. So the restored page
+still shows a signed-in header over a stale list, and stays that way until the
+user tries something. The branch converts "stranded forever" into "stranded
+until you touch it, then bounced" — a real improvement, and not what the ticket
+says. Either add a `pageshow`/`persisted` re-check, or amend the ticket to say
+what is actually fixed. Do not let it close DEF-13 silently.
+
+**M-3 — `fix/session-expired-redirect`: a present-but-invalid cookie reads as an
+infinite redirect loop, and this branch is what makes that path reachable.**
+The early return guards a 401 raised *on* `/sign-in`. It does not guard the
+other loop, which runs through the proxy:
+
+1. 401 → `window.location.assign("/sign-in?next=/todos")`
+2. `src/proxy.ts`: `getSessionCookie()` checks **presence, never validity** — the
+   cookie is still in the jar, `isAuthPath` is true → redirect to `/todos`
+3. `/todos`: cookie present, protected path → falls through
+4. `requireUser()` in `src/app/todos/layout.tsx`: session invalid →
+   `redirect(signInPathWithNext(...))` → back to step 2
+
+That is a loop, and `requireUser`'s own comment names the exact state that
+enters it: *"the cookie is present but expired or invalid — the proxy waves
+those through."*
+
+Being fair about attribution: **this branch does not create the loop.** It is
+already reachable today by any full navigation in that state. What the branch
+does is route the ordinary client 401 into it, turning a latent bug into the
+default outcome of an expired session. QA never hit it because their repro signs
+out, which clears the cookie — which is also why the existing spec's
+`page.reload()` assertion passes.
+
+I could not prove it fires: producing a present-but-invalid session cookie needs
+the harness this branch says it does not have. **It is the single highest-value
+thing to test before this ships** — forge a garbage value into the session
+cookie and load `/todos`. If it loops, the fix belongs in the proxy or in
+`redirectToSignIn` (clear the cookie before assigning), not in another special
+case.
+
+**M-4 — `fix/session-expired-redirect`: a 401 on a write silently destroys the
+user's typed text.**
+`fault-injection.spec.ts` pins the current contract on a failed create: *"the
+modal stays open holding the typed values so the work is not lost."* A full-page
+assignment discards it — modal, form state, everything — with no warning and no
+explanation on the far side, since `?next=` carries no reason. The user typed a
+todo, pressed Add, and arrived at a sign-in screen with their text gone.
+
+**On the assignment-vs-router question you asked: assignment is right, and I
+would keep it.** A `router.push` re-renders inside a React tree whose every
+cached value is stale, above a server-rendered layout that still believes there
+is a user; you would be trusting the thing you just learned is wrong. The full
+document load is what guarantees the proxy and `requireUser` both get a fresh
+look. The cost is exactly this data loss, and it is worth paying — but it has to
+be paid deliberately:
+
+- carry a reason (`?reason=expired`) and render DESIGN §7.9's copy —
+  `You've been signed out` / `Sign in again to continue.` — on the sign-in page,
+  so the user knows why they are there;
+- amend §7.9, which currently specifies an in-page session-expired state and
+  **not** a redirect. Right now the branch and the spec disagree and the spec is
+  the one on record. Whichever way it is settled, one of them has to move.
+
+**M-5 — `fix/e2e-ci-failures`: the wait is on a frame count, not on the queue's
+state, and that is why it needs a magic number at all.**
+Two consequences beyond B-3.
+
+*The bound is in frames, not time.* `MAX_FRAMES = 300` is described as "~5s at
+60fps", which holds only while `requestAnimationFrame` is firing. rAF stalls in
+a page the compositor is not rendering. In that state `page.evaluate` does not
+hit its bound at all — it hangs until Playwright's action timeout, which is the
+outcome the comment says it exists to prevent. A `performance.now()` deadline
+alongside the frame counter costs one line and makes the stated guarantee true.
+The silent return on exhaustion is fine and correctly argued — the click that
+follows fails as the assertion it was always going to be.
+
+*The helper cannot see a link that has not started.* `document.getAnimations()`
+reports transitions that exist. It says nothing about a `runNext` still sitting
+in `transitionChain` waiting on a microtask. Any consecutive-quiet-frames
+threshold is a guess about how long that takes — a guess B-3 shows was wrong
+once, and that will be wrong again on a runner slow enough to stretch the gap
+past three frames, which is precisely the machine that produced the original
+failure. The durable fix is to observe the chain: an `addInitScript` that wraps
+`document.startViewTransition` and keeps an in-flight counter, then wait on the
+counter reaching zero. It removes the constant, removes the guess, and removes
+this whole class of question. Worth doing while the mechanism is fresh in
+someone's head.
+
+**M-6 — `fix/e2e-ci-failures`: only `pressUndo` is protected, and it is not the
+only exposure.**
+The `::view-transition` layer covers the viewport, so *every* pointer
+interaction that can occur while a toast is animating is subject to the same
+trap — not just the one that happened to go red. Concretely, in this suite:
+
+- `fixtures.ts` → `openEdit` and `openDelete` both call
+  `rowByText(title).hover()`, and `editTodo` chains straight from a write that
+  raised a toast. `undo-semantics.spec.ts` runs two `editTodo` calls
+  back-to-back for exactly that reason.
+- `pointer.spec.ts` → *"row actions are hidden until hover"* does
+  `createTodo` (toast, transition) then `row.hover()` and asserts
+  `toHaveCSS("opacity", "1")`. If the hover lands on the snapshot layer the row
+  never enters `:hover`, and the retrying CSS assertion sits watching an element
+  that will never change. Same bug, different symptom, and it would read as an
+  unrelated flake.
+
+Not a defect in what this branch does — the diagnosis names the general
+mechanism correctly. But shipping the guard on one helper leaves the others
+armed. Once the wait is state-based (M-5) it is cheap enough to put in
+`openEdit`, `openDelete` and `toggle` too.
+
+---
+
+## Minor
+
+**m-1 — `feature/list-spacing`: `rounded-2xl` survived on the exact line the
+designer flagged.**
+DESIGN §8.4.1 says, in the same paragraph that asks for `divide-y` to go:
+*"`rounded-2xl` is a literal forbidden by §2.3 — it must be
+`rounded-[var(--radius)]`."* §2.3 confirms it. The branch edits that class
+string, reorders it, and leaves the literal in place. Half of a one-sentence
+instruction.
+
+**m-2 — `feature/list-spacing`: DESIGN still documents the removed markup.**
+`docs/DESIGN.md:387` and `:712` both still show
+`<ul className="divide-y divide-[var(--border-secondary)]">`, and §8.4.1 asks
+for §4.3 and §4.4 to be amended. The docs now describe a list the app does not
+render. Whoever resolves M-1 should land the doc change with it.
+
+**m-3 — `fix/session-expired-redirect`: concurrent 401s each call `assign`.**
+`redirectToSignIn` has no re-entry guard, and the `pathname === SIGN_IN_PATH`
+check cannot catch a second call because the navigation has not committed yet.
+A toggle plus its `reloadSilently()` refetch can both 401. In practice benign —
+same URL, and Chromium replaces the pending navigation — but it is one
+module-scoped boolean to make it explicitly once-only, and it forecloses the
+version of this where two callers compute different `next` values.
+
+**m-4 — `fix/e2e-ci-failures`: a stale comment in the spec it exonerates.**
+`undo-semantics.spec.ts` says of `await undo.hover()`: *"Waits for the toast to
+stop animating into its stacked position before anything reads or touches it."*
+The diagnosis establishes that it does no such thing — Playwright's stability
+check compares bounding boxes across two frames, and during a view transition
+the live element's box does not move because the snapshot layer is what
+animates. That comment is the belief that produced the bug. It should be
+corrected in the commit that documents why.
+
+---
+
+## Nit
+
+**n-1 — `feature/list-spacing`.** `gap-1.5` (6px) is off the 4/8 rhythm the rest
+of the screen uses. `gap-2` if the boundary work in M-1 does not replace it
+anyway.
+
+**n-2 — `fix/session-expired-redirect`.** The commit deletes the note explaining
+*why* `src/lib/http.ts` exists at all when application data moves through server
+actions. It is the answer to the first question a reader has about the file, and
+`todo.service.ts` is currently its only consumer. Keep it.
+
+**n-3 — `fix/e2e-ci-failures`.** `settleToastTransitions` is defined above
+`createTodosScreen` but used once inside it; it reads as a general utility. Fine
+either way, but if M-6 is taken it becomes one, and the doc comment should stop
+being about Undo specifically.
+
+---
+
+## The claim about `undo-semantics.spec.ts:30` — correct, and stronger than stated
+
+Line 30 is *"pressing Undo twice quickly sends exactly one request"*. The claim
+is that it is immune only because it dispatches synthetic events, and therefore
+could never have caught this class of bug. Both halves check out.
+
+The test does its two presses inside `page.evaluate`, via
+`document.querySelector(...)` then `button.dispatchEvent(new PointerEvent(...))`.
+`dispatchEvent` delivers to the node it is called on. There is no hit-test, so
+the `::view-transition` layer is not merely survived — it is never consulted.
+The test is *structurally* blind to it, which is a stronger statement than
+"happened not to hit it": no amount of CI slowness could make this test fail
+this way.
+
+And it should stay that way. Its own comment explains that the synthetic
+dispatch is the entire point — it is what races React's unmount, and the
+friendlier API demonstrably passes with the guard removed. That is a
+well-designed test defending a real invariant. It is simply not, and should not
+become, coverage of the press path. **The gap it leaves is real and belongs to
+someone else**: nothing in the suite presses Undo through a genuine pointer
+sequence and asserts the request went out — which is precisely how this defect
+lived in the product unnoticed. If the fix branch wants one more thing, that is
+the test I would ask for.
+
+---
+
+## `fix/undo-window` — do not drop it
+
+**Agreed that the diagnosis kills the stated reason.** A press landing 170ms
+into a 4000ms window was never going to be fixed by making the window 12000ms,
+and the branch's own commit is admirably honest that it could not reproduce the
+failure and that the traces should still be read. As a fix for CI it is refuted.
+
+**Keep the change anyway, re-landed as a deliberate product change.** The
+argument does not depend on CI and never did:
+
+- 4s is not a decision anyone made. It is `DEFAULT_TOAST_TIMEOUT = 4000` in
+  `@heroui/react/dist/components/toast/constants.js`, inherited by silence.
+  Nothing in DESIGN or PRD chose it.
+- The designer and I both flagged it as too short and undocumented *before* CI
+  went red, independently. The CI theory arrived late and attached itself to a
+  conclusion that already stood.
+- The distinction in the commit message is the right one and is worth keeping
+  verbatim: 4s is a reasonable life for *"here is what happened"* and a poor one
+  for *"you have this long to change your mind."* An Undo window that can expire
+  mid-sentence is not a window.
+- Splitting the two — 12s for action toasts, HeroUI's default for outcome
+  toasts — is exactly right and is the part that shows the thinking.
+- The DESIGN §7.15 paragraph is the most valuable thing on the branch. Whatever
+  happens to the code, that paragraph should land: it converts an accident into
+  a decision with a reason attached.
+
+Three conditions on the re-land:
+
+1. **Strip the CI paragraph from the commit message.** It is now known to be
+   wrong, and a wrong causal claim in the history is worse than no claim.
+   Likewise the `UNDO_WINDOW_MS` doc comment in `TodoListScreen.tsx`, whose
+   second half — *"CI made that visible before a user had to"* — is the refuted
+   theory restated as fact. Keep the first half; it is the real argument.
+2. **Update `undo-semantics.spec.ts`.** Its header and two inline comments are
+   built on the 4s default (*"well inside the four-second toast life"*,
+   *"toasts expire on their own after four seconds"*). The tests stay valid —
+   their point-in-time reads get *safer* with a longer window, not weaker — but
+   the reasoning written beside them becomes wrong.
+3. **Sanity-check the stack.** Three toasts are visible at once by default; at
+   12s a burst of writes will hold a taller stack for longer. Worth one look at
+   1280×800 and at 320px before it lands. I do not expect a problem.
+
+It should go to PM as a product change, not merge as a fix.
+
+---
+
+## The product defect — **next sprint, not ship-blocking**
+
+The diagnosis surfaced a genuine user-facing bug: for the first stretch of its
+life the Undo button is rendered, focusable and completely inert to pointer
+input. Ranking it, with three corrections to the framing that change the
+severity:
+
+**It is pointer-only.** react-aria's `usePress` handles keyboard activation
+through key events on the focused element, which never touch hit-testing. Tab
+to Undo and press Enter and it works during the transition. Only mouse and
+touch are swallowed — which is still nearly everyone, but it is not an
+accessibility blocker and it does not fail a WCAG criterion.
+
+**The window is ~400ms, doubling only sometimes.** `toast.css` gives the toast
+transitions `350ms`. `showUndoableSuccess` calls `dismissUndo` first, but
+`dismissUndo` returns early when there is no outstanding key for that todo — so
+the close-then-add doubling happens on a *repeat* write to the same todo, not on
+every write. First write: ~400ms. Replacement: ~750ms plus the 2-frame gap.
+"The app doubles it on every write" overstates it.
+
+**The failure is silent but harmless and recoverable.** No wrong write, no false
+success, no data loss — the press does nothing and the button is still sitting
+there. With `fix/undo-window` the user has 12 seconds to press it again, which
+takes the inert fraction from ~10% of the window to ~3%.
+
+Weighed against a release blocker (DEF-13) that leaves users unable to reach
+sign-in, this is not in the same class. **Ship it. Fix it next sprint.**
+
+What I would actually do, in order:
+
+1. **Record it in `docs/QA-REPORT.md` as a known defect with the measured
+   numbers.** It has been invisible for the entire project; the expensive part
+   was finding it, and that is done. Losing it now would be the real waste.
+2. **Halve it ourselves, next sprint.** The claim that `TodoListScreen` cannot
+   fix this is true of the 400ms and false of the doubling. Close-then-add is
+   *our* pattern, not HeroUI's — updating the existing toast in place instead of
+   dismissing and re-adding removes one entire transition from the replacement
+   path. That is our code and it is the cheaper half of the problem.
+3. **File upstream, with the repro that already exists.** The author's
+   controlled experiment — start a view transition between `mouse.down()` and
+   `mouse.up()`, press swallowed 3/3; same gesture without one, undo runs 3/3 —
+   is a better bug report than most projects receive. It should go to HeroUI
+   more or less as written. The real ask is that an interactive toast not be
+   press-inert while it animates.
+4. **Do not attempt a local override of the transition wrapper.** I checked the
+   seam: `ToastQueue`'s constructor accepts `options.wrapUpdate`, so in principle
+   the view transition is opt-out — but `toast` is created from a module-level
+   `new ToastQueue({ maxVisibleToasts })` singleton in `toast-queue.js` and
+   exported already bound. There is no supported way to inject `wrapUpdate` into
+   the instance the app uses. Anything that reaches it would be a monkey-patch on
+   library internals to work around a cosmetic animation, and that trade is not
+   worth it. Upstream is genuinely the lever here.
+
+---
+
+## Verdicts
+
+**`feature/list-spacing` — changes requested.** Fix the skeleton (B-1); it is
+three tokens and the branch is incoherent without it. Take m-1 and m-2 while you
+are in there. Then M-1 goes back to the designer with the numbers above — the
+measurement they asked for has now been done, and the answer is that the resting
+state has no row boundary at all and touch never gets a hover. That is a design
+decision, not mine to make, but it should be made before this merges rather than
+discovered on a phone afterwards. The intent of the change is right and the list
+does read better; it needs one more idea to hold together.
+
+**`fix/session-expired-redirect` — blocked.** The code itself is good: small,
+correctly placed at the one shared seam, honest about its reasoning, and right
+about the full assignment. What blocks it is everything around it — it turns CI
+red (B-2), it does not address the reproduction the ticket describes (M-2), it
+contradicts DESIGN §7.9 which still specifies an in-page state (M-4), and it
+routes every expired session into a proxy loop that has been latent since the
+proxy was written (M-3).
+
+Evidence I want before this ships, in priority order:
+
+1. The pinned spec rewritten and green, asserting the redirect and the `?next=`
+   round trip (B-2).
+2. A test with a **present-but-invalid** session cookie proving no redirect
+   loop (M-3). This is the one that would take the release down, and it is the
+   one nobody has looked at.
+3. A decision, written down, on what happens to an open modal's typed text and
+   on §7.9's copy (M-4).
+4. The bfcache path either handled or explicitly scoped out of DEF-13 (M-2).
+
+The author was right that their harness could not drive an HttpOnly cookie or
+bfcache, and right to say so in the commit. But (1) and (2) need neither:
+`clearCookies()` and a forged cookie value are both plain Playwright, and the
+suite already does the first one.
+
+**`fix/e2e-ci-failures` — changes requested, and read it before you review
+anything else this week.** The mechanism is real and I confirmed it from source:
+`defaultWrapUpdate` in `toast-queue.js` wraps every add and close in
+`document.startViewTransition` and serialises them through
+`transitionChain = transitionChain.then(runNext, runNext)`, exactly as
+described. "A toast is visible when its transition *starts*, so every visibility
+wait in the suite was satisfied while the toast was inert" is the correct
+diagnosis and explains both failures without appealing to timing luck. Waiting
+on the animation state — no sleep, no retry, no weakened assertion — is the
+right shape of fix, and the controlled experiment is properly designed: it
+isolates the mechanism and runs a negative control.
+
+It needs `QUIET_FRAMES = 3` (B-3), a wall-clock bound (M-5), and — separately,
+not necessarily here — the same guard on the other pointer helpers (M-6). The
+constant is the only thing standing between this branch and correct, and it is a
+one-character change.
+
+Last note, and it is the reason M-5's state-based wait is worth the extra hour:
+settling the chain *before* the press does not guarantee no transition starts
+*during* it, and the branch's own experiment is what proves that gap exists —
+a transition begun between `down` and `up` swallows the press. A toast expiring
+on its 4s timer mid-press starts a close transition and would do exactly that.
+Rare, but it is the residual flake, and it is worth knowing about before someone
+spends another day on it. `fix/undo-window` incidentally reduces it, which is
+the only true thing that branch ever said about CI — and not a reason to keep
+it. Keep it for the product reason.
