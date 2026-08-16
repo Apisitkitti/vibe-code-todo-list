@@ -9,16 +9,20 @@ import {
   parseDueDate,
   parsePriorityFilter,
   parseStatusFilter,
-  type TodoListResult,
 } from "@/lib/todo";
 
 import {
   badRequestResponse,
-  readJsonBody,
+  completionNotHereResponse,
   toFieldErrors,
-  toTodoItemData,
   unauthorizedResponse,
-} from "./response";
+} from "./errors";
+import {
+  mentionsCompleted,
+  readJsonBody,
+  toTodoListResponse,
+  toTodoResponse,
+} from "./util";
 
 const STATUS_PARAM = "status";
 const PRIORITY_PARAM = "priority";
@@ -62,13 +66,9 @@ export const GET = async (request: NextRequest) => {
     prisma.todo.count({ where: { userId: session.user.id, completed: true } }),
   ]);
 
-  const result: TodoListResult = {
-    todos: todos.map(toTodoItemData),
-    totalCount,
-    completedCount,
-  };
-
-  return NextResponse.json(result);
+  return NextResponse.json(
+    toTodoListResponse(todos, totalCount, completedCount),
+  );
 };
 
 export const POST = async (request: NextRequest) => {
@@ -76,7 +76,13 @@ export const POST = async (request: NextRequest) => {
 
   if (!session?.user) return unauthorizedResponse();
 
-  const parsed = todoFormSchema.safeParse(await readJsonBody(request));
+  const body = await readJsonBody(request);
+
+  // A new todo is never created already-completed, and parsing `completed`
+  // away would return a 201 whose body silently disagrees with the request.
+  if (mentionsCompleted(body)) return completionNotHereResponse();
+
+  const parsed = todoFormSchema.safeParse(body);
 
   if (!parsed.success) return badRequestResponse(toFieldErrors(parsed.error));
 
@@ -94,5 +100,5 @@ export const POST = async (request: NextRequest) => {
     },
   });
 
-  return NextResponse.json(toTodoItemData(todo), { status: 201 });
+  return NextResponse.json(toTodoResponse(todo), { status: 201 });
 };

@@ -53,50 +53,21 @@ export interface TodoListScreenProps {
  * after every mutation (`docs/CONVENTIONS.md` → Server actions — auth only).
  */
 export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
-  const router = useRouter();
-  const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
-
   const [result, setResult] = useState<TodoListResult>(EMPTY_RESULT);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-
-  const formState = useOverlayState();
   const [editingTodo, setEditingTodo] = useState<TodoItemData | null>(null);
   const [pendingDelete, setPendingDelete] = useState<TodoItemData | null>(null);
   const [pendingTodoId, setPendingTodoId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  const { status, priority, query } = filters;
   // Bumped after every mutation to re-run the load below — one fetch path for
   // the initial render, a filter change, a retry and a refresh alike.
   const [reloadToken, setReloadToken] = useState(0);
+  const formState = useOverlayState();
 
-  useEffect(() => {
-    let isCurrent = true;
-
-    void getTodoList({ status, priority, query })
-      .then((nextResult) => {
-        if (!isCurrent) return;
-
-        setResult(nextResult);
-        setLoadError(null);
-      })
-      .catch((error: unknown) => {
-        if (!isCurrent) return;
-
-        setLoadError(
-          getErrorMessage(error, "Something went wrong on our end."),
-        );
-      })
-      .finally(() => {
-        if (isCurrent) setIsLoading(false);
-      });
-
-    // A response that arrives after the filters moved on must not win.
-    return () => {
-      isCurrent = false;
-    };
-  }, [status, priority, query, reloadToken]);
+  const router = useRouter();
+  const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
+  const { status, priority, query } = filters;
 
   const reload = () => {
     setReloadToken((token) => token + 1);
@@ -300,6 +271,33 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       </ul>
     );
   };
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    void getTodoList({ status, priority, query })
+      .then((nextResult) => {
+        if (!isCurrent) return;
+
+        setResult(nextResult);
+        setLoadError(null);
+      })
+      .catch((error: unknown) => {
+        if (!isCurrent) return;
+
+        setLoadError(
+          getErrorMessage(error, "Something went wrong on our end."),
+        );
+      })
+      .finally(() => {
+        if (isCurrent) setIsLoading(false);
+      });
+
+    // A response that arrives after the filters moved on must not win.
+    return () => {
+      isCurrent = false;
+    };
+  }, [status, priority, query, reloadToken]);
 
   const hasTodos = result.totalCount > 0 && loadError === null;
 

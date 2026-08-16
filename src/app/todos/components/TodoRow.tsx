@@ -109,7 +109,20 @@ export const TodoRow = ({
         }
       >
         <Checkbox.Content className="flex min-h-11 min-w-11 items-center justify-start sm:min-h-9 sm:min-w-9">
-          <Checkbox.Control>
+          {/*
+            HeroUI's theme gives form fields no border by default
+            (`--field-border-width: 0px`), relying on the field background to
+            stand out. In dark mode `--field-background` is the same colour as
+            the row behind it, so an unchecked box was invisible — roughly 1:1
+            contrast (QA DEF-08).
+
+            `--border` alone is not enough: measured against the box it is
+            1.21:1 in dark, under the 3:1 WCAG 1.4.11 asks of a control
+            boundary. Half-strength foreground clears it in both themes
+            (~5:1 dark, ~4:1 light). The checked state paints over it with the
+            accent fill.
+          */}
+          <Checkbox.Control className="border border-[color-mix(in_srgb,var(--foreground)_50%,transparent)]">
             <Checkbox.Indicator />
           </Checkbox.Control>
         </Checkbox.Content>

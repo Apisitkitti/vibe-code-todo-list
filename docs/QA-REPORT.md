@@ -1,484 +1,464 @@
-# QA Report — Personal Todo App (v1)
+# QA Report — Personal Todo App (v1) — **Fix-verification pass on `fix/dark-mode-checkbox`**
 
 Tester: QA engineer
-Date: 2026-08-14
-Build under test: `npm run dev` on `http://localhost:3000`, Neon Postgres (live DB)
-Method: black-box testing through the browser, plus direct API probes issued from
-the page context via `fetch` (for auth/ownership checks that the UI cannot reach).
+Date: 2026-08-16
+Branch under test: `fix/dark-mode-checkbox` @ `ecf6104` ("fix: make the completion
+checkbox visible in dark mode"), branched from `develop` @ `a6e9782`
+Build under test: `npx next dev -p 3467` on `http://localhost:3467`, Node 24.14.0,
+Neon Postgres (live DB)
+Scope: verification of the DEF-08 / DEF-09 fix, plus the two items the previous
+pass could not cover (desktop width, row tooltips), a regression sweep and a short
+re-confirmation of cross-user isolation.
 
-## Test accounts created
+This report replaces the 2026-08-16 release-gate pass on `develop` (that text is
+in git history at `ecf6104^`). **Defect numbering is carried over unchanged** —
+`DEF-01`…`DEF-10` mean the same things they meant in the previous two passes.
 
-| Account | Name | Email | Password |
-|---|---|---|---|
-| A | Ada | `qa+a1755273000@example.com` | `Password123!` |
-| B | Grace | `qa+b1755273000@example.com` | `Password456!` |
+Method, in one paragraph: black-box through the browser for the user-visible
+flows; `curl` with real session cookies for the API and isolation probes;
+**for every contrast number, my own compositing measurement** (described in §2)
+rather than the numbers quoted in the commit message; keyboard-driven checks
+where the harness blocked the pointer.
 
-Rejected sign-up attempts (no account created): `qa+short1755273000@example.com`
-(7-char password, server-rejected), and a duplicate attempt on account A's email.
+## Test accounts created for this pass
 
-Todo ids used in the isolation tests (owned by account A):
+| Account | Purpose | Email |
+|---|---|---|
+| A | isolation owner | `qa+a1786862798@example.com` |
+| B | isolation attacker | `qa+b1786862798@example.com` |
+| C (pre-existing) | UI walkthrough | `qa+ui1786858394@example.com` — the previous pass's account, its browser session was still live |
 
-- `cmst7rhdz000bve2p7u74eaol` — "Water plants"
-- `cmst7rh9h0009ve2p5mnwc9gl` — "Ship release v2"
-- `cmst7oli50007ve2pvrvegklt` — "Buy milk" (completed)
+A's todo ids used below: `cmsvfzs1u0000ukvemhystqxr` ("Ship release v3"),
+`cmsvfzs5o0001ukvesd1q55ew` ("Buy milk"). B's own: `cmsvg07lm0004ukvesxjwcrdj`.
+
+### Environment notes (please read — one of them is new)
+
+1. **No process was killed except my own.** One dev server was started, on port
+   3467, and it is the only one stopped. The unrelated project's server was never
+   touched.
+2. **Harness limitation, refined.** After *any* explicit `resize_window` call,
+   **pointer input stops reaching the page** — a click on the `Active` filter at
+   1280×800 left `aria-checked` and the URL unchanged, and a `hover` over a row's
+   Edit button left `document.querySelectorAll(':hover')` empty, i.e. the page
+   never saw the pointer at all. Two refinements on the previous pass's note:
+   - **Keyboard input *does* survive the resize this time.** `Tab` moved focus
+     through the whole page at 1280×800. That is what made the tooltip check
+     possible (§4).
+   - **Resizing back to 427×351 does not restore the pointer.** The previous pass
+     recorded that reverting to the pane's native size revives input; setting the
+     same numbers explicitly does not. Only a pane that has never been resized
+     accepts the pointer.
+   Consequence: everything requiring a real click was run first, at the pane's
+   native 427×351; the desktop section is measurement plus keyboard only.
+3. **Desktop screenshots render at a reduced scale.** At 1280×800 the captured
+   image is 800×500 and the page is drawn small inside it. Desktop layout
+   assertions below are therefore DOM geometry, not eyeballing.
+4. `--force` navigations were used for fresh loads; console counts below are from
+   the last full load in each configuration, not the cumulative buffer.
 
 ---
 
 ## 1. Verdict summary
 
-| ID | Story | Verdict |
-|---|---|---|
-| US-01 | Sign up with email + password | **Pass** |
-| US-02 | Sign in | **Pass** |
-| US-03 | Sign out | **Pass** |
-| US-04 | Protected routes | **Pass** |
-| US-05 | Create a todo | **Pass** |
-| US-06 | List todos | **Pass** |
-| US-07 | Toggle complete/incomplete | **Pass** |
-| US-08 | Edit a todo | **Pass** |
-| US-09 | Delete a todo with confirmation | **Pass** |
-| US-10 | Filter by status and priority | **Pass** |
-| US-11 | Empty state | **Pass** |
-
-| NFR | Area | Verdict |
-|---|---|---|
-| NFR-01 | Per-user authorization | **Pass** (verified rigorously — see §2) |
-| NFR-02 | Server-side auth checks | **Pass** |
-| NFR-03 | Password policy | **Pass** |
-| NFR-04 | Keyboard accessibility | **Partial** (DEF-02; one item inconclusive) |
-| NFR-05 | Responsive / touch targets | **Partial** (DEF-01) |
-| NFR-06 | Dark mode | **Pass** |
-| NFR-08 | Validation parity | **Pass** (DEF-03 is a narrow contract gap) |
-
-**No blockers found.** One Major and four Minor defects are listed in §3.
-
----
-
-## 2. Cross-user data isolation — the critical test
-
-**Result: PASS.** Tested at the API level, not just through the UI.
-
-Setup: account A owned three todos; account B was signed in and owned one
-(`Grace private task`). All probes below were issued from the browser with
-account B's session cookie against account A's real todo ids.
-
-| Probe | Expected | Actual | Verdict |
-|---|---|---|---|
-| `GET /api/todos` as B | none of A's todos | `{"todos":[],...}` then only B's own todo | Pass |
-| `PATCH /api/todos/cmst7rhdz000bve2p7u74eaol` `{"completed":true}` (A's todo, toggle) | `404` | `404 {"message":"That todo no longer exists."}` | Pass |
-| `PATCH /api/todos/cmst7rh9h0009ve2p5mnwc9gl` `{title:"HACKED BY B",...}` (A's todo, edit) | `404` | `404 {"message":"That todo no longer exists."}` | Pass |
-| `DELETE /api/todos/cmst7oli50007ve2pvrvegklt` (A's todo) | `404` | `404 {"message":"That todo no longer exists."}` | Pass |
-| `GET /api/todos/<A's id>` | `404` | `405` — no `GET` handler exists (see DEF-04) | Pass with note |
-
-Post-attack integrity check: signed back in as A and re-read the list. All three
-todos were **unchanged** — no title was rewritten to "HACKED BY B", "Buy milk"
-still existed and was still `completed: true`, "Water plants" was still
-`completed: false`. Account A never saw `Grace private task`.
-
-**No leakage under any filter or search.** As B, every combination returned only
-B's own data, including searches for account A's exact titles:
-
-```
-?status=all|active|completed, ?priority=low|medium|high,
-?status=all&priority=high, ?query=milk, ?query=plants
-```
-
-`?query=milk` and `?query=plants` both returned `[]` for account B.
-
-**Unauthenticated access — all `401`, no writes.** With the session cookie
-cleared, against A's real ids:
-
-| Endpoint | Actual |
+| Item under verification | Verdict |
 |---|---|
-| `GET /api/todos` | `401` |
-| `POST /api/todos` | `401` |
-| `PATCH /api/todos/<A's id>` | `401 {"message":"Sign in again to continue."}` |
-| `DELETE /api/todos/<A's id>` | `401 {"message":"Sign in again to continue."}` |
+| **DEF-08 — completion checkbox invisible in dark mode** | **Verified fixed** (§2) |
+| **DEF-08 — light mode not made worse** | **Verified** — light improved from 1.00:1 to 3.40:1 (§2) |
+| **Checked state still reads correctly, both themes** | **Verified** (§2.3) |
+| **Focus ring still visible, both themes** | **Verified** — visually; not measurable numerically, reason in §2.4 |
+| **DEF-01 — 44×44 target intact** | **Verified** (§2.5) |
+| **DEF-09 — wrong-type `note` message** | **Verified fixed** (§3) |
+| Rest of the validation matrix, message accuracy | **Verified** — no other message describes the wrong mistake (§3) |
+| **Desktop-width behaviour ≈1280 px** | **Verified** by geometry; pointer interaction at that width **could not be verified** (§4) |
+| **Row Edit/Delete tooltips** | **Verified** via keyboard focus at 1280 px; **hover-triggered** tooltips **could not be verified** (§4) |
+| **DEF-02 warning count at desktop width** | **Verified unchanged** — 1 per `/todos` load at both 427 and 1280 (§5) |
+| **DEF-02 root cause** | **Now pinned, with proof** — `TodoFormModal`'s `<Modal>` root (§5) |
+| Regression sweep (create / edit / toggle+Undo / delete / filters / search) | **Verified** (§6) |
+| Cross-user isolation, short form | **Verified** (§7) |
 
-A's data was intact afterwards.
-
-**No existence oracle.** `GET /api/todos/<real id>` and
-`GET /api/todos/totally-made-up-id-xyz` both return exactly `405` with an empty
-body, so the missing `GET` handler does not confirm whether an id exists.
-
-**`userId` is not client-controllable.** `POST /api/todos` with an extra
-`"userId":"some-other-user-id"` field in the body returned `201` and created the
-todo under **the session user** (A), not the supplied id. NFR-01 upheld. (Test
-todo `cmst8bau3000hve2ppq8ermie` was deleted afterwards.)
-
----
-
-## 3. Defects
-
-### DEF-01 — Completion checkbox tap target is 16×16 px, not 44×44 (Major)
-
-**Affects:** NFR-05, `docs/DESIGN.md` §6.3, US-07 on touch devices.
-
-**Steps to reproduce**
-
-1. Sign in and open `/todos` with at least one todo.
-2. Set the viewport to a mobile width (tested at 375×812 and 320×700).
-3. Attempt to tap the completion checkbox anywhere other than its top-left corner.
-
-**Expected** — `docs/DESIGN.md` §6.3: *"Minimum touch target 44×44 px. […] For the
-row's icon-only edit/delete buttons **and the checkbox**, add
-`className="min-h-11 min-w-11"` (44px) on mobile"*. NFR-05: *"Primary tap targets
-are at least 44x44px."*
-
-**Actual** — The wrapper `div[data-slot="checkbox"]` does measure 44×44 and does
-carry `min-h-11 min-w-11`, but it also carries `items-start`, so the only
-pressable element — the inner `label[data-slot="checkbox-content"]`, which is the
-element react-aria marks `data-react-aria-pressable="true"` — measures **16×16**
-and sits in the top-left corner. Hit-testing the 44×44 box confirms the rest is
-inert:
-
-| Point inside the 44×44 wrapper | `document.elementFromPoint` resolves to | Inside pressable label? |
+| Story / NFR | Previous pass | This pass |
 |---|---|---|
-| top-left (+4,+4) | `<svg data-slot="checkbox-default-indicator--checkmark">` | yes |
-| centre | `<div data-slot="checkbox">` | **no** |
-| bottom-right (−4,−4) | `<div data-slot="checkbox">` | **no** |
+| US-06 List todos | **Fail** (DEF-08) | **Pass** |
+| US-07 Toggle | **Partial** (DEF-08) | **Pass** |
+| NFR-06 Dark mode | **Fail** (DEF-08) | **Pass** |
+| NFR-08 Validation parity | Pass, with DEF-09 wording bug | **Pass**, DEF-09 closed |
+| NFR-04 Keyboard accessibility | **Partial** (DEF-02) | **Partial** — DEF-02 still open, noise only |
+| NFR-05 Responsive | Pass at 320/375/427 | Pass, now also 1280 (geometry) |
 
-A pointer at the centre of the nominal 44 px target therefore cannot activate the
-checkbox. The edit/delete icon buttons and the header buttons *do* measure a real
-44×44 (verified), so this is specific to the checkbox.
-
-**Note on evidence:** the finding rests on deterministic hit-testing, which is
-what a real pointer follows. Synthetic pointer events could not drive this
-react-aria checkbox at all (they failed even on the working top-left region), so
-they were not used as evidence either way.
+Everything else from the release-gate pass was not re-run and is not re-asserted
+here; see §8.
 
 ---
 
-### DEF-02 — Row Edit/Delete tooltips never render, and log a React warning on every render (Minor)
-
-**Affects:** `docs/DESIGN.md` §4.4, copy deck §7.4 (`Edit`, `Delete` tooltips).
-
-**Steps to reproduce**
-
-1. Open `/todos` at desktop width with at least one todo.
-2. Hover the Edit (or Delete) icon button on a row and wait ~1.2 s.
-3. Open the browser console.
-
-**Expected** — §4.4: *"Wrap each in a `Tooltip` (`.Root`, `.Trigger`, `.Content`,
-`.Arrow`) on `sm:` and up"*, showing the copy-deck strings `Edit` / `Delete`. No
-console warnings.
-
-**Actual** — No tooltip appears. `document.querySelectorAll('[role="tooltip"]')`
-returns 0 elements after hovering. The console logs, on **every** `/todos` render
-(three occurrences per load with three rows):
-
-```
-A PressResponder was rendered without a pressable child.
-Either call the usePress hook, or wrap your DOM node with <Pressable> component.
-```
-
-Source: `src/app/todos/components/TodoRow.tsx` — `ActionTooltip` renders
-`<Tooltip.Trigger>{children}</Tooltip.Trigger>` around a HeroUI `Button`, which
-react-aria does not recognise as a pressable child.
-
-**Impact limited to affordance, not accessibility** — the `aria-label`s
-(`Edit "{title}"` / `Delete "{title}"`) are present and correct, so the buttons
-still have proper accessible names.
-
----
-
-### DEF-03 — `note` and `dueAt` are required by the API although the PRD defines them as optional (Minor)
-
-**Affects:** `docs/PRD.md` §2 field table, NFR-08.
-
-**Steps to reproduce** (signed in)
-
-```js
-fetch('/api/todos', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  body: JSON.stringify({ title: 'Grace private task', priority: 'high' })
-})
-```
-
-**Expected** — PRD §2: `note` is *"optional, max 2000 chars"* and `dueAt` is
-*"optional"*. A body omitting them should be accepted and stored as `null`.
-
-**Actual** — `400` with:
-
-```json
-{"message":"Invalid input: expected string, received undefined",
- "fieldErrors":{"note":"Invalid input: expected string, received undefined",
-                "dueAt":"Invalid input: expected string, received undefined"}}
-```
-
-Cause: `src/app/todos/components/form/schema.ts` declares
-`note: z.string().trim().max(...)` and `dueAt: z.string().trim().refine(...)`
-with no `.optional()`. Sending `note: ""` and `dueAt: ""` works and correctly
-stores `null`.
-
-**Severity Minor** because the UI always sends `""` for both, so no user-facing
-flow is broken. The error message is also a raw zod string rather than a
-copy-deck string, unlike every other validation message.
-
----
-
-### DEF-04 — `GET /api/todos/[id]` is not implemented, returns `405` (Minor / informational)
-
-**Steps to reproduce** — `fetch('/api/todos/<any id>')`.
-
-**Expected** — the brief for this review asked for `404` on another user's id.
-
-**Actual** — `405 Method Not Allowed` with an empty body, because
-`src/app/api/todos/[id]/route.ts` exports only `PATCH` and `DELETE`.
-
-**Not a security defect and not a PRD violation.** The PRD never specifies a
-read-one endpoint (the client reads the list only), and the response is byte-for-byte
-identical for a real id, a foreign id and a nonsense id, so nothing is disclosed.
-Raised only so the team is aware the endpoint does not exist.
-
----
-
-### DEF-05 — Mobile status filter is not full-width (Minor, cosmetic)
-
-**Affects:** `docs/DESIGN.md` §4.3 responsive table.
-
-**Steps to reproduce** — open `/todos` at 375×812.
-
-**Expected** — §4.3, Mobile <640: *"Filter bar stacks: toggle group on row 1
-(`fullWidth`), search on row 2."*
-
-**Actual** — the All/Active/Completed `ToggleButtonGroup` renders at content
-width, horizontally centred, not full-width. The priority filter and the search
-field below it *do* span the full width, so the row reads as inconsistent. No
-functional impact; no horizontal scrolling.
-
----
-
-## 4. Detailed results by story
-
-### US-01 — Sign up — **Pass**
-
-- `/sign-up` shows Name, Email, Password, `Create account`, and a `Sign in` link. Copy matches §7.2 exactly (`Create your account`, `It takes about ten seconds.`, `At least 8 characters.`).
-- Submitting empty renders `This field is required.` inline on all three fields; no request is sent.
-- 7-character password → `Use at least 8 characters.` (§7.9); no account created.
-- `not-an-email` → `Enter a valid email address.` (§7.9); no account created.
-- Duplicate email → `Sign up failed` / `An account with that email already exists.` (§7.9) in an Alert **and** a danger toast. **Email field kept its value, Password field was cleared** — matches the acceptance criterion exactly.
-- Confirm modal appears before the mutation with §7.12 copy: `Create this account?` / `An account will be created for "qa+a1755273000@example.com".` Escape and Cancel both close it without creating an account.
-- On confirm: account created, signed in, redirected to `/todos`, success toast `Account created for "qa+a1755273000@example.com"` (§7.12).
-- `GET /api/auth/get-session` returns `"emailVerified": false` and the app is fully usable. No password field appears in any response (NFR-03).
-
-*Note:* PRD wording for two errors ("Password must be at least 8 characters", "Enter a valid email address") differs from the `docs/DESIGN.md` copy deck ("Use at least 8 characters.", "Enter a valid email address."). The app follows the copy deck, which `docs/CONVENTIONS.md` designates as the source of exact strings. Not logged as a defect.
-
-### US-02 — Sign in — **Pass**
-
-- `/sign-in` shows Email, Password, `Sign in`, and a `Sign up` link; copy matches §7.1.
-- Confirm modal appears with §7.12 copy: `Sign in to your account?` / `You'll be signed in as "…".`
-- Correct credentials → session created, success toast `Signed in as "qa+a1755273000@example.com"`, redirected to `/todos`.
-- Wrong password → stays on `/sign-in`, Alert `Sign in failed` / `That email and password don't match. Try again.` (§7.9) plus a danger toast.
-- Unknown email → **byte-identical** message. Verified at the transport layer too: `POST /api/auth/sign-in/email` returned `401 {"message":"Invalid email or password","code":"INVALID_EMAIL_OR_PASSWORD"}` for *both* the wrong-password and the no-such-account case. **No account enumeration.**
-- Arriving from `/sign-in?next=%2Ftodos` and signing in successfully landed on `/todos`.
-- Signed in, navigating to `/sign-in` and `/sign-up` both redirect to `/todos` without showing the form.
-
-### US-03 — Sign out — **Pass**
-
-- Account menu shows the signed-in email (`qa+a1755273000@example.com`) and a `Sign out` item (§7.3).
-- `Sign out` destroys the session, clears the cookie (`document.cookie === ""`) and redirects to `/sign-in`.
-- Returning to `/todos` afterwards redirects to `/sign-in?next=%2Ftodos`, and the response HTML contains none of the todo titles.
-
-### US-04 — Protected routes — **Pass**
-
-- Signed out, `/todos` → `/sign-in?next=%2Ftodos`; the original path is preserved and used after sign-in.
-- No todo data is present in the redirected response.
-- Every mutation endpoint returns `401` with no session and performs no write (§2 table).
-- A foreign todo id returns `404`, never the row (§2).
-
-### US-05 — Create a todo — **Pass**
-
-- `New todo` opens a modal with Title, Note, Priority (default `Medium`) and Due date.
-- Title "Buy milk" with everything else untouched created exactly: `note: null`, `priority: "medium"`, `completed: false`, `dueAt: null`, owned by the session user; the row appeared at the top of the list with no page reload.
-- Empty title → `Enter a title.` (§7.5); whitespace-only title also rejected.
-- 205-char title → `Keep the title under 200 characters.` (§7.5).
-- 2005-char note → `Keep the note under 2000 characters.` (§7.11).
-- Priority `high` + a due date are stored and rendered on the row (`▲ High`, `Aug 20`).
-- Confirm modal precedes the write with §7.11 copy: `Add this todo?` / `"Buy milk" will be added to your list.` Success toast: `Todo "Buy milk" added`.
-- Form resets to defaults after a successful create.
-- **Not tested:** the create-failure path (typed values retained + error message) — I could not force a server or network failure without modifying the app.
-
-### US-06 — List todos — **Pass**
-
-- Only the session user's todos are listed; account B's brand-new account showed zero todos while account A had four.
-- Ordering is correct: active before completed, newest-created first within each group (verified after creating three todos in a known order and toggling one).
-- Rows render title, completion checkbox, priority chip, due date, and a note indicator.
-- Completed rows use `line-through` **plus** the checked checkbox — not colour alone (§6.4).
-- Priority is never colour-alone: chips render the word plus a shape glyph (`▲ High`, `■ Medium`, `▼ Low`), with a visually-hidden `Priority:` prefix.
-- Overdue dates render `⚠` plus a visually-hidden `Overdue —` prefix (confirmed in the accessibility tree); the note indicator exposes `Has a note`.
-- Loading state: `src/app/todos/loading.tsx` and `TodoListSkeleton` render a four-row skeleton with `aria-busy="true"` and `aria-label="Loading todos"`. Observed in the streamed route payload; the local DB responds too fast to catch it painted, so this criterion is verified by markup rather than by a visible frame.
-
-### US-07 — Toggle complete/incomplete — **Pass**
-
-- Toggling fires immediately with **no confirm modal** — the approved exception in `docs/CONVENTIONS.md`.
-- Row shows completed styling instantly; change persists across a full page reload.
-- Toggling back returns it to the active group.
-- Under the `Active` filter, marking a visible todo complete removes it from the list.
-- Toast `Todo "Buy milk" marked complete` with an **`Undo`** action (§7.11, §7.13).
-- **Undo verified working:** clicking `Undo` flipped the record back (`completed: false` confirmed in the API response), the count returned to `0 of 1 done`, the checkbox `aria-label` returned to `Mark "Buy milk" as complete`, and the reverse toast `Todo "Buy milk" marked not complete` fired.
-- Toggling changes only `completed` — title, note, priority and `dueAt` were byte-identical before and after.
-
-### US-08 — Edit a todo — **Pass**
-
-- Edit opens a modal headed `Edit todo`, pre-filled with the current title, note, priority and due date.
-- Saving a new title updates the row and persists across reload.
-- Whitespace-only title → `Enter a title.`, no update performed.
-- Clearing the note and due date stores both as `null` (verified in the API response) and the row stops rendering them.
-- Changing values then pressing Cancel leaves the todo completely unchanged.
-- Length rules match US-05.
-- Confirm modal precedes the write: `Save these changes?` / `"Ship release v2" will be updated.` Toast: `Todo "Ship release v2" updated` (§7.11).
-- Ownership scoping verified in §2 (a foreign id returns `404`).
-
-### US-09 — Delete a todo — **Pass**
-
-- Delete opens an `AlertDialog` naming the todo: `Delete this todo?` / `"Old overdue task" will be permanently deleted. This can't be undone.` with `Cancel` and a destructive `Delete` (§7.6). Nothing is deleted yet.
-- **Cancel is the default-focused action** on the destructive confirm, per `docs/CONVENTIONS.md`.
-- **Escape closes without mutating** — verified: the dialog closed and the API still returned all four todos.
-- **Focus is trapped:** five successive Tab presses kept focus inside the dialog.
-- **Focus is restored to the trigger:** after Escape, `document.activeElement` was the button with `aria-label='Delete "Old overdue task"'`.
-- Confirming deletes the row without a page reload, it stays gone after reload, and the toast reads `Todo "Old overdue task" deleted` (§7.11).
-- Deleting the last todo restores the empty state (verified on account B).
-- The whole delete flow was driven **by keyboard alone** (Enter to open, Tab to Delete, Enter to confirm).
-- **Not tested:** the delete-failure path (row remains + error toast).
-
-### US-10 — Filters — **Pass**
-
-- Defaults are `All` / `All priorities`.
-- `Active` lists only incomplete, `Completed` only complete, `All` both.
-- Priority filter isolates `High` / `Medium` / `Low` correctly.
-- **Filters combine with AND** and are reflected in the URL:
-  `?status=active` → `?status=active&priority=high` listed only the two active high-priority todos.
-- **Filter state survives reload:** loading `/todos?status=completed&priority=high` directly re-applied both controls.
-- A combination matching nothing shows `No todos match these filters` / `Try a different status or priority.` with a `Clear filters` action (§7.10); clearing restores the full list and resets the URL to `/todos`.
-- Under every filter and search combination, results contained only the session user's todos (§2).
-
-### US-11 — Empty state — **Pass**
-
-- A brand-new account (B) sees `Nothing here yet` / `Add your first todo and it will show up here.` with a `New todo` action (§7.7).
-- **No filter chrome is rendered** at zero todos — the status filter, priority filter, search field and the `{done} of {total} done` count are all absent, appearing only once the first todo exists. Matches the criterion and §7.3 (`Count (zero todos): render nothing`).
-- The empty-state call to action opens the create modal and **focuses the Title field** (`document.activeElement` was `input[name="title"]`).
-- Creating the first todo replaces the empty state with the list.
-- Deleting the only remaining todo brings the empty state back (verified on account B).
-- Visually and textually distinct from the US-10 no-results state (different heading, body and action).
-
----
-
-## 5. Non-functional results
-
-### NFR-01 / NFR-02 — Authorization — **Pass**
-
-See §2. Every read and write is scoped server-side; `userId` supplied in a request
-body is ignored; foreign ids return `404`; no session returns `401` with no write.
-
-### NFR-03 — Password policy — **Pass**
-
-- Client: `Use at least 8 characters.` inline before submit.
-- Server, bypassing the client: `POST /api/auth/sign-up/email` with a 7-character
-  password returned `400 {"message":"Password too short","code":"PASSWORD_TOO_SHORT"}`
-  and created no account.
-- No password value appeared in any response body inspected.
-
-### NFR-04 — Keyboard accessibility — **Partial**
-
-Passing: the delete confirmation was operated end-to-end by keyboard (Enter to
-open, Tab within, Enter to confirm); focus is trapped in dialogs; Escape closes
-without mutating; focus is restored to the triggering control; every input has a
-`Label` or a specific `aria-label`; errors are wired through `FieldError` /
-`Alert` / toast live regions; status is never conveyed by colour alone.
-
-Reduced to Partial by DEF-02 (a React warning on every `/todos` render from a
-malformed `Tooltip.Trigger` composition).
-
-**Inconclusive — not counted as a defect:** I could not confirm whether Enter or
-Space activates the `Sign in` submit button. With the button programmatically
-focused, a trusted `Enter` keydown was observed reaching the button's own
-listener while no `click` or `submit` event followed. However, the same test
-harness also failed to deliver Tab reliably on that page (a Tab press left focus
-in the email field), and mouse activation of the same button intermittently
-failed too — so the harness, not the app, is the more likely cause. This needs
-re-testing with a real keyboard before it is treated as a bug.
-
-### NFR-05 — Responsive, mobile-first — **Partial**
-
-- **No horizontal scrolling at 320 px**: `documentElement.scrollWidth === clientWidth === 320`.
-- Layout adapts correctly: full-width `New todo`, stacked filter bar, two-line
-  todo rows with actions always visible on mobile, single-line rows on desktop
-  with actions revealed on hover/focus-within.
-- The first todo row stays above the fold at 375×812.
-- Edit/Delete icon buttons and header buttons all measure exactly 44×44.
-- Reduced to Partial by **DEF-01** (checkbox tap target) and **DEF-05** (filter width).
-
-### NFR-06 — Dark mode — **Pass**
-
-- Follows the OS preference on first load (rendered dark with `data-theme="dark"`
-  and `.dark` on `<html>` before any user choice).
-- No flash of the wrong theme — an inline script in `<head>` sets the class before
-  first paint.
-- The toggle switches to light, sets `data-theme="light"`, removes `.dark`, and
-  persists the choice in `localStorage` under `heroui-theme`.
-- The toggle's `aria-label` flips correctly between `Switch to dark theme` and
-  `Switch to light theme` (§7.3).
-- Text was legible in both themes across `/sign-in`, `/sign-up` and `/todos`.
-
-### NFR-08 — Validation parity — **Pass**
-
-Every client-side rule was re-verified server-side by posting directly to the API,
-and each returned the **same copy-deck string** the form shows, keyed by field:
-
-| Payload | Status | `fieldErrors` |
+## 2. DEF-08 — the completion checkbox in dark mode — **VERIFIED FIXED**
+
+### 2.1 How I measured (independently of the lead's numbers)
+
+I did not take the commit message's 5.14 / 3.40 on trust. In the live page I:
+
+1. Read `getComputedStyle` for the control's `border-*`, `background-color` and
+   `::before` (the accent fill), and the SVG checkmark's `stroke`.
+2. Normalised **every** colour string — including `lab()`, `color(srgb …)` and the
+   `color-mix()` the fix introduces — to sRGB bytes **plus alpha** by painting it
+   on a 1×1 `<canvas>` twice, once over black and once over white, and solving
+   `a = 1 − (onWhite − onBlack)/255`. This avoids hand-converting `lab()` and
+   avoids trusting any single computed-value format.
+3. Composited the ancestor background stack from the control upward until an
+   opaque layer was found (control → label → row `<li>` → `<ul>` → card → main →
+   body), so "the row behind it" is the *painted* colour, not a token.
+4. Alpha-composited the border over the box interior, and separately over the row,
+   then applied the WCAG 2.x relative-luminance and contrast-ratio formulas.
+5. Cross-checked the arithmetic by hand for the dark border (0.5·252 + 0.5·24 =
+   138 → L = 0.2547; box L = 0.00941 → 5.13) and cross-checked the *visual* result
+   against screenshots at both themes.
+
+The border resolves to `color(srgb 0.988 0.988 0.988 / 0.5)` in dark and
+`color(srgb 0.094 0.094 0.106 / 0.5)` in light — i.e. the `color-mix()` does
+resolve, in this browser, to half-strength foreground as intended.
+
+### 2.2 Unchecked box — the actual numbers
+
+Measured on `/todos` with a real list: one incomplete todo ("Ship release v3 RC2
+QA4", high, due Aug 20, has a note) and one complete ("Buy milk").
+
+| | Dark | Light |
 |---|---|---|
-| `title: ""` | 400 | `title: "Enter a title."` |
-| `title: "   "` | 400 | `title: "Enter a title."` |
-| `title` 201 chars | 400 | `title: "Keep the title under 200 characters."` |
-| `note` 2001 chars | 400 | `note: "Keep the note under 2000 characters."` |
-| `priority: "urgent"` | 400 | `priority: "Choose a priority."` |
-| `dueAt: "not-a-date"` | 400 | `dueAt: "Enter a valid date."` |
+| Page background | `rgb(6,6,7)` | `rgb(245,245,245)` |
+| Card / row behind the box | `rgb(24,24,27)` | `rgb(255,255,255)` |
+| Box interior (painted) | `rgb(24,24,27)` | `rgb(255,255,255)` |
+| Border width / style | `1px solid` | `1px solid` |
+| Border as painted | `rgb(138,138,139)` | `rgb(139,139,141)` |
+| **Border vs box interior** | **5.14 : 1** ✅ | **3.40 : 1** ✅ |
+| **Border vs row behind** | **5.14 : 1** ✅ | **3.40 : 1** ✅ |
+| Border vs *hovered* row (`--surface-hover`) | 4.76 : 1 ✅ (row `rgb(39,39,42)`) | 3.25 : 1 ✅ (row `rgb(234,234,234)`) |
 
-DEF-03 is the one gap: omitting `note`/`dueAt` entirely produces a raw zod message
-rather than a copy-deck one, and rejects input the PRD calls optional.
+All four principal figures clear WCAG 1.4.11's 3:1 for a non-text control
+boundary. My dark and light numbers agree with the lead's to two decimals, so
+that measurement is confirmed rather than merely repeated. The hover row is the
+tightest case in light at **3.25:1** — it still passes, but there is only 0.25
+of headroom, so any future darkening of the border token should be re-measured.
+
+Because the box interior is opaque, the border reads the same against the box
+and against the row; there is no case where the box "disappears into" the row.
+
+### 2.3 The pre-fix baseline, and light mode specifically
+
+To be sure light mode was not made worse I measured the **pre-fix rendering
+directly**, by removing the two utility classes the fix adds (`border` and the
+`color-mix` border colour) from one live control in the DOM only — no file was
+touched, and the class list was restored immediately afterwards:
+
+| | Dark (pre-fix) | Light (pre-fix) |
+|---|---|---|
+| Border width | `0px` | `0px` |
+| Box interior vs row | **1.00 : 1** | **1.00 : 1** |
+| Only remaining edge cue | none (`box-shadow` all `rgba(0,0,0,0)`) | drop shadows at α ≤ 0.06 |
+
+So the previous pass's dark-mode finding is reproduced exactly (1:1, no border),
+and — a correction worth recording — **light mode was also 1.00:1 on the box
+interior**; the earlier description of light as "a white circle with a visible
+ring" was generous, the ring was three shadows at 4–6 % alpha. The fix takes
+light from 1.00:1 to 3.40:1. **Light is improved, not degraded.**
+
+### 2.4 Checked state and focus ring
+
+**Checked state — correct in both themes.** The accent fill is the control's
+`::before` (`rgb(4,133,247)`), which is `opacity: 0; scale: 0.7` when unselected
+and `opacity: 1; scale: 1` when selected — so my earlier reading of the control's
+own `background-color` (unchanged at `rgb(24,24,27)`) was not the whole picture,
+and the fill is genuinely painted. Screenshots confirm a blue box with a white
+tick in both themes.
+
+| | Dark | Light |
+|---|---|---|
+| Accent fill vs row behind | 4.81 : 1 | 3.68 : 1 |
+| Checkmark (`rgb(252,252,252)`) vs accent fill | 3.59 : 1 | 3.59 : 1 |
+
+The checkmark is a `<polyline>` revealed by `stroke-dashoffset` (`66px` hidden →
+`44px` ≡ one full `22px` dash period ≡ drawn). Both states verified on the same
+page: the completed row shows the tick, the active row does not.
+
+**Focus ring — still visible in both themes, not swallowed by the new border.**
+Keyboard focus (`Tab`, then `shift+Tab` back onto the control, so react-aria's
+keyboard modality is genuinely set) paints a ring on the visually-overlaid
+`<input>` with `outline: auto` at `outline-offset: 2px` — i.e. **outside** the
+16 px box, structurally separate from the 1 px border. Confirmed visually in
+both themes by screenshot.
+
+I am **not** quoting a contrast number for the ring, deliberately: with
+`outline-style: auto` Chrome paints its own dual-tone ring and ignores
+`outline-color`, and the computed colours (`rgb(153,200,255)` dark,
+`rgb(229,151,0)` light) are demonstrably not what is painted — the ring is blue
+in both screenshots. Any ratio computed from those values would be fiction.
+Verdict: **visible, verified visually; not measured.**
+
+### 2.5 DEF-01 — the 44×44 target — **intact**
+
+At 427 px, both rows' pressable `checkbox__content` measures **44 × 44**, and
+`document.elementFromPoint` at all five sampled points (four 3 px-inset corners
+and the centre) resolves inside that element. A real pointer click at the centre
+toggled the todo.
+
+At ≥ `sm` the same element measures **36 × 36** — that is the deliberate
+`sm:min-h-9 sm:min-w-9` in `TodoRow.tsx`, not a regression; it clears WCAG 2.5.8
+AA (24 × 24) and the 44 px rule applies to the touch widths, where it holds.
+
+### 2.6 Verdict
+
+**DEF-08: Verified fixed.** US-06's "a completion control" is visible in dark
+mode, light mode improved rather than regressed, checked state and focus ring
+both survive, and the tap target is unchanged. NFR-06 returns to **Pass**.
 
 ---
 
-## 6. Console and network observations
+## 3. DEF-09 and the validation matrix — **VERIFIED FIXED**
 
-- The only recurring console message during normal use is the react-aria
-  `PressResponder` warning of **DEF-02**, logged on every `/todos` render.
-- No unhandled promise rejections were observed.
-- No unexpected failed requests. Every `4xx` in the network log traces to a
-  deliberate probe in this test run (401/404/405/400 from the isolation and
-  validation matrices), or to my own malformed sign-out call (`415`, caused by
-  omitting `Content-Type`; the app's own sign-out sends it correctly and returns
-  `200`).
+The exact payload from the brief, `POST /api/todos` as a signed-in user:
+
+```
+{"title":"T","priority":"low","note":5}
+→ 400 {"code":"BAD_REQUEST","message":"The note must be text.",
+       "fieldErrors":{"note":"The note must be text."}}
+```
+
+The message now names the actual mistake. The length message is still reached by
+an actual length violation, so the two cases are now distinct:
+
+| Payload | Status | Message |
+|---|---|---|
+| `note: 5` | 400 | `The note must be text.` ← **DEF-09 fixed** |
+| `note: true` / `{}` / `[1]` / `null` | 400 | `The note must be text.` |
+| `note` 2001 chars | 400 | `Keep the note under 2000 characters.` |
+| `title: ""` / `"   "` / `5` / `true` | 400 | `Enter a title.` |
+| `title` 201 chars | 400 | `Keep the title under 200 characters.` |
+| `priority: "urgent"` / `5` / omitted | 400 | `Choose a priority: low, medium, high.` |
+| `dueAt: "not-a-date"` / `"2026-02-31"` / `5` / `true` | 400 | `Enter a valid date (YYYY-MM-DD).` |
+| `completed` present on `POST` | 400 | `Completion is changed by the checkbox, not by saving the todo.` |
+| array / bare string / number / unparseable JSON | 400 | `That request wasn’t valid.` (no `fieldErrors`) |
+| `{title, priority}` only | 201 | `note: null, dueAt: null` |
+| `note: ""` | 201 | stored as `null` |
+
+`PATCH /api/todos/<own id>` with `{"note":5}` gives the same corrected message,
+so the fix covers the shared schema, not just the create path.
+
+**Re-check for other messages that describe the wrong mistake — none found.**
+Two things I looked hard at and decided are *not* defects:
+
+- `title: 5` → `Enter a title.` A non-string title is, from the user's point of
+  view, no title; the message is accurate about the required action and matches
+  the copy deck. Contrast with the old `note` case, which asserted a 2000-character
+  limit the caller was nowhere near — that was the actual wrongness.
+- `dueAt: 5` / `priority: 5` → the same messages as the malformed-value cases.
+  Both messages describe the required shape, so they remain true for a wrong type.
+
+**One asymmetry, pre-existing, not filed as a new defect:** a `GET` returns
+`note: null` / `dueAt: null`, but `POST`/`PATCH` reject explicit `null` for both
+(`The note must be text.` / `Enter a valid date (YYYY-MM-DD).`), so a client
+cannot round-trip a fetched todo verbatim. `dueAt` behaved this way before this
+diff and `note`'s behaviour is unchanged — only its message changed. Worth a
+ticket, not a release blocker, and out of scope for this pass.
+
+Status route re-probed as A and still correct and distinct:
+`{"completed":true}` → 200; `{"completed":"yes"}` → `Completion must be true or
+false.`; `{"completed":true,"title":"X"}` → `Only completion can be changed here.
+Save the todo's other fields separately.`; `PATCH` with `completed` on the main
+route → `Completion is changed by the checkbox, not by saving the todo.`
 
 ---
 
-## 7. Not tested / out of scope for this pass
+## 4. Desktop width and the row tooltips — the previous pass's two gaps
 
-- **Mutation failure paths** — create, edit, toggle and delete all specify a
-  revert-plus-error-toast behaviour on failure. I could not force a server or
-  network error without modifying application code, which was out of scope.
-- **Session expiry / tampered cookie** (US-04, third criterion) — I verified the
-  no-cookie case only; I did not forge an expired or invalid session cookie.
-- **Double-submit protection** (US-01, US-05) — the pending/disabled state is
-  present in the code but the local DB responds too fast to race it by hand.
-- **Live skeleton paint** — see US-06.
-- **200-todo performance** (NFR-09) and **bundle secret leakage** (NFR-07) — not
-  exercised; NFR-07 is better covered by the Senior's code review.
-- **Contrast ratio measurement** (NFR-06, WCAG AA 4.5:1) — assessed visually only,
-  not measured with a contrast tool.
+### 4.1 Desktop layout at 1280×800 — **Verified (geometry)**
+
+Measured after a full reload at 1280×800:
+
+| Check | Measurement | Verdict |
+|---|---|---|
+| No horizontal scroll | `scrollWidth === clientWidth === 1280` | Pass |
+| Content column centred and capped | `main` at `x=304, w=672` (`max-w-2xl`) in a 1280 viewport | Pass |
+| **Filter bar on one row** | status radios `y=231.5`, priority select `y=231.5`, search `y=231.5` — **all three share a row**; x-ranges 336–538, 550–676, 716–916, no overlap | Pass |
+| **Toolbar button placement** | `New todo` at `x=336, w=95, h=44` — auto width, left-aligned at the content edge (`sm:w-auto sm:self-start`), **not** full-bleed as at mobile | Pass |
+| Row controls | Edit/Delete at the row's right edge, 36×36 each | Pass |
+| Checkbox contrast at 1280 | identical to 427: 5.14:1 dark, 3.40:1 light | Pass |
+
+**Could not verify at 1280 px:** anything requiring a real click or a real hover
+— the pointer does not reach the page after a resize (note 2). I am not reporting
+desktop *interaction* as passing, and I have no evidence it is broken either.
+
+### 4.2 Row Edit/Delete tooltips — **Verified via keyboard focus**
+
+At 1280 px the `sm:`-and-up tooltips do render. Because keyboard input survives
+the resize, I reached them with `Tab`:
+
+| Focused control | Tooltip | Evidence |
+|---|---|---|
+| `Edit "Ship release v3 RC2 QA4"` | `Edit` | `[role=tooltip]` present, `visibility: visible`, `opacity: 1`, button carries `aria-describedby="react-aria…_r_l_"` |
+| `Delete "Ship release v3 RC2 QA4"` | `Delete` | `[role=tooltip]` at `x=868 y=285 w=53 h=32`, directly above the button at `x=876 y=320 w=36 h=36`; `aria-describedby` wired |
+
+Both were also visible in a screenshot. **Hover-triggered** tooltips specifically
+**could not be verified** — a `hover` at the button's correct coordinates left
+`:hover` matching zero elements, so the page never received the pointer. The
+tooltip component, its content, its positioning and its accessible wiring are all
+confirmed working; only the mouse-entry trigger path is unproven in this harness.
 
 ---
 
-## 8. Recommendation
+## 5. DEF-02 — `PressResponder` warning — still present, **and now pinned**
 
-The release criteria in `docs/PRD.md` §7 are met on the two that matter most:
-every Must story passes its acceptance criteria, and there is now direct evidence
-that User A cannot read, edit, toggle or delete User B's todos through a direct
-request, nor discover whether their ids exist. Unauthenticated access to every
-protected route and endpoint is refused.
+### 5.1 Count
 
-**DEF-01 should be fixed before release** — a 16×16 completion checkbox on a
-mobile-first product makes the primary interaction of the app hard to hit, and
-NFR-05 is a Must. DEF-02 through DEF-05 are safe to ship and schedule.
+| Page / width | Warnings per fresh load |
+|---|---|
+| `/todos` at 427×351 | **1** (two consecutive fresh loads, 1 each) |
+| `/todos` at 1280×800 | **1** |
+
+**The count does not change at desktop width.** Unchanged from the previous pass.
+
+### 5.2 Root cause — proven, and it is not the account menu
+
+The lead was right to reject the `Dropdown` lead. Reading the installed packages:
+`react-aria`'s `PressResponder` warns from a mount-only `useEffect` when no
+descendant called `usePress` (which is what registers). HeroUI's
+`Dropdown.Trigger` is `react-aria-components`' `Button` → `useButton` → `usePress`
+→ `register()`, so the account menu registers correctly and does **not** warn.
+
+The actual source is **`TodoFormModal`**:
+`src/app/todos/components/TodoFormModal.tsx:144` renders `<Modal state={state}>`,
+and HeroUI's `Modal` root is react-aria's `DialogTrigger`
+(`node_modules/@heroui/react/dist/components/modal/modal.js:34`), which always
+wraps its children in a `PressResponder`. The modal is *controlled* by `state`
+and has no `Modal.Trigger` child, so nothing pressable ever registers → exactly
+one warning per mounted instance. This is the **same shape** as the bug already
+fixed in `ConfirmDialog`, which dropped the `<AlertDialog>` root for precisely
+this reason (the comment in `src/components/ConfirmDialog.tsx` says so).
+
+**How I proved it, at runtime, rather than inferring it.** `TodoListScreen`
+renders the modal with `key={editingTodo?.id ?? "create"}`, so changing which
+todo is being edited remounts *that component and nothing else*. With
+`console.warn` patched to count:
+
+| Action | Expected if the source is `TodoFormModal` | Observed |
+|---|---|---|
+| Client-side mount of `/todos` (router push from a 404 page, so the patch was installed before mount) | +1 | **1** |
+| Click `Edit` on a row (`key` "create" → todo id, modal remounts, nothing else does) | +1 | **2** |
+| Click `New todo` (`key` back to "create", modal remounts) | +1 | **3** |
+
+Each isolated remount of that one component produced exactly one warning. That is
+direct evidence, not correlation with the app shell.
+
+**Fix shape, for whoever picks it up:** the same as `ConfirmDialog` — skip the
+`Modal` root and drive `Modal.Backdrop` (a `ModalOverlay`) with the controlled
+`isOpen`/`onOpenChange` props. Not attempted here; this pass changes no code.
+
+**Impact unchanged:** console noise only. Every dialog behaves correctly (§6).
+NFR-04 stays **Partial** for this reason alone.
+
+---
+
+## 6. Regression sweep — **no regressions found**
+
+Run at 427×351 with real clicks and typing, against account C's live list.
+
+| Flow | Result |
+|---|---|
+| **Create** | `New todo` → modal `New todo`, Title focused on open; typed a title; confirm `Add this todo?` / `“QA verify pass todo” will be added to your list.`; `POST /api/todos` → 201; row appeared without reload; count `1 of 2 done` → `1 of 3 done`, newest first |
+| **Edit** | `Edit` → modal `Edit todo` **pre-filled** (`title="Ship release v3 RC2"`, `note="cut the tag"`, `dueAt="2026-08-20"`); appended text; confirm `Save these changes?` / `“…QA4” will be updated.`; `PATCH /api/todos/<id>` → 200; row updated in place |
+| **Toggle + Undo** | Click toggled, row moved to the completed group with strikethrough, count `1 of 3` → `2 of 3`; toast `Todo “QA verify pass todo” marked not complete` **with `Undo`**; clicking `Undo` issued a **third `PATCH /api/todos/<id>/status`** (confirmed in the network log — the scoped route, not a shortcut) and the count returned |
+| **Delete** | `AlertDialog` `Delete this todo?` naming the record; **`Cancel` focused first**; **Escape closed it without mutating** (row still present, count unchanged) and **focus returned to the triggering `Delete "…"` button**; reopened and confirmed → row gone, count `2 of 3` → `1 of 2`, toast `Todo “QA verify pass todo” deleted` |
+| **Filters** | `Active` → `?status=active`, list narrowed to the single incomplete todo |
+| **Search** | typing `zzz` → `?status=active&q=zzz`, distinct search empty state `No matches` / `No todos match “zzz”.` with `Clear search` |
+| **Theme toggle** | Header button switched light↔dark, set `data-theme`, toggled `.dark`, persisted `heroui-theme` |
+| **Modals / toasts vs `docs/CONVENTIONS.md`** | Every mutation is preceded by a confirm naming the record; toggle is the approved no-confirm exception and reports by toast with `Undo`; destructive confirm focuses `Cancel`; non-destructive focuses the confirm action |
+
+**Console and network across the run:** no unhandled rejections; **no 5xx** — the
+dev server log for the entire session contains no error and no stack trace; every
+4xx traces to a deliberate probe of mine (plus `/nope-404`, which I navigated to
+on purpose to get a clean client-side remount for §5.2). The Speed Insights
+beacon remains inert in dev. The only recurring console message is the DEF-02
+warning.
+
+---
+
+## 7. Cross-user isolation — **short form, Verified**
+
+**This is deliberately the short form.** The diff under test touches exactly two
+files — `TodoRow.tsx` (a CSS class) and `form/schema.ts` (one error string) —
+and neither is in the authorization path: no route handler, no session code, no
+Prisma query changed. The full isolation battery was run to completion in the
+previous pass on the parent commit, so re-running it in full would re-prove
+untouched code. Confirmation probes, all as B against A's real ids:
+
+| Probe (as B) | Expected | Actual |
+|---|---|---|
+| `GET /api/todos` | none of A's | only B's own todo |
+| `GET /api/todos/<A id>` | — | `405`, empty (DEF-04, unchanged) |
+| `PATCH /api/todos/<A id>` `{"title":"HACKED BY B"}` | `404` | `404 {"code":"NOT_FOUND","message":"That todo no longer exists."}` |
+| `PATCH /api/todos/<A id>/status` `{"completed":true}` | `404` | `404`, same body |
+| `DELETE /api/todos/<A id>` | `404` | `404`, same body |
+| `?query=milk` (A's exact title) | empty | `{"todos":[]}` |
+| unauthenticated `PATCH …/status` | `401` | `401 {"code":"UNAUTHORIZED","message":"Sign in again to continue."}` |
+| A's list re-read afterwards | unchanged | all 4 todos intact, no title rewritten |
+
+A nonexistent id (`totally-made-up-id-xyz`) returns the byte-identical `404`, so
+there is still no existence oracle. NFR-01 holds.
+
+---
+
+## 8. Not tested / could not verify in this pass
+
+- **Pointer interaction at desktop width**, and **hover-triggered** tooltips —
+  harness (note 2). Marked *could not verify*, not pass, not broken.
+- **Real touch activation** at mobile widths — measurement and hit-testing only.
+- **Failure paths** (create / toggle / delete error handling) — no fault injection.
+- **DEF-10** (`INTERNAL` declared but unreachable) — unchanged by this diff, not
+  re-examined; still open from code inspection.
+- **DEF-04** (`GET /api/todos/[id]` → `405`) — unchanged, informational.
+- **M-5** production boot, expired session cookies, duplicate-email sign-up,
+  wrong-password copy, loading skeleton, 200-todo performance, bundle secret
+  leakage, WCAG *text* contrast — all carried over from previous passes, not
+  re-run. Only non-text contrast was measured here.
+- Sign-up / sign-in / sign-out flows were not re-walked in the browser this pass;
+  account creation for A and B went through the auth API and succeeded.
+
+---
+
+## 9. Recommendation
+
+## **SHIP.**
+
+**DEF-08 is genuinely fixed, and I verified it myself rather than accepting the
+numbers in the commit.** By my own canvas-normalised compositing measurement the
+unchecked control's border reads **5.14:1** against both the box interior and the
+row in dark, and **3.40:1** in light — both clear WCAG 1.4.11's 3:1 — and the
+worst case anywhere in the fix, a hovered row in light mode, is **3.25:1**, still
+passing. The pre-fix state reproduces at **1.00:1 in both themes**, which also
+corrects the earlier record: light mode was never really fine, it just failed
+less visibly. Checked state (accent fill 4.81:1 dark / 3.68:1 light, white
+checkmark 3.59:1 on the fill), focus ring and the 44×44 target all survive the
+change. **DEF-09 is closed** and the rest of the validation matrix contains no
+other message that describes the wrong mistake.
+
+**The two gaps from the last pass are now mostly closed.** Desktop layout at
+1280 px is correct — filter bar on one row, toolbar button auto-width and
+left-aligned, no horizontal scroll — and the row tooltips do render, with correct
+content, position and `aria-describedby`, reached by keyboard. I could not drive
+the pointer at that width, so desktop *mouse* interaction and hover-triggered
+tooltips remain unproven; that is a harness limit, not a finding against the app.
+
+**What stays open, and none of it blocks:**
+
+- **DEF-02** (Minor) — 1 console warning per `/todos` load, unchanged at desktop
+  width. It is now **pinned with proof** to `TodoFormModal`'s `<Modal>` root, and
+  the fix is the same one-line shape already applied to `ConfirmDialog`. Console
+  noise only; it should be scheduled, not rushed into this release.
+- **DEF-04** (informational), **DEF-10** (declared-but-unreachable `INTERNAL`,
+  code inspection only) — both unchanged by this diff.
+- The `null` round-trip asymmetry on `note`/`dueAt` noted in §3 — pre-existing,
+  worth a ticket.
+
+**One caveat on the strength of this pass, stated plainly.** It was scoped to the
+fix, so it is not a fresh release gate: the auth flows, the failure paths and the
+full isolation battery were carried over from the previous pass rather than
+re-proved, and no test exercised a real mouse at desktop width. Within that
+scope, the fix does what it claims, it did not break anything I could reach, and
+the Major that blocked the release is gone.
