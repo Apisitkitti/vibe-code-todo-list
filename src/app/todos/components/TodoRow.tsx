@@ -106,7 +106,8 @@ export const TodoRow = ({
       <Checkbox
         isDisabled={isPending}
         isSelected={todo.completed}
-        // Stays in its current state until the confirmed mutation lands.
+        // Not optimistic: the box holds its current state until the server
+        // confirms the flip, so it never shows something that did not happen.
         onChange={(isSelected) => onToggle(todo, isSelected)}
         aria-label={
           todo.completed

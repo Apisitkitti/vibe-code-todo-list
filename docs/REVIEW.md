@@ -1516,3 +1516,299 @@ guard (`:348-373`) correctly drops a response that lost its race. The DEF-11
 local removal is the right instinct and picked the right counts. The reasoning
 comments on the `Set` and the render-time flag are the best documentation in the
 file; the problem is the four older ones next to them that nobody updated.
+
+---
+
+# Re-review — `fix/add-refresh-gap` → `develop` (fix commit `dc45f6a`)
+
+Reviewer: Senior engineer
+Date: 2026-08-16
+Range: `git show dc45f6a`, re-read against `git diff develop...fix/add-refresh-gap`
+Gate: `npx tsc --noEmit` clean, `npm run lint` clean, re-run against `dc45f6a`.
+
+I proposed the single-owner restructuring in M-2's fix note, so this pass
+deliberately checks the shape I asked for rather than accepting it. Where it
+holds I say why; where it does not, it is because I traced it, not because I
+went looking for something to find.
+
+## Do M-1 and M-2 close?
+
+**M-2 — yes, for every ordering where the second write has landed.** Traced:
+
+- Edit X (toast A, `previous` = V0) → edit X again (toast B, `previous` = V1).
+  Edit 2's `handleSaved` (`TodoListScreen.tsx:217`) calls `showUndoableSuccess`
+  → `dismissUndo(saved.id)` (`:127`) before arming B. Toast A is off screen and
+  out of the map. Pressing it is not possible. The V2-destroying overwrite is
+  gone.
+- Create A → edit A → press the *create* toast's Undo. Same mechanism:
+  `saved.id` on the edit is the created row's id, so the create toast is
+  dismissed. Gone.
+- Delete a row with an armed Undo — `handleDelete` dismisses first (`:305`).
+- Toggle a row with an armed create/edit Undo — `handleToggle` dismisses first
+  (`:277`).
+
+That is the data-loss case, and it is genuinely closed. It was the one thing on
+this branch that lost typed work while reporting success.
+
+**M-1 — narrowed, not closed.** See r-1. The window shrinks from a flat 4000 ms
+to a view-transition frame, but no guard was added and the same-row concurrency
+hole M-1's second bullet described is untouched.
+
+## Minor
+
+**r-1 — `TodoListScreen.tsx:129-137`: dismissal is used as a re-entrancy guard,
+but `undo()` runs unconditionally. M-1 residue.**
+
+```
+onPress: () => {
+  dismissUndo(todoId);
+  undo();
+},
+```
+
+`dismissUndo` (`:113-120`) early-returns when the map has no key — but `undo()`
+is outside that guard and fires either way. So the second press still runs the
+undo a second time; the only thing stopping it is whether React has unmounted
+the button yet.
+
+It usually has, and the timing is worth recording because it is why this is
+Minor and not the Major it was. `toast.close` splices the queue array
+synchronously, but the subscriber notification that re-renders React is deferred
+(`@heroui/react/dist/components/toast/toast-queue.js:29-51`): every update is
+appended to a promise chain and run inside `document.startViewTransition`. So:
+
+- No View Transitions API (Firefox, older Safari) — `fn()` runs inline, React
+  flushes at the end of the press handler, the button is gone before a second
+  press is possible. Unreachable.
+- Chrome/Edge, idle chain — the callback runs on the next frame, so the button
+  stays live roughly one frame (~16 ms). Not reachable by a human double-click.
+- Chrome/Edge, chain busy — `runNext` waits on the previous transition's
+  `finished`, not its start. Press Undo while the toast's own *add* transition
+  is still animating and the close re-render is deferred by the remainder of it
+  (~250 ms default). That is inside double-click range.
+
+The consequences are the ones I described first time and they have not changed:
+a second `DELETE` returns `404` → `Couldn’t undo that. Try again.` under the
+green `Todo “…” removed`; and both presses call `markPending` on a `Set` that
+holds ids, not counts, so the first `finally { clearPending }` (`:253`, `:272`)
+re-enables the row while the second request is in flight. Neither `undoSave`
+nor `undoToggle` has any re-entrancy guard — `TodoFormModal.handleValidSubmit`
+has `if (isPending) return` (`TodoFormModal.tsx:97`), the undo paths have
+nothing.
+
+I asked for the `Map<string, number>` refcount as the second half of M-1's fix
+and it was not done. That is a defensible call — but it is now the only thing
+holding the same-row case, and nothing in the code says so.
+
+Fix, one line, and it is the correct use of a ref (synchronous, unbatched, so
+check-and-clear is atomic against a second press in the same frame):
+
+```
+onPress: () => {
+  if (!undoToastKeys.current.has(todoId)) return;
+  dismissUndo(todoId);
+  undo();
+},
+```
+
+**r-2 — the "every write dismisses first" invariant is not true of the save
+path, and today it holds only by the modal's z-order.**
+`TodoListScreen.tsx:105-107` states it outright — "every write dismisses the
+outstanding Undo for its row before starting" — and `docs/DESIGN.md` §7.15 makes
+it absolute: "A later write to the same todo dismisses the earlier toast, so an
+Undo can never restore a record past a change the user made after it."
+
+Toggle and delete do dismiss before starting (`:277`, `:305`). **Save does not.**
+`TodoFormModal.handleValidSubmit` has no `dismissUndo` and no way to reach one;
+the dismissal happens in `handleSaved`, which runs only *after* the write
+resolves (`TodoFormModal.tsx:106-111`). So for the whole duration of a second
+edit's round trip, the first edit's Undo is still armed and still points at V0.
+Press it there and V0 races V2 with no version token to arbitrate — the exact
+M-2 shape, in a window as wide as the network.
+
+I could not make it fire, and the reason is not in this codebase: while the
+modal is open its backdrop is `fixed inset-0 z-50`
+(`@heroui/styles/dist/components/modal.css:44-45`) and portals into `body` after
+`<Toast.Provider />` (`src/app/layout.tsx`), which is also `z-50`
+(`components/toast.css:4-5`). Equal z-index, later in DOM order — the backdrop
+paints over the toast, and react-aria traps focus in the dialog so the keyboard
+cannot reach the button either.
+
+So the guarantee is real today and rests entirely on a third-party overlay's
+stacking. A `placement="top"` toast region, a z-index bump, a non-modal
+quick-add (backlog #1) or a HeroUI upgrade all silently reopen it. Fix: pass
+`onSaveStart` (or hoist the submit) so the dismissal happens before the write,
+the way toggle and delete already do — then the comment and §7.15 are true by
+construction. Failing that, soften §7.15, because a doc that overstates a
+guarantee is how this becomes a Major again.
+
+**r-3 — `TodoListScreen.tsx:111`: the new `useRef` sits in the middle of the
+body, against `docs/CONVENTIONS.md` → Component body order.**
+That section is explicit that `useRef` is group 1 and that all of it goes
+"together, at the very top". `undoToastKeys` is declared at `:111`, below
+`filterKey` (group 2) and the render-time adjust block, interleaved with the
+handlers. This is a *new* violation introduced by the fix commit, of the same
+rule m-2 is already open against. Move it up with the `useState` calls; the
+doc comment can travel with it.
+
+**r-4 — `TodoFormModal.tsx:105-111`: `onSaved` is called inside the `try` that
+catches write failures.**
+If anything in `handleSaved` → `showUndoableSuccess` → `toast.*` throws, the
+modal's `catch` treats it as a failed write: `readFieldErrors` returns null and
+it raises `Couldn’t save your changes. Try again.` for a write the server
+committed, with no toast and no reload. I traced the toast path and it does not
+throw today (`queue.add`/`close` are array ops; `defaultWrapUpdate` guards
+`typeof document`), so this is structural, not live. But the modal's `catch` now
+covers the list's code as well as its own, which is precisely what moving the
+toast out was meant to stop. Move `onSaved` after the `try/catch`, or into the
+`finally` alongside the m-5 fix.
+
+**r-5 — `undoSave` reloads silently (`:249`) where `handleSaved` reloads with a
+skeleton (`:218`), for the same class of write.**
+`reloadWithSkeleton`'s own comment (`:171-177`) gives the rule: a create or an
+edit "can move the row, or drop it out of the current filter entirely", so it
+gets the skeleton. An edit-undo is an edit — it writes the same fields through
+the same endpoint and can move the row exactly as far. A create-undo is a
+delete and `reloadSilently` is right for it. So the create branch is correct
+and the edit branch contradicts the rule stated eighty lines above it. Pick one
+per branch rather than one per function.
+
+**r-6 — M-4 is four of five. `TodoRow.tsx:109` still reads "Stays in its current
+state until the confirmed mutation lands."**
+The commit message says five comments were removed. Four were:
+`TodoFormModal.tsx:30-33` and `:54-58` are rewritten and now accurate,
+`form/TodoForm.tsx:38-41` now says "performs the write and reports it", and
+`TodoListScreen.tsx:184` is gone. The `TodoRow` one — the checkbox comment,
+which is the one sitting on the control the toggle Undo is about — was missed.
+`grep -rn confirm src/app/todos src/app/sign-up` finds it in four lines flat.
+
+**m-5 (carried, unfixed, and now in four places) — the reload sits inside the
+`try`.**
+Originally `TodoFormModal.tsx:103`; the code moved, the shape did not.
+`undoSave:249`, `undoToggle:268`, `handleToggle:289` and `handleDelete:318` all
+call `reloadSilently()` as the last statement of a `try`. If the write commits
+but the response is lost, the list never refetches and keeps rendering state the
+server no longer has, while the toast says it failed. `finally` is the right
+home for all four.
+
+## Nit
+
+**r-7 — map entries are never removed when a toast expires naturally
+(`TodoListScreen.tsx:111`).** `dismissUndo` is the only thing that deletes, so
+every toast that simply times out leaves a dead key behind. I checked the two
+things that would make this matter and both come back clean: keys are
+`'_' + Math.random().toString(36).slice(2)`
+(`react-stately/dist/private/toast/useToastState.mjs:60`) — random, never
+recycled, so a stale key can never close somebody else's toast; and `close()` on
+a missing key finds `index === -1` and skips the splice. The cost is one short
+string per todo id ever written to, for the life of the mount, plus one wasted
+view transition when a stale key is closed. For a list of this size that is
+nothing. Worth a line in the comment so the next reader does not have to
+re-derive it. If you want it tidy, `toast`'s options take an `onClose` callback
+— `onClose: () => undoToastKeys.current.delete(todoId)` closes it exactly.
+
+Nothing reads the map during render, which is the thing that would have made
+`useRef` wrong here. It is read only in press handlers and `dismissUndo`. The
+ref is the right choice.
+
+**r-8 — `undoSave` passes `saved.completed` (`:246`), a snapshot from the write;
+`handleDelete` passes `pendingDelete.completed` (`:317`), the live row.**
+Both are correct today: a created todo is `completed: false`, and toggling it
+would have dismissed the create-Undo. So the count is right — but only because
+of r-1's dismissal, and the two call sites reach for different freshness of the
+same field. Worth a word.
+
+**r-9 — `docs/DESIGN.md` §7.15 is filed before §7.14.** Appended rather than
+inserted.
+
+**r-10 — `TodoFormValues` now types the undo payload across a component
+boundary (`TodoListScreen.tsx:27`).** It is `import type` off the `./form`
+barrel, so nothing is pulled in at runtime, and it is the right shape in
+practice — it is what `updateTodo` takes. The cost is that "the previous state
+of a record" is now defined by the form's field set: drop a field from
+`TodoFormValues` and `undoSave` silently stops restoring it, with no type error
+anywhere. Acceptable; note it.
+
+**r-11 — two new signatures exceed 80 columns** (`TodoListScreen.tsx:217, 236`),
+so `npx prettier --check` fails on the file. m-7's mis-indentation in
+`TodoFormModal.tsx:137-191` is also untouched. Prettier still is not wired into
+`npm run lint`, which is why neither was caught.
+
+## Status of the earlier Minors and Nits
+
+| | Status |
+|---|---|
+| m-1 — `removeTodoLocally` double-decrements transiently | **Open**, untouched (`:157-165`). |
+| m-2 — `hasTodos` declared after the `useEffect` | **Open** (`:464`), and r-3 adds a second violation of the same rule. |
+| m-3 — `filterKey` duplicates the effect's dep list | **Open** (`:86`, `:462`). |
+| m-4 — `pointer-events-none` vs the comment | **Fixed.** `TodoRow.tsx:95-99` now says the class "only stops a mouse" and that the controls are disabled outright — the backstop reading I offered. The class staying is now deliberate and documented. The tooltip/hover suppression I noted stands as a nit only. |
+| m-5 — reload runs only on success | **Open**, in four places now. Promoted to Minor above. |
+| m-6 — double-submit guard reads state, not a ref | **Open.** `SignUpForm.tsx:56` is still `if (isPending) return` and the three fields are still enabled while the request is in flight (only the button at `:179` is disabled). Unchanged by this commit. |
+| m-7 — `TodoFormModal` JSX mis-indented | **Open** (`:137-191`). Folded into r-11. |
+| n-1 — `reloadSilently` is `requestReload` with a doc comment | **Withdrawn.** There are now five call sites split across the two policies and r-5 turns on exactly that distinction. The named pair earns its keep; I was wrong to want it folded away. |
+| n-2 — `lastFilterKey` starts `null` | **Open** (`:80`). |
+| n-3 — `undoSave` encodes "this was a create" positionally | **Open** (`:236`), though `handleSaved` naming `isEdit` (`:220`) makes the call site readable now. Downgrade in urgency, not withdrawn. |
+
+## What the restructuring got right
+
+Saying this because I proposed it and should be equally concrete about the parts
+that came back clean:
+
+- The ownership move is correct and the comment at `:98-110` explains *why* in
+  the register `docs/WORKFLOW.md` asks for. `TodoFormModal` no longer runs a
+  mutation after it has closed, which was the oddity underneath M-2.
+- `showUndoableSuccess` dismissing before it arms means the map holds at most
+  one live key per row by construction, not by discipline at the call sites.
+  That is the property that closes M-2, and it is enforced in one place.
+- `useRef` is right: no render reads it, and check-and-clear on a ref is exactly
+  what r-1 needs to be atomic. A `useState` map here would have been the bug.
+- Ordering in `handleValidSubmit` is sound. `closeForm()` and `onSaved()` are
+  both after the `await` and both synchronous; the toast is an imperative global
+  queue, not React state, so batching cannot drop it and the modal closing
+  cannot race it. No path reaches `onSaved` without a resolved `saved`.
+- Failure paths stayed where they belong: field errors keep the form open in the
+  modal, generic write failures toast from the modal while it is still on
+  screen, undo failures toast from the list. Nothing reports from a component
+  that is gone.
+- Every `markPending` still has a matching `clearPending` in a `finally`
+  (`:253`, `:272`), including both undo paths. No row can be left permanently
+  disabled.
+- M-3 is closed properly — §7.15 carries all six strings and `Todo “{title}”
+  removed` now names its record.
+- No stale closure: `saved` and `previous` are arguments captured at
+  toast-creation time, which is what an undo needs, and `removeTodoLocally` /
+  `markPending` / `clearPending` all use functional `setState`, so a handler
+  captured from an older render still computes off current state.
+- No race between `reloadWithSkeleton` and the toast. Both reloads bump the same
+  `reloadToken`, and the effect's `isCurrent` guard (`:459-461`) drops the
+  loser. I looked for a case where the Undo lands mid-skeleton and the row gets
+  no pending affordance; `pendingTodoIds` survives the reload, so the row shows
+  pending as soon as it renders.
+
+## Verdict
+
+**Approve with comments.**
+
+M-2 is closed — the data-loss case, where the user lost typed work and was told
+the opposite, does not reproduce in any ordering I could reach. M-3 is closed.
+M-4 is four of five. Nothing here is merge-blocking.
+
+The one I would want in before this merges is **r-1**, because it is a single
+line, because the design premise of the whole restructuring is that dismissal
+guards re-entry and right now it does not, and because I cannot rule out the
+~250 ms window when the close transition queues behind the toast's own entry
+animation. **r-6** is a four-line grep and finishes M-4. **r-3** should not
+survive its own commit.
+
+**r-2** is the one to think about rather than patch reflexively. The invariant
+is true today and false by construction — it holds because a third-party modal
+backdrop happens to occlude the toast region at equal z-index. Either make the
+save path dismiss before it writes, like toggle and delete already do, or stop
+claiming the absolute in `DESIGN.md` §7.15. I would do the former; it is the
+same two lines that would have made this uniform in the first place.
+
+Everything else can follow. The accumulating count is what I would actually
+watch: m-1, m-2, m-3, m-5, m-6, m-7, n-2 and n-3 are all still open, all in the
+same two files, and this pass added five more. The `useTodoList` split I
+described last time is now overdue — `TodoListScreen.tsx` is 523 lines and the
+undo ownership is the third state machine living in it.

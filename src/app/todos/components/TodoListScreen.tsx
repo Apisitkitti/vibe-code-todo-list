@@ -103,20 +103,29 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    * may no longer be in. Both problems are the same problem: a toast outliving
    * the write it belongs to (review M-1, M-2).
    *
-   * So every write dismisses the outstanding Undo for its row first. Press
-   * Undo twice and the second press is gone before it can fire a duplicate;
-   * edit a todo twice and the older Undo — which would silently overwrite the
-   * newer edit and report success — is gone too.
+   * A toggle and a delete dismiss the row's outstanding Undo before they
+   * start. A save cannot — it runs inside the modal — so its dismissal happens
+   * in `handleSaved` once the write resolves, which leaves the older Undo
+   * armed for the length of that round trip. Unreachable today only because
+   * the modal's backdrop covers the toast region and traps focus; a top-placed
+   * toast or a non-modal editor would expose it (review r-2).
    */
   const undoToastKeys = useRef(new Map<string, string>());
 
+  /**
+   * Returns whether it dismissed anything, which is what makes it usable as a
+   * re-entrancy guard: reading and clearing the key is atomic, so only the
+   * first of two fast presses sees a key and runs the undo (review r-1).
+   */
   const dismissUndo = (todoId: string) => {
     const key = undoToastKeys.current.get(todoId);
 
-    if (!key) return;
+    if (!key) return false;
 
     toast.close(key);
     undoToastKeys.current.delete(todoId);
+
+    return true;
   };
 
   const showUndoableSuccess = (
@@ -130,7 +139,11 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       actionProps: {
         children: "Undo",
         onPress: () => {
-          dismissUndo(todoId);
+          // Closing the toast does not remove it immediately — HeroUI defers
+          // the unmount through a view transition, which can outlast a double
+          // click. The key, not the toast, is what makes this fire once.
+          if (!dismissUndo(todoId)) return;
+
           undo();
         },
       },

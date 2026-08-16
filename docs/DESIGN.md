@@ -1125,7 +1125,8 @@ review (M-3) for naming nothing.
 
 An Undo is offered for one write only. A later write to the same todo dismisses
 the earlier toast, so an Undo can never restore a record past a change the user
-made after it.
+made after it. A toggle and a delete dismiss before they start; a save dismisses
+when its write resolves, since it runs behind a modal that covers the toast.
 
 ### 7.14 Malformed request
 

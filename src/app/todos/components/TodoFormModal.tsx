@@ -102,13 +102,15 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
     // Captured before the write, since `todo` is the pre-edit record.
     const previousValues = todo ? toFormValues(todo) : null;
 
+    let saved: TodoItemData;
+
+    // Only the write belongs in here. Handing the result upward from inside
+    // the `try` would report the list's own failures as a failed save
+    // (review r-4).
     try {
-      const saved = isEdit
+      saved = isEdit
         ? await updateTodo(todo.id, values)
         : await createTodo(values);
-
-      closeForm();
-      onSaved(saved, previousValues);
     } catch (error) {
       const fieldErrors = readFieldErrors(error);
 
@@ -128,9 +130,14 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
             : "Couldn’t add the todo. Try again.",
         ),
       );
+
+      return;
     } finally {
       setIsPending(false);
     }
+
+    closeForm();
+    onSaved(saved, previousValues);
   };
 
   return (
