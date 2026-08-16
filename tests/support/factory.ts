@@ -44,6 +44,12 @@ export interface TodoSeed {
   priority?: TodoPriority;
   completed?: boolean;
   dueAt?: Date | null;
+  /**
+   * Overridable so the ordering suite can pin the last tie-break. Left to the
+   * schema's `now()` default everywhere else, and two rows created in the same
+   * millisecond would otherwise make `createdAt desc` untestable.
+   */
+  createdAt?: Date;
 }
 
 export const createTodo = (userId: string, seed: TodoSeed) => {
@@ -54,6 +60,7 @@ export const createTodo = (userId: string, seed: TodoSeed) => {
       priority: seed.priority ?? "medium",
       completed: seed.completed ?? false,
       dueAt: seed.dueAt ?? null,
+      ...(seed.createdAt ? { createdAt: seed.createdAt } : {}),
       userId,
     },
   });

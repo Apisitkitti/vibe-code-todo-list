@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { formatDueDate } from "@/lib/date";
+import { dueDayOffset, formatDueDate } from "@/lib/date";
 import { parseDueDate, toDueDateInputValue } from "@/lib/todo";
 
 /**
@@ -75,6 +75,41 @@ describe("toDueDateInputValue", () => {
     const parsed = parseDueDate("2026-08-16") as Date;
 
     expect(toDueDateInputValue(parsed.toISOString())).toBe("2026-08-16");
+  });
+});
+
+/**
+ * The day arithmetic both the row label and the list grouping read, so that
+ * the app has one answer to "what day is it" rather than two that agree until
+ * they do not.
+ */
+describe("dueDayOffset", () => {
+  /** Local noon on 16 August 2026, so the local calendar day is unambiguous. */
+  const now = new Date(2026, 7, 16, 12, 0, 0);
+
+  test.each([
+    ["today", "2026-08-16T00:00:00.000Z", 0],
+    ["tomorrow", "2026-08-17T00:00:00.000Z", 1],
+    ["yesterday", "2026-08-15T00:00:00.000Z", -1],
+    ["a week out", "2026-08-23T00:00:00.000Z", 7],
+    ["last year", "2025-08-16T00:00:00.000Z", -365],
+  ])("%s", (_label, iso, expected) => {
+    expect(dueDayOffset(iso, now)).toBe(expected);
+  });
+
+  test("counts calendar days, so the clock time inside the value is ignored", () => {
+    expect(dueDayOffset("2026-08-16T23:59:59.000Z", now)).toBe(0);
+    expect(dueDayOffset("2026-08-16T00:00:00.000Z", now)).toBe(0);
+  });
+
+  test("moves with the user's own midnight, not with UTC's", () => {
+    expect(dueDayOffset("2026-08-17T00:00:00.000Z", new Date(2026, 7, 16, 23, 59, 59))).toBe(1);
+    expect(dueDayOffset("2026-08-17T00:00:00.000Z", new Date(2026, 7, 17, 0, 0, 0))).toBe(0);
+  });
+
+  test("a value that is not a date has no offset at all", () => {
+    expect(dueDayOffset("not-a-date", now)).toBeNull();
+    expect(dueDayOffset("", now)).toBeNull();
   });
 });
 

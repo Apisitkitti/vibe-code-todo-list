@@ -100,6 +100,20 @@ export const TRY_AGAIN_LABEL = "Try again";
 /** §7.7 — empty states. */
 export const EMPTY_HEADING = "Nothing here yet";
 
+/** §7.16 — the list's section headings, in the order the list shows them. */
+export const OVERDUE_HEADING = "Overdue";
+export const TODAY_HEADING = "Today";
+export const UPCOMING_HEADING = "Upcoming";
+export const NO_DATE_HEADING = "No date";
+export const COMPLETED_HEADING = "Completed";
+export const GROUP_HEADINGS_IN_ORDER = [
+  OVERDUE_HEADING,
+  TODAY_HEADING,
+  UPCOMING_HEADING,
+  NO_DATE_HEADING,
+  COMPLETED_HEADING,
+];
+
 /**
  * Raw transport text that must NEVER reach the user. `getErrorMessage`
  * deliberately prefers the copy deck over axios's own `message`, and these are
