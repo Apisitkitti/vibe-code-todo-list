@@ -1195,3 +1195,324 @@ QA may not skip on judgement, whatever the diff looks like.
   this app, but it is a third-party beacon on private todo text and a decision
   for the PM, not a chore. Vercel's own function logs cover E-7's `500` case for
   now.
+
+---
+
+# Code review — `fix/add-refresh-gap` → `develop`
+
+Reviewer: Senior engineer
+Date: 2026-08-16
+Range: `git diff develop...fix/add-refresh-gap` (`4020b9b`…`f7c1232`, 3 commits)
+Gate: `npx tsc --noEmit` clean, `npm run lint` clean — re-run against `f7c1232`.
+This review covers what those cannot see.
+
+I proposed the Mutation UX rewrite myself, as did the PM, the designer and QA
+independently. That makes me a poor judge of the decision, so this reviews the
+implementation only. Nothing below argues about whether the rule should have
+changed.
+
+## 1. Undo authorization and payload correctness — clean
+
+Traced both undo paths end to end.
+
+- `undoSave` (`TodoFormModal.tsx:93-107`) calls `updateTodo` / `deleteTodo` from
+  `src/service/todo.service.ts:32-48` — the same functions the original write
+  calls, through the same axios instance. There is no second route, no
+  client-supplied user id, no shortcut. `undoToggle`
+  (`TodoListScreen.tsx:166-182`) likewise re-runs `PATCH /api/todos/[id]/status`.
+- The endpoints are session-scoped. `PATCH` and `DELETE`
+  (`src/app/api/todos/[id]/route.ts:31-81`) both call `getSession()` first and
+  return `401` before any read, then scope the write itself with
+  `where: { id, userId: session.user.id }` through `updateMany` / `deleteMany`.
+  Another user's row matches zero rows and comes back `404`, never as data. An
+  undo is exactly as privileged as the write it reverses.
+- **`saved.id` is the right id.** `POST /api/todos` returns
+  `toTodoResponse(todo)` with `201` (`route.ts:103`); `PATCH` re-reads through
+  `findOwnedTodo` and returns `toTodoResponse` (`[id]/route.ts:60-64`);
+  `toTodoResponse` (`util.ts:17-27`) always carries `id`. `createTodo` and
+  `updateTodo` return `response.data` untouched, so `saved.id` in
+  `handleValidSubmit` (`TodoFormModal.tsx:124-126`) is the server's own id for
+  the row just written, in both branches.
+- **The edit-undo payload round-trips exactly.** `toFormValues`
+  (`TodoFormModal.tsx:35-44`) reduces `dueAt` through
+  `toDueDateInputValue(iso) = iso.slice(0, 10)`, and the server re-parses with
+  `dayjs.utc(value, "YYYY-MM-DD", true)` (`src/lib/todo.ts:93-106`). Every
+  `dueAt` in the database was written through that same parser, so an undo
+  cannot shift a date by a timezone. `note` round-trips through
+  `note === "" ? null : note`. `completed` is not a member of `TodoFormValues`
+  and both write routes reject a body that so much as mentions it
+  (`util.ts:54-56`, `[id]/route.ts:39`), so an edit-undo cannot flip a
+  checkbox — which is correct, since an edit cannot either.
+- **Failure is reported, not swallowed.** Both branches `await` before their
+  success toast, and the `catch` surfaces `getErrorMessage`. A todo deleted by
+  other means first gives `notFoundResponse()` → `404` → axios rejects →
+  `Couldn’t undo that. Try again.` Honest.
+
+`previousValues` is also captured from the right object.
+`TodoFormModal.tsx:121` reads the `todo` prop before the `await`, and `todo` is
+`editingTodo`, set by `openEdit` from the row as last fetched. I checked the
+remount question, because the modal is keyed on `editingTodo?.id ?? "create"`
+and that key does not change when the same row is edited twice: it does not
+matter, because `Modal.Backdrop` is a react-aria `ModalOverlay`, which returns
+`null` when closed (`react-aria-components/dist/private/Modal.mjs:96`). `TodoForm`
+therefore remounts on every open and picks up fresh `defaultValues`, and
+`editingTodo` is replaced by `openEdit` on each click. The *capture* is right.
+
+What is wrong is the *window* it stays live in — M-1 and M-2.
+
+## Blocker
+
+None.
+
+## Major
+
+**M-1 — `TodoFormModal.tsx:134-140` and `TodoListScreen.tsx:195-201`: the Undo
+toast is never dismissed when pressed, and neither undo handler guards
+re-entry.**
+`ToastActionButton`
+(`node_modules/@heroui/react/dist/components/toast/toast.js:256-270`) spreads
+`actionProps` onto a plain `Button` and does not close the toast; the default
+timeout is 4000 ms (`toast/constants.js:13`). So Undo stays live and pressable
+for four seconds *after it has already run*. Two consequences, both real:
+
+- **Create-undo pressed twice tells the user it failed when it succeeded.**
+  `DELETE` #1 returns `204`; `DELETE` #2 hits `result.count === 0` and returns
+  `notFoundResponse()` (`[id]/route.ts:78`), which `undoSave`'s catch turns into
+  `toast.danger("Couldn’t undo that. Try again.")` — landing directly under the
+  green `Todo removed`. The user is invited to retry an action that already
+  worked. This is the inverse of the "silently does nothing while claiming
+  success" case, and just as misleading.
+- **Toggle-undo pressed twice re-opens m-4.** `pendingTodoIds` is a `Set` of
+  ids, not a count (`TodoListScreen.tsx:92-104`). Both presses call
+  `markPending(todo.id)` and produce one entry; the first request's
+  `finally { clearPending(todo.id) }` (`:180`) then removes it while the second
+  PATCH is still in flight, re-enabling the row mid-request. The `Set` fixes two
+  *different* rows racing, which is what m-4 described; it cannot represent two
+  operations on the *same* row, and the toast is now a second way to start one.
+
+Fix: `toast.success` returns the queue key and `toast.close(key)` exists
+(`toast-queue.js:65-67,164`) — capture the key and close it as the first
+statement of every Undo `onPress`. That closes both symptoms with one change.
+If you also want the row state to be honest under concurrency, make pending a
+`Map<string, number>` refcount rather than a `Set`.
+
+**M-2 — `TodoFormModal.tsx:93-107, 121, 136-139`: edit-undo is a blind
+overwrite, and a later edit is destroyed while the toast reports success.**
+Each success toast closes over the values as of *its own* save, and lives for
+four seconds. Edit X from V0 to V1 (toast A holds V0); within four seconds edit
+X again from V1 to V2 (toast B holds V1); press toast A's Undo → `PATCH` writes
+V0. V2 is gone with no warning and the toast says `Todo “V0” restored`. The
+same shape reaches further: create A, edit A, then press the *create* toast's
+Undo — the edited todo is deleted.
+Nothing on the wire can catch this. `toTodoResponse` (`util.ts:17-27`) does not
+expose `updatedAt`, so there is no version token for the PATCH to compare, and
+the route's `updateMany` is unconditional last-writer-wins by design.
+Why it matters: this is the one place on the branch where the user loses typed
+work and is told the opposite. It is also the case the new rule leans on —
+"Undo actually puts things back" is the argument in `CONVENTIONS.md`.
+Fix: dismiss any outstanding Undo toast for a todo id when a new write targets
+that id. A `Map<todoId, toastKey>` held in `TodoListScreen` (which already owns
+the ids, and already owns `undoToggle`) is the natural home; lifting undo
+ownership out of the modal also removes the oddity of a closed modal running
+mutations. M-1's fix does not cover this on its own — that one only stops the
+*same* toast firing twice.
+
+**M-3 — `TodoFormModal.tsx:97,100`: the Undo copy is improvised inline, against
+the convention this branch rewrote.**
+`docs/CONVENTIONS.md` → Mutation UX (unchanged by this branch on that point):
+"Exact strings come from the copy deck in `docs/DESIGN.md`. If a string is
+missing there, add it to that file rather than improvising inline."
+`docs/DESIGN.md` §7.13 covers the *toggle* Undo only (`Undo`, `Couldn’t undo
+that. Try again.`); neither `Todo “…” restored` nor `Todo removed` appears
+anywhere in the deck, and the +206 lines this branch adds to `DESIGN.md` do not
+add them.
+`Todo removed` additionally names no record, against the same section's "names
+the specific record … not a generic 'Success'" — `undoSave` is not given the
+title on the create path.
+Fix: add both strings to the deck, and pass the created todo's title into
+`undoSave` so the create-undo toast can name it.
+
+**M-4 — five comments now describe a flow that no longer exists.**
+`docs/WORKFLOW.md` makes this the primary lens: "a comment restating it goes
+stale and starts lying." All five are load-bearing orientation for a reader.
+
+- `TodoFormModal.tsx:30-33` — "once the user confirms, on the confirm dialog's
+  own action". There is no confirm dialog in this file.
+- `TodoFormModal.tsx:54-58` — the component's own doc comment: "Submitting only
+  opens the confirm dialog; the mutation runs after the user confirms." That is
+  now the exact opposite of what the component does, and it is the first thing
+  anyone reads.
+- `form/TodoForm.tsx:38-41` — "hands validated values to the parent, which runs
+  the confirm-then-mutate flow".
+- `TodoListScreen.tsx:184` — "The one mutation with no confirm dialog". Three
+  now have none.
+- `TodoRow.tsx:109` — "until the confirmed mutation lands" now reads as a
+  reference to the dialog that was removed.
+
+Fix: rewrite all five against the current rule. `TodoForm.tsx` and
+`TodoFormModal.tsx:54-58` are the two that actively mislead.
+
+## Minor
+
+**m-1 — `TodoListScreen.tsx:107-115`: `removeTodoLocally` can double-decrement
+transiently.**
+The *choice* of counts is right, and worth stating because it is not obvious:
+`GET /api/todos` computes `totalCount` and `completedCount` over the whole user
+(`api/todos/route.ts:65-66`), unfiltered, while `todos` is the filtered list. So
+`-1` on a delete is correct whatever filter is active, and `wasCompleted` gates
+the second decrement correctly. No permanent drift.
+The updater is unconditional, though. If a filter change refetches between the
+`DELETE` leaving and its response arriving, the fresh `result` already excludes
+the row and its counts already reflect the delete — and then the updater
+decrements again. `reloadSilently()` on the next line corrects it one round trip
+later, so it is a flicker, not a corruption.
+If the following refetch *fails*: `loadError` is set, `hasTodos` (`:375`) goes
+false, and the counts are hidden entirely rather than shown wrong. That path is
+fine as it stands.
+Fix: `const wasPresent = current.todos.some((todo) => todo.id === todoId);` and
+return `current` unchanged when it is not.
+
+**m-2 — `TodoListScreen.tsx:375`: `hasTodos` is a variable declared after the
+`useEffect`.**
+`docs/CONVENTIONS.md` → Component body order is state → variables → functions →
+`useEffect` last, and the worked example in that section uses
+`const hasTodos = …` as its illustration of group 2. Move it up beside
+`filterKey`.
+
+**m-3 — `TodoListScreen.tsx:80,373`: `filterKey` duplicates the effect's
+dependency list.**
+`` `${status}|${priority}|${query}` `` and `[status, priority, query,
+reloadToken]` are two independent statements of "the filters changed". A fifth
+filter means remembering both, and forgetting the string is silent — no
+skeleton, stale rows — where forgetting the dep array is at least lint-visible.
+The adjust-during-render pattern itself is correct and the comment justifying it
+(`:82-86`) is exactly the kind of note the workflow asks for; this is only about
+the two sources of truth. Fix: build the filter values once and derive both the
+key and the deps from it.
+
+**m-4 — `TodoRow.tsx:97-103`: `pointer-events-none` is still on the row while the
+new comment explains why it was insufficient.**
+DEF-12's fix added `isDisabled` and `aria-busy` but did not remove the class,
+and the comment reads as though it had. The next reader will either delete the
+class believing the comment or trust the class and skip `isDisabled` on a new
+control. It also suppresses the row's hover affordance and the disabled buttons'
+tooltips while pending. Fix: drop the class now that every control is
+`isDisabled`, or say in the comment that it is kept deliberately as a backstop.
+
+**m-5 — `TodoFormModal.tsx:103`: `onSaved()` runs only when the undo
+succeeds.**
+If the write commits but the response is lost, the list is never refreshed and
+keeps rendering state the server no longer has, while the toast says the undo
+failed. Fix: move `onSaved()` into a `finally`.
+
+**m-6 — `TodoFormModal.tsx:114-115` and `SignUpForm.tsx:56`: the double-submit
+guard reads state, not a ref.**
+`if (isPending) return` reads the render closure, so two submits dispatched
+before React re-renders both see `false`. I could not force a double write on
+create or edit, and the reason is worth recording: every field in `TodoForm`
+carries `isDisabled={isDisabled}` (`TodoForm.tsx:89,106,122,138`) and the submit
+button is `isDisabled={isPending}` (`TodoFormModal.tsx:206`), so once the first
+render lands there is nothing left to press Enter in. **Double-submit is still
+prevented on create and edit** — the confirm dialog was not what was holding it.
+Sign-up is guarded by the `if` alone: `SignUpForm.tsx:111-177` leaves all three
+fields enabled while the request is in flight, so Enter in the password field
+re-enters `onSubmit`. In practice a network round trip has elapsed and the
+re-render has landed, so it holds — but it holds by timing, not by construction,
+and a duplicate here means a second `USER_ALREADY_EXISTS` toast and a cleared
+password after a successful navigation.
+Fix: a `useRef` latch set before the first `await` in both, and
+`isDisabled={isPending}` on the sign-up fields to match `TodoForm`.
+
+**m-7 — `TodoFormModal.tsx:167-222`: the JSX is mis-indented after the fragment
+was removed.**
+`Modal.Backdrop` sits two levels in from `Modal` and the closing tags do not
+line up with their openers. Prettier is not wired into `npm run lint`, so
+nothing caught it, and it makes a 55-line block harder to scan than it was
+before the change. Reformat.
+
+## Nit
+
+**n-1 — `TodoListScreen.tsx:133-141`: `reloadSilently` is `requestReload` with a
+doc comment and no behaviour.** Two names for one action; a reader has to open
+it to confirm the "silent" one really is a pass-through. Either fold the
+rationale into the two call sites or keep only `requestReload` and
+`reloadWithSkeleton`.
+
+**n-2 — `TodoListScreen.tsx:74`: `lastFilterKey` starts `null`, so the first
+render always takes the adjust-during-render branch and re-renders once for
+nothing.** `useState(filterKey)` skips it; `isLoading` already defaults to
+`true`, so mount behaviour is unchanged.
+
+**n-3 — `TodoFormModal.tsx:93`: `undoSave(savedId, previous)` encodes "this was
+a create" as `previous === null`, positionally.** A reader has to trace the call
+site to learn what a `null` second argument means. Two functions — `undoCreate`
+and `undoEdit` — would say it outright, and each would be four lines.
+
+## Readability — `TodoListScreen.tsx` (WORKFLOW's primary lens)
+
+Plainly: **yes, a new developer can still follow it, and it is at the limit.**
+435 lines, nine `useState` calls and sixteen local arrow functions before the
+`return`. Nothing in it is obscure — the names say what they hold, no function
+needs section comments, nesting is shallow, and the comments explaining
+*why* (the `Set`, the render-time flag, the DEF-11 local removal) are the
+genuinely good part of this branch. The problem is volume, not clarity.
+
+Two splits I would make, in this order:
+
+1. **`useTodoList(filters)`** — lift `result`, `isLoading`, `loadError`,
+   `reloadToken`, `lastFilterKey`, the render-time flag, `removeTodoLocally` and
+   the fetching effect into one hook returning
+   `{ result, isLoading, loadError, reloadWithSkeleton, reloadSilently,
+   removeTodoLocally, retry }`. That is precisely the client state machine this
+   branch created, and it is the part that takes real effort to hold in your
+   head. Nothing outside it needs to know `reloadToken` exists.
+2. **`resolveEmptyState` + `noMatchingFilters`** (`:240-286`, 47 lines) — a pure
+   function of `(result, filters)` that touches no state and no handler. It
+   belongs beside `TodoEmptyState`, not in the middle of the screen's handlers.
+
+That leaves roughly 250 lines of "render the list, run the mutations", which is
+comfortably followable. I am not blocking on it — but the next thing added to
+this file should be the split, not another `useState`.
+
+## Claims checked against the code
+
+| Claim | Verdict |
+|---|---|
+| Skeleton split by mutation; create/edit and filter change show it, toggle/delete do not | True. `reloadWithSkeleton` on `onSaved` (`:416`) and `retry`; `reloadSilently` on toggle, undo-toggle and delete. |
+| The filter case raises the flag during render, not in an effect | True (`:87-90`), and correctly so — an effect would render stale rows first and trips `react-hooks/set-state-in-effect`. See m-3 on the duplicated key. |
+| `pendingTodoId` became a `Set` so two quick toggles no longer clear each other | True for two *different* rows. Not true for two operations on the *same* row — a `Set` cannot count, and the undismissed Undo toast makes that reachable. See M-1. |
+| DEF-11 — the deleted row is removed from local state on success | True (`:228`), and the counts it adjusts are the right ones. One transient double-decrement, m-1. |
+| DEF-12 — controls are `isDisabled`, row carries `aria-busy` | True — `aria-busy` at `TodoRow.tsx:101`, and checkbox, edit and delete all disabled at `:107`, `:169`, `:182`. `pointer-events-none` was kept, not replaced — m-4. |
+| Mutation UX: delete confirms; create, edit, toggle, sign-in, sign-up do not | True. `ConfirmDialog` survives only on delete (`TodoListScreen.tsx:419-431`, `isDestructive`), and is gone from `SignUpForm` and `TodoFormModal`. Matches the rewritten table in `CONVENTIONS.md`. |
+| Undo runs the same endpoints with the same authorization, never a shortcut | True. Verified against every write route — §1. |
+| Create-undo deletes by the id the server returned | True, and failure is surfaced. §1. |
+| Edit-undo writes back the values held when the form opened | True at the moment of capture. Not true four seconds later — M-2. |
+| Double-submit still prevented now the dialog is gone | True on create and edit (fields and button disabled). Guard-only on sign-up — m-6. |
+| Conventions: arrow functions, import grouping, naming | Clean throughout the diff. Body order — m-2. |
+
+## Verdict
+
+**Request changes.**
+
+Merge-blocking: **M-1** (Undo stays armed after use — a false failure message on
+create-undo, and it reopens the m-4 same-row race the `Set` was meant to close)
+and **M-2** (edit-undo destroys a later edit and reports success). Both are
+symptoms of the same missing piece: an Undo affordance that outlives the state
+it was built for. Closing the toast on press and on any subsequent write to the
+same id fixes both, and is a small change.
+
+**M-3** and **M-4** are cheap and should ride along in the same push — M-4
+especially, since two of those comments now tell a new reader the opposite of
+what the code does, and this branch is the one that made them false.
+
+The rest can follow as separate commits.
+
+The parts I went looking hardest at came back clean: authorization on both undo
+paths is exactly the original write's, the ids are the server's own, the edit
+payload round-trips without losing a date or a note, and no path leaves a row
+permanently disabled — every `markPending` has a matching `clearPending` in a
+`finally`, the delete flag clears in one too, and the fetch effect's `isCurrent`
+guard (`:348-373`) correctly drops a response that lost its race. The DEF-11
+local removal is the right instinct and picked the right counts. The reasoning
+comments on the `Set` and the render-time flag are the best documentation in the
+file; the problem is the four older ones next to them that nobody updated.

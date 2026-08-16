@@ -14,7 +14,7 @@ import {
 import { CANCEL_LABEL } from "@/app/todos/constants";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { toDueDateInputValue, type TodoItemData } from "@/lib/todo";
-import { createTodo, deleteTodo, updateTodo } from "@/service/todo.service";
+import { createTodo, updateTodo } from "@/service/todo.service";
 
 import {
   DEFAULT_TODO_FORM_VALUES,
@@ -27,8 +27,7 @@ import {
 const FORM_ID = "todo-form";
 const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
 
-// Each pending label is rendered twice: on the submit button and, once the
-// user confirms, on the confirm dialog's own action.
+// Shown on the submit button while the write is in flight.
 const CREATE_PENDING_LABEL = "Adding…";
 const UPDATE_PENDING_LABEL = "Saving…";
 
@@ -47,14 +46,18 @@ export interface TodoFormModalProps {
   state: UseOverlayStateReturn;
   /** `null` puts the modal in create mode. */
   todo: TodoItemData | null;
-  /** Lets the list reload itself once the write has landed. */
-  onSaved: () => void;
+  /**
+   * Hands the write's result to the list, which reloads and raises the success
+   * toast. `previous` is the record's state when the form opened, or `null` on
+   * a create — it is what an Undo restores.
+   */
+  onSaved: (saved: TodoItemData, previous: TodoFormValues | null) => void;
 }
 
 /**
- * One modal for create and edit. Submitting only opens the confirm dialog;
- * the mutation runs after the user confirms and always reports through a
- * toast (`docs/CONVENTIONS.md` → Mutation UX).
+ * One modal for create and edit. Saving is reversible, so it submits straight
+ * through — no confirm dialog — and the list offers Undo on the toast
+ * (`docs/CONVENTIONS.md` → Mutation UX).
  */
 export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
@@ -86,30 +89,9 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
   };
 
   /**
-   * Undo runs the same endpoints with the same authorization as the save it
-   * reverses — never a privileged shortcut. A created todo is deleted; an
-   * edited one is written back to the values it held when the form opened.
-   */
-  const undoSave = async (savedId: string, previous: TodoFormValues | null) => {
-    try {
-      if (previous) {
-        await updateTodo(savedId, previous);
-        toast.success(`Todo “${previous.title}” restored`);
-      } else {
-        await deleteTodo(savedId);
-        toast.success("Todo removed");
-      }
-
-      onSaved();
-    } catch (error) {
-      toast.danger(getErrorMessage(error, "Couldn’t undo that. Try again."));
-    }
-  };
-
-  /**
-   * Saving is reversible, so it goes straight through and offers Undo rather
-   * than asking the user to re-read the sentence they just typed
-   * (`docs/CONVENTIONS.md` → Mutation UX).
+   * Saving is reversible, so it goes straight through — no confirm dialog. The
+   * success toast and its Undo belong to the list, which is the only place
+   * that can dismiss an earlier Undo when a later write lands (review M-2).
    */
   const handleValidSubmit = async (values: TodoFormValues) => {
     if (isPending) return;
@@ -126,19 +108,7 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
         : await createTodo(values);
 
       closeForm();
-      onSaved();
-
-      toast.success(
-        isEdit ? `Todo “${values.title}” updated` : `Todo “${values.title}” added`,
-        {
-          actionProps: {
-            children: "Undo",
-            onPress: () => {
-              void undoSave(saved.id, previousValues);
-            },
-          },
-        },
-      );
+      onSaved(saved, previousValues);
     } catch (error) {
       const fieldErrors = readFieldErrors(error);
 

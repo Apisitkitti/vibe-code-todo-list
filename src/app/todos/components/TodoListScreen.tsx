@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Alert,
@@ -17,8 +17,14 @@ import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import type { TodoItemData, TodoListFilters, TodoListResult } from "@/lib/todo";
-import { deleteTodo, getTodoList, toggleTodo } from "@/service/todo.service";
+import {
+  deleteTodo,
+  getTodoList,
+  toggleTodo,
+  updateTodo,
+} from "@/service/todo.service";
 
+import type { TodoFormValues } from "./form";
 import { TodoEmptyState } from "./TodoEmptyState";
 import { TodoFilters } from "./TodoFilters";
 import { TodoFormModal } from "./TodoFormModal";
@@ -88,6 +94,50 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     setLastFilterKey(filterKey);
     setIsLoading(true);
   }
+
+  /**
+   * One owner for every Undo toast, keyed by todo id.
+   *
+   * An Undo toast stays on screen for four seconds after it has been pressed
+   * unless something closes it, and an armed Undo describes a state the todo
+   * may no longer be in. Both problems are the same problem: a toast outliving
+   * the write it belongs to (review M-1, M-2).
+   *
+   * So every write dismisses the outstanding Undo for its row first. Press
+   * Undo twice and the second press is gone before it can fire a duplicate;
+   * edit a todo twice and the older Undo — which would silently overwrite the
+   * newer edit and report success — is gone too.
+   */
+  const undoToastKeys = useRef(new Map<string, string>());
+
+  const dismissUndo = (todoId: string) => {
+    const key = undoToastKeys.current.get(todoId);
+
+    if (!key) return;
+
+    toast.close(key);
+    undoToastKeys.current.delete(todoId);
+  };
+
+  const showUndoableSuccess = (
+    todoId: string,
+    message: string,
+    undo: () => void,
+  ) => {
+    dismissUndo(todoId);
+
+    const key = toast.success(message, {
+      actionProps: {
+        children: "Undo",
+        onPress: () => {
+          dismissUndo(todoId);
+          undo();
+        },
+      },
+    });
+
+    undoToastKeys.current.set(todoId, key);
+  };
 
   const markPending = (todoId: string) => {
     setPendingTodoIds((ids) => new Set(ids).add(todoId));
@@ -160,19 +210,61 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   };
 
   /**
-   * Undo re-runs the very same endpoint, so it is authorised and scoped to the
-   * session user exactly like the original flip — not a privileged shortcut.
+   * The modal writes; the list reports. Keeping the toast here is what lets a
+   * later write dismiss an earlier Undo — the modal cannot see the toast it
+   * raised two edits ago (review M-2).
    */
+  const handleSaved = (saved: TodoItemData, previous: TodoFormValues | null) => {
+    reloadWithSkeleton();
+
+    const isEdit = previous !== null;
+
+    showUndoableSuccess(
+      saved.id,
+      isEdit ? `Todo “${saved.title}” updated` : `Todo “${saved.title}” added`,
+      () => {
+        void undoSave(saved, previous);
+      },
+    );
+  };
+
+  /**
+   * Undo runs the same endpoints with the same authorization as the write it
+   * reverses. A created todo is deleted; an edited one is written back to the
+   * values it held when the form opened.
+   */
+  const undoSave = async (saved: TodoItemData, previous: TodoFormValues | null) => {
+    markPending(saved.id);
+
+    try {
+      if (previous) {
+        await updateTodo(saved.id, previous);
+        toast.success(`Todo “${previous.title}” restored`);
+      } else {
+        await deleteTodo(saved.id);
+        toast.success(`Todo “${saved.title}” removed`);
+        removeTodoLocally(saved.id, saved.completed);
+      }
+
+      reloadSilently();
+    } catch (error) {
+      toast.danger(getErrorMessage(error, "Couldn’t undo that. Try again."));
+    } finally {
+      clearPending(saved.id);
+    }
+  };
+
+  const toggledMessage = (title: string, completed: boolean) =>
+    completed
+      ? `Todo “${title}” marked complete`
+      : `Todo “${title}” marked not complete`;
+
   const undoToggle = async (todo: TodoItemData, restoredCompleted: boolean) => {
     markPending(todo.id);
 
     try {
       await toggleTodo(todo.id, restoredCompleted);
-      toast.success(
-        restoredCompleted
-          ? `Todo “${todo.title}” marked complete`
-          : `Todo “${todo.title}” marked not complete`,
-      );
+      toast.success(toggledMessage(todo.title, restoredCompleted));
       reloadSilently();
     } catch (error) {
       toast.danger(getErrorMessage(error, "Couldn’t undo that. Try again."));
@@ -181,23 +273,17 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     }
   };
 
-  /** The one mutation with no confirm dialog: it fires, then offers Undo. */
   const handleToggle = async (todo: TodoItemData, nextCompleted: boolean) => {
+    dismissUndo(todo.id);
     markPending(todo.id);
 
     try {
       await toggleTodo(todo.id, nextCompleted);
-      toast.success(
-        nextCompleted
-          ? `Todo “${todo.title}” marked complete`
-          : `Todo “${todo.title}” marked not complete`,
-        {
-          actionProps: {
-            children: "Undo",
-            onPress: () => {
-              void undoToggle(todo, !nextCompleted);
-            },
-          },
+      showUndoableSuccess(
+        todo.id,
+        toggledMessage(todo.title, nextCompleted),
+        () => {
+          void undoToggle(todo, !nextCompleted);
         },
       );
       reloadSilently();
@@ -214,6 +300,9 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   const handleDelete = async () => {
     if (!pendingDelete) return;
 
+    // The row is about to stop existing; an Undo still offering to change it
+    // would 404 and report a failure for a mutation that succeeded.
+    dismissUndo(pendingDelete.id);
     setIsDeleting(true);
 
     try {
@@ -413,7 +502,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
         key={editingTodo?.id ?? "create"}
         state={formState}
         todo={editingTodo}
-        onSaved={reloadWithSkeleton}
+        onSaved={handleSaved}
       />
 
       <ConfirmDialog

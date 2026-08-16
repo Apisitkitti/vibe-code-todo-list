@@ -1103,6 +1103,30 @@ reports its own outcome with the §7.11 toast for the flipped state.
 | Undo failure toast | `Couldn’t undo that. Try again.` |
 | Sign out failure toast | `Couldn’t sign you out. Try again.` |
 
+### 7.15 Create and edit Undo
+
+Added when the Mutation UX rule became "confirm what cannot be undone": create
+and edit lost their confirm dialogs, so their toasts carry the reversal
+instead. Undo runs the same scoped endpoints as the write it reverses — a
+created todo is deleted, an edited one is written back to the values it held
+when the form opened.
+
+Every string names the record. `Todo removed` on its own was rejected in
+review (M-3) for naming nothing.
+
+| Slot | String |
+|---|---|
+| Create toast | `Todo “{title}” added` |
+| Edit toast | `Todo “{title}” updated` |
+| Toast action | `Undo` |
+| Create Undo succeeded | `Todo “{title}” removed` |
+| Edit Undo succeeded | `Todo “{title}” restored` |
+| Undo failure | `Couldn’t undo that. Try again.` (shared with §7.13) |
+
+An Undo is offered for one write only. A later write to the same todo dismisses
+the earlier toast, so an Undo can never restore a record past a change the user
+made after it.
+
 ### 7.14 Malformed request
 
 Added for review finding M-3: a `400` whose zod failure sits at the root of the
