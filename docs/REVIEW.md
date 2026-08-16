@@ -1812,3 +1812,394 @@ watch: m-1, m-2, m-3, m-5, m-6, m-7, n-2 and n-3 are all still open, all in the
 same two files, and this pass added five more. The `useTodoList` split I
 described last time is now overdue — `TodoListScreen.tsx` is 523 lines and the
 undo ownership is the third state machine living in it.
+
+---
+
+# Test review — `test/isolation-suite` and `test/e2e-harness` → `develop`
+
+**2026-08-16.** Reviewed by the engineer who argued the missing test suite was
+this project's largest risk. That makes me the wrong person to judge whether
+these were worth writing and the right person to judge whether they work, so
+this review does only the second thing. The standard is the one I set: **a suite
+that cannot fail is worse than none**, because it converts an unknown into a
+false assurance and spends review attention doing it.
+
+## Verdicts, up front
+
+| Branch | Verdict |
+|---|---|
+| `test/isolation-suite` | **Request changes** — B-1 |
+| `test/e2e-harness` | **Request changes** — B-2, B-3 |
+
+Neither verdict is about the value of the work. Both suites are better than
+anything this repo has had, both are written by people who understood the
+difference between an assertion and a decoration, and both authors ran their
+own sabotage checks and reported real findings. Both also contain a defect of
+exactly the kind their own sabotage checks were designed to find.
+
+## How I reviewed
+
+I did not re-run the authors' mutations. I picked my own, applied them to the
+source, ran the suites, recorded which tests fired, and reverted. Both working
+trees are clean and the local `todo_app_test` database holds no rows this review
+created. I then re-ran the two mutations each author reported, to check the
+findings are real and the fixes hold.
+
+**Vitest (`test/isolation-suite`, worktree `todo-app-tests`, local Postgres).**
+Baseline 126/126 in 1.9 s; the 20 isolation cases genuinely round-trip a real
+Postgres through the real Prisma client and the real better-auth session lookup.
+
+| # | Mutation | Tests that fired |
+|---|---|---|
+| M1 | Drop the session guard from `DELETE /api/todos/[id]` | 1 |
+| M2 | `/status` writes and re-reads unscoped — returns A's row instead of a 404 | 3 |
+| M3 | Remove the backslash guard from `sanitiseNextPath` | 2 |
+| M4 | Remove `.strict()` from the status schema | **0** |
+| M5 | `totalCount` counts every user's rows | 1 |
+| M6 | `mentionsCompleted` always returns `false` | **0** |
+| M7 | `findOwnedTodo` drops its `userId` scope | **0** |
+| M8 | 400 naming the other account (an existence oracle) | 3 |
+| M9 | *(author's own)* `/status` write unscoped, re-read still scoped | 1 |
+| M10 | `getSession` memoises globally | 7 |
+| M11 | The list/search `where` loses its user scope | 4 |
+
+**Playwright (`test/e2e-harness`, main checkout).** I ran it against **local**
+Postgres via a `DATABASE_URL` override, not against Neon — see B-3. All 16 pass
+in 37 s.
+
+| # | Mutation | Caught? |
+|---|---|---|
+| E1 | A failed toggle *also* raises its success toast | **No** |
+| E2 | `handleDelete` removes the row before the server confirms | Yes |
+| E3 | *(author's own)* Undo re-entrancy guard removed | Yes |
+| E4 | *(author's own)* `showUndoableSuccess` no longer dismisses the prior Undo | Yes |
+
+---
+
+## Blocker
+
+### B-1 — `ci.yml` never reaches the test step. The suite cannot fail in CI. (`test/isolation-suite`)
+
+The workflow orders the steps `db push → lint → build → typecheck → test`. The
+**build step fails**, so `npm run test:run` is never executed. I verified this
+by hiding `.env` and running `npm run build` with exactly the environment the
+workflow provides:
+
+```
+Error: Failed to collect page data for /
+  [cause]: Error: BETTER_AUTH_URL must be set in production —
+           auth would otherwise derive its origin from the request Host header.
+      at src/lib/auth.ts:33:11
+```
+
+`next build` runs with `NODE_ENV=production`, `src/lib/auth.ts` throws at module
+evaluation when `BETTER_AUTH_URL` is unset, and `.env` is gitignored
+(`.gitignore:34`), so CI has none. `BETTER_AUTH_SECRET` is likewise unset.
+
+This is the precise failure mode I said I was worried about, arriving in the one
+artifact whose entire job is to make the suite unskippable. The author's note
+that they could not verify a real run is exactly right, and the run would have
+been red. Fix is two lines in the `env:` block —
+`BETTER_AUTH_URL: http://127.0.0.1:3000` and a throwaway `BETTER_AUTH_SECRET`
+(the same shape `vitest.config.ts` already uses). **I want a green run link on
+the PR before this merges**; a first CI that has never executed is a claim, not
+a control.
+
+### B-2 — The "no false success" assertions in `fault-injection.spec.ts` cannot fail. (`test/e2e-harness`)
+
+The spec's header states its own two-part contract: copy-deck wording, and *"no
+false success — a failed write must not report as done"*. The second half is
+unenforceable as written.
+
+Every false-success guard has the shape
+`await expect(todos.toasts.filter({ hasText: <successToast> })).toHaveCount(0)`.
+`toHaveCount` **retries** for the 15 s expect timeout, and HeroUI toasts
+self-expire after 4 s (`DEFAULT_TOAST_TIMEOUT`, `@heroui/react/dist/components/toast/constants.js:13`).
+A success toast that *was* raised disappears on its own well inside the window,
+and the assertion then passes.
+
+Demonstrated (E1): I made `handleToggle`'s catch block raise
+`toast.success(toggledMessage(...))` alongside the failure toast — the app now
+tells the user a failed toggle succeeded — and *"500 on toggle leaves the
+checkbox unchecked"* **passed**. Its runtime went from 2.3 s to 6.5 s: it sat
+there watching the false success expire, then reported green. That is the same
+defect the author found in `undo-semantics.spec.ts` and correctly fixed there
+by switching to a point-in-time `count()`; the fix was not carried across to
+this file.
+
+Affected: `fault-injection.spec.ts` lines 75, 117–118, 144–145, 172, 205,
+231–232, and `undo-semantics.spec.ts:159–161` (`toHaveCount(1)` has the same
+hole — two toasts retried down to one is a pass). The row-based assertions in
+the same tests are sound, because rows do not expire (E2 caught the unconditional
+optimistic delete). The fix is mechanical: read the count once, immediately after
+the error toast becomes visible, in the same style already used at
+`undo-semantics.spec.ts:196` and `:241`.
+
+Until this is fixed, the fault-injection spec proves that a failure is *reported*,
+not that a success is *not*. Half its stated contract is decoration.
+
+### B-3 — The E2E suite's default target is the production database, and nothing stops it. (`test/e2e-harness`)
+
+Asked plainly whether I would run it: **not against Neon, and I did not.** I ran
+it against local Postgres with a `DATABASE_URL` override and all 16 specs passed
+in 37 s — which is the finding. **Production is not required, it is merely the
+default.** That makes this a one-line fix, not an architectural argument.
+
+The delete-side guard in `e2e/support/database.ts` is genuinely good work, and I
+want to be clear about that: full-string equality in a parameterised query, no
+`LIKE`, no interpolation, an id resolved first, both predicates on the final
+`DELETE`, and `.invalid` as an RFC 2606 outer bound. I tested the pattern
+offline — `e2e-x-1@e2e.invalid.evil.com`, `E2E.INVALID`, `e2e--1@…` and a real
+address are all refused. A crash mid-teardown is safe: the deletes are wrapped
+in `BEGIN`/`COMMIT` with `ROLLBACK`. A `RUN_ID` collision needs two runs in the
+same millisecond *and* the same 4 random base36 characters; the consequence
+would be a flaky cross-delete, not data loss. All of that is fine.
+
+The problem is upstream of the guard. **The guard bounds what the suite deletes.
+Nothing bounds what it connects to.** The suite signs up real accounts, writes
+real todos and issues real sessions into the database holding production data,
+and it does so on `npm run test:e2e` with no argument and no prompt. Compare the
+sibling branch, which refuses to start against a hosted host or a database whose
+name does not end in `_test` — and which I verified refuses both. The E2E side
+has no equivalent, so:
+
+- **Interrupted runs leak accounts into production.** Fixture teardown does not
+  run on SIGINT or a worker crash, and there is no sweep job for stale
+  `@e2e.invalid` rows. My local run tore down cleanly, including for the tests I
+  made fail — but Ctrl-C during a debugging session does not.
+- **`reuseExistingServer: !process.env.CI`** will adopt whatever dev server is
+  already on 3117. The app's `DATABASE_URL` then comes from that process while
+  teardown's comes from `.env` — a mismatch deletes from one database rows that
+  were created in another.
+- **"Running it against production by accident" is not a failure mode here.** It
+  is the documented behaviour. The file's own header says so.
+
+Asked for: port `resolveTestDatabaseUrl`'s host/name check into
+`loadDatabaseUrl`, or add a `E2E_ALLOW_HOSTED=1` opt-in that the npm script does
+not set. Either makes the accidental case impossible and costs a developer
+nothing, because the suite already works locally.
+
+---
+
+## Major
+
+### MA-1 — Both authors' central claims are true; one is overstated. (`test/isolation-suite`)
+
+I reproduced M9 exactly as reported. Breaking the `where` on `/status` returns a
+clean `404 NOT_FOUND` **while toggling the other user's row**, and the failure is
+on line 143 — the database re-read — with the status and error-code assertions
+both passing. That is a real finding and the fix holds. This is the most valuable
+thing on either branch and it should be said plainly.
+
+The claim that *"every negative case re-reads the row from the database"* is
+**not accurate**, and M9 proves it: only one of the four tests exercising that
+path failed. The three `foreign id is indistinguishable from a nonexistent one`
+tests and `no refusal is ever a 500` compare statuses and bodies only, and all
+four passed against a handler that was writing to another user's row. They are
+paired with a re-reading test on the same endpoint, so the matrix as a whole is
+sound — but the comment at the top of `isolation.test.ts` promises a property the
+file does not have, and the next person to add an endpoint will trust it. Either
+add the re-read or reword the comment.
+
+The search claim is "5 tests fired"; M11 fires **4**. The fifth,
+*"a term inside A's note matches nothing"*, passes because the handler never
+searches notes at all — it is a forward-looking test for the pending change and
+currently proves nothing about scope. Worth keeping, worth labelling.
+
+### MA-2 — The 400 contract is untested, and it is the newest code on the branch. (`test/isolation-suite`)
+
+Both authors flagged this; my mutations confirm it is a hole with no floor under
+it. **M4** (drop `.strict()` from the status schema) and **M6**
+(`mentionsCompleted` always false) each fired **zero tests out of 126**. Those
+two guards are the entire implementation of review m-5 / QA DEF-06 — the defect
+where a mixed body looked like a successful save — and nothing on this branch
+would notice their removal.
+
+Four tests close it: `completed` in a `POST` body → 400 with
+`completionNotHereResponse`'s wording; the same on `PATCH /api/todos/[id]`;
+`{ completed: true, title: "x" }` on `/status` → 400 with
+`STATUS_BODY_ONLY_MESSAGE`; `{ completed: "yes" }` → 400 with
+`COMPLETED_TYPE_MESSAGE`. The two-message branch in
+`hasUnrecognisedKey` is a discrimination the code goes out of its way to make and
+no test asserts either side of it.
+
+### MA-3 — Toast expiry makes several E2E tests time-dependent under `retries: 0`. (`test/e2e-harness`)
+
+Separate from B-2, and it cuts the other way: the 4 s window that lets false
+positives through also makes true positives flaky. `happy-path.spec.ts` asserts
+the "marked complete" toast, then calls `pressUndo()`; on a cold `next dev`
+compile — which is exactly what CI is — the Undo can expire before the click
+lands, and the failure surfaces as a 20 s action timeout on an unrelated line.
+`undo-semantics.spec.ts:196` reads the armed-Undo count after two full
+modal round-trips; if those take more than four seconds the correct answer
+becomes 0, not 1.
+
+The point-in-time reads are the *right* call for the contract, so I am not asking
+for them to be softened. I am asking for the window to stop being implicit:
+pass an explicit `timeout` to the undoable toasts in `TodoListScreen` (see
+FIND-4), or have the suite assert against a value it controls. With `retries: 0`
+and one worker, the first flake in CI will be read as a product failure.
+
+### MA-4 — `getSession`'s `cache()` reasoning is correct, and I verified it. (`test/isolation-suite`)
+
+The author's concern was right to raise. I simulated a leaking cache (M10 — a
+module-level memo around `getSession`) and **7 tests failed**, including
+*"the spoofed-to user's list is unaffected"*, which is the intra-test case: it
+POSTs as B, switches to A, and re-reads the list. That test is doing the work the
+author says it is. React's `cache()` is a no-op outside a render, which the green
+baseline already demonstrates, but the suite would catch it if that ever changed.
+No action; recorded because the reasoning was asked about and it holds.
+
+---
+
+## Minor
+
+- **MI-1 (isolation).** The hosted-host list is a denylist of four vendors. I
+  confirmed a hosted database at an unlisted host with a `_test` name passes the
+  guard. The `_test` suffix is the real bound and it is a good one; the vendor
+  list should be described as a convenience, not a control.
+- **MI-2 (isolation).** The author's own note is right — `readAppDatabaseUrl`
+  reads `.env` files but not `process.env`. I checked the consequence and it is
+  smaller than feared: Vitest's `test.env` **overrides** an exported
+  `DATABASE_URL` (verified — the suite still hit the local database with a bogus
+  one exported), and the host/name checks apply to the value actually used. The
+  gap only opens if the app's own database is un-hosted *and* named `*_test`.
+  Worth a comment, not a change.
+- **MI-3 (isolation).** QA §7's matrix has 8 probes; the suite covers 7 and adds
+  five §7 never had (case-insensitive search, note-term search, forged cookie,
+  spoofed `userId`, the search control). The missing one is
+  `GET /api/todos/<A id>` → `405` (DEF-04). It is a superset minus one, not a
+  convenient subset — the answer to my own question is that this is real
+  coverage. Add the 405 so the matrix is closed.
+- **MI-4 (isolation).** Also uncovered and load-bearing: `apiError`'s
+  status/shape mapping, `toFieldErrors` dropping non-form paths (the guard added
+  for review m-6), `proxy.ts` entirely — `sanitiseNextPath` is well tested but
+  its only production caller is not — and `requireUser()`'s redirect. The GET
+  filter combinations (`?status=`, `?priority=`) are exercised for scope but not
+  for correctness.
+- **MI-5 (isolation).** M7 fired nothing, and on inspection that is correct
+  rather than a gap: after `updateMany({ where: { id, userId } })` reports
+  `count > 0`, an unscoped re-read can only return the caller's own row. The
+  `userId` in `findOwnedTodo` is defence in depth that no test can distinguish.
+  Leave it; note it, so nobody "simplifies" it later on the grounds that removing
+  it breaks nothing.
+- **MI-6 (e2e).** `expectNoTransportLeak` passes vacuously on an empty locator —
+  `"".not.toMatch(...)` is true. It is always preceded by a `toBeVisible()` that
+  anchors it, so it works today, but one assertion of the form
+  `expect(texts.length).toBeGreaterThan(0)` would make it self-checking.
+- **MI-7 (e2e).** The suite captures no console messages, so DEF-02 goes
+  unpinned even though the warning fires on every single page load — I watched
+  it stream past in my own run. A `page.on("console")` collector and one
+  `expect(warnings).toEqual([])` per spec would convert a known-open defect from
+  prose into a gate. That is the cheapest coverage available on this branch.
+- **MI-8 (both).** `chromium-desktop` only. QA §8's "real touch activation at
+  mobile widths" stays unverified, which is fine to defer but should not be
+  described as closed.
+- **MI-9 (both).** Both branches edit `package.json` and `package-lock.json`;
+  whichever merges second conflicts. Trivial, but note that `ci.yml` lives on the
+  isolation branch and runs `npm run test:run` only — **merging the E2E branch
+  does not put Playwright in CI.** Someone should say out loud whether that is
+  intended.
+
+## Nit
+
+- **N-1 (e2e).** `happy-path.spec.ts:106`,
+  `expect(account.email).toContain("@e2e.invalid")` — true by construction of
+  `createAccountDetails`. It asserts the test's own fixture. Delete it.
+- **N-2 (e2e).** The comment at `undo-semantics.spec.ts:57–60` says
+  `route.fallback()` does not forward; `fault-injection.spec.ts` relies on
+  `fallback()` forwarding when no lower handler matches. Both behaviours are
+  right in context, but the comment reads as a general claim and will mislead.
+- **N-3 (isolation).** `vitest.config.ts` and `tests/setup/testDatabaseUrl.ts`
+  emit a Vite CJS/ESM warning on every run. Cosmetic, but it is the first thing
+  anyone sees.
+- **N-4 (isolation).** `isolation.test.ts` depends on a module-global header
+  store and `fileParallelism: false`. Correct today; a single `test.concurrent`
+  breaks it silently. One line of comment at the `asUser` helper.
+
+---
+
+## The app findings these suites surfaced — confirmed and ranked
+
+All five confirmed. This is the payoff, and it is worth more than either suite's
+green checkmark.
+
+1. **The mid-session 401 dead-ends.** Confirmed. `grep` finds no
+   `"You've been signed out"` anywhere in `src/`, so `DESIGN.md` §7.9's
+   session-expired state is specified and implemented nowhere. The only client
+   code that inspects a response status is
+   `form/fieldErrors.ts:13`, and only for `400`. A 401 is rendered as an ordinary
+   red toast; the app stays on `/todos` offering mutations that can only fail,
+   and only a full navigation escapes — via `proxy.ts`, not via anything in the
+   client. **Ranked first: it is the only one a user hits, and it strands them.**
+   The spec that pins it is the right thing to have written.
+2. **A 404 can mask a completed write.** Confirmed by M9. Latent today — both
+   statements are correctly scoped — but the shape is the hazard: the write and
+   the 404-deciding re-read are separate queries, so a one-line slip in either is
+   invisible to any status-code test. Second, because it is the failure this
+   project's review process is structurally worst at seeing.
+3. **`Alert` carries no ARIA role.** Confirmed — no `role` anywhere in
+   `@heroui/react/dist/components/alert/alert.js`; only `data-slot="alert-root"`.
+   The list-load error is announced to nobody, and the same applies to
+   `todos/error.tsx`. Third: a real accessibility defect, one prop to fix.
+4. **The Undo window is HeroUI's undocumented 4 s default.** Confirmed:
+   `DEFAULT_TOAST_TIMEOUT = 4000`, `showUndoableSuccess` passes no `timeout`, and
+   the number appears nowhere in `DESIGN.md`, `CONVENTIONS.md` or `PRD.md`. It is
+   ranked fourth as a product issue and would be second as a testing one — it is
+   the direct cause of B-2 and MA-3. A user-facing affordance whose lifetime is a
+   third-party default that nobody chose should be made explicit whatever else
+   happens here.
+5. **`PressResponder` warnings persist.** Confirmed — one per page load in every
+   one of my 16 runs, unchanged by DEF-02. Last: console noise, already known,
+   and now cheap to gate (MI-7).
+
+---
+
+## Verdicts
+
+### `test/isolation-suite` — **Request changes**
+
+The matrix is real. It runs against a real Postgres through the real Prisma
+client and a real better-auth session lookup; the negative cases mostly re-read
+the database; the search control test exists, which is the mark of someone who
+has thought about vacuous passes; and the guard on the test database is the
+best-designed thing on either branch. Nine of my eleven mutations were caught,
+and the two that were not are a documented gap and a behaviourally unreachable
+line. **This is the work I asked for and it does the job.**
+
+It is blocked on **B-1** alone, and B-1 is two environment variables. But it is
+genuinely blocking: a suite that a broken build prevents from ever executing is
+the exact thing I said was worse than having none, and it would have shipped
+green-looking and mute. Fix the workflow, attach a passing run, and I will
+approve. **MA-2** (the four 400-contract tests) I would like in the same PR
+since it is the newest and least-exercised code on the branch; **MA-1**'s comment
+correction is a two-line edit and should not survive its own commit.
+
+### `test/e2e-harness` — **Request changes**
+
+The hard parts are right, and several of them are things I would not have got
+right first time. The double-press test defeats CDP round-trip granularity by
+dispatching both press sequences in one browser task, and I confirmed it fails
+with the guard removed. The stale-Undo test's point-in-time `count()` returns
+exactly the 3 the author reported. The fault injectors correctly distinguish a
+contract-speaking 500 from an opaque one, which is a real distinction in
+`getErrorMessage` that nothing else tests. The locators are role- and copy-based
+and traced to the deck. The 401 spec is a defect record written to fail the day
+the defect is fixed, which is the correct way to encode known-broken behaviour.
+
+It is blocked on **B-2** and **B-3**. B-2 matters most: the author diagnosed the
+retrying-assertion trap precisely, fixed it where they found it, and left seven
+instances of it in the other file — including the one I broke the app under and
+watched pass. Half of that spec's stated contract does not currently hold.
+B-3 is a one-line change that the author's own local run proves is sufficient,
+and it converts "this writes to production by design" into "this writes to
+production only if you ask".
+
+Fix those two, carry **MA-3** or make the toast timeout explicit, and this is an
+approve. I would take **MI-7** at the same time — the `PressResponder` gate is
+four lines and closes a defect that has now survived two reviews on the strength
+of being merely noisy.
+
+Both branches can merge independently once their own blockers clear. Neither
+should merge on the strength of being green, which is the whole reason I ran the
+mutations rather than the suites.
