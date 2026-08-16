@@ -51,11 +51,18 @@ import {
  *
  * Two rules the assertions follow throughout:
  *
- *  - A refusal is checked by its *effect*, not only its status code. A 404
- *    that still wrote the row would pass a status-only test, so every negative
- *    case re-reads the row straight from the database afterwards.
+ *  - A refusal is checked by its *effect* wherever a write was attempted, not
+ *    only by its status code. A 404 that still wrote the row passes a
+ *    status-only test, and on these routes that is a live possibility rather
+ *    than a theoretical one: the 404 is produced by a scoped re-read that runs
+ *    *after* the write, so losing the scope on the write alone changes nothing
+ *    a caller can see.
  *  - A refusal must never be a 500. A crash that happens to deny access is not
  *    the same guarantee, and it leaks that something was there to crash on.
+ *
+ * Two groups deliberately assert less. `GET` cases check the returned rows
+ * only, because a read has no effect to re-read. The signed-out `GET` and the
+ * forged-cookie case check the status alone, for the same reason.
  */
 
 const EMAIL_DOMAIN = "@isolation.test";
@@ -194,6 +201,11 @@ describe("a foreign id is indistinguishable from a nonexistent one", () => {
 
     expect(foreign.status).toBe(missing.status);
     expect(await readError(foreign)).toEqual(await readError(missing));
+    // Matching each other is not enough on its own: with the scope dropped
+    // from the `updateMany`, both calls still answer 404 — the 404 comes from
+    // the scoped re-read that follows — while the foreign one has already
+    // rewritten the row.
+    expect((await readTodo(todoOfA.id))?.title).toBe(A_TITLE);
   });
 
   test("PATCH /api/todos/[id]/status answers identically", async () => {
@@ -212,6 +224,7 @@ describe("a foreign id is indistinguishable from a nonexistent one", () => {
 
     expect(foreign.status).toBe(missing.status);
     expect(await readError(foreign)).toEqual(await readError(missing));
+    expect((await readTodo(todoOfA.id))?.completed).toBe(false);
   });
 
   test("DELETE /api/todos/[id] answers identically", async () => {
@@ -226,6 +239,7 @@ describe("a foreign id is indistinguishable from a nonexistent one", () => {
 
     expect(foreign.status).toBe(missing.status);
     expect(await readError(foreign)).toEqual(await readError(missing));
+    expect(await readTodo(todoOfA.id)).not.toBeNull();
   });
 });
 
