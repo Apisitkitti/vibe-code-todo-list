@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# A new push to the same branch makes the previous run's answer irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, lint, build and test
+    runs-on: ubuntu-latest
+
+    # The suite talks to a real database through the real Prisma client, so CI
+    # gets a real Postgres. It matches the local version rather than "whatever
+    # is newest": a difference in how Postgres collates or matches text would
+    # otherwise show up only in CI, on somebody else's pull request.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: todo_app_test
+          # Throwaway container on a private network, reachable only by this
+          # job. There is no password to protect.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # The name ends in `_test`, which is what `tests/setup/testDatabaseUrl.ts`
+      # insists on before it will let Prisma connect.
+      DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
+      TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/todo_app_test
+
+      # `next build` runs under NODE_ENV=production, and `src/lib/auth.ts`
+      # deliberately throws at import time when `BETTER_AUTH_URL` is unset —
+      # production must never derive its origin from the Host header. No `.env`
+      # is committed, so without these the build dies while collecting
+      # `/api/auth/[...all]` and CI never reaches the tests at all.
+      #
+      # Both values are placeholders. Nothing in CI serves traffic or issues a
+      # cookie anyone will present again: the build only needs the module to
+      # import, and the suite overrides the secret from `vitest.config.ts`.
+      # A real secret here would be a real secret in a public build log.
+      BETTER_AUTH_URL: http://localhost:3000
+      BETTER_AUTH_SECRET: ci-build-only-not-a-real-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm ci` has already run `prisma generate` via postinstall, so this
+      # only has to create the tables. Prisma 7 reads the datasource URL from
+      # `prisma.config.ts`, which falls through to `DATABASE_URL` when no
+      # `.env` file exists — and none is committed.
+      - name: Push the schema to the test database
+        run: npx prisma db push
+
+      - name: Lint
+        run: npm run lint
+
+      # Before the typecheck, deliberately. `next build` generates the route
+      # types under `.next/types`; without them `tsc` reports errors about
+      # `RouteContext` and `PageProps` in the app's own files that have nothing
+      # to do with the change under test.
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm run test:run
