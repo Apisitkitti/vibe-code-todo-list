@@ -215,6 +215,51 @@ export const measureAgainstSurroundings = async (
   };
 };
 
+/**
+ * A custom property's colour against the backdrop the element sits on.
+ *
+ * For `--focus`, which is painted as a ring *outside* the element and so is
+ * judged against what the element sits on rather than against the element
+ * itself. SC 1.4.11 wants 3:1 for a focus indicator, and `--focus` is aliased
+ * to `--accent` — so anything that moves the accent has to be checked here as
+ * well as on the buttons it fills.
+ */
+export const measurePropertyAgainstBackdrop = async (
+  locator: Locator,
+  property: string,
+): Promise<ContrastReading> => {
+  /*
+    The **parent's** stack, not the element's. A ring is painted outside the
+    control and a fill is judged against what surrounds it, so including the
+    element's own background would compare the accent to itself and report
+    1.00 — which is what it did before this was scoped up a level.
+  */
+  const [stack, propertyColor] = await Promise.all([
+    measureStack(locator.locator("xpath=..")),
+    locator.evaluate((element, name) => {
+      const raw = getComputedStyle(element).getPropertyValue(name).trim();
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
+
+      ctx.globalCompositeOperation = "copy";
+      ctx.fillStyle = raw;
+      ctx.fillRect(0, 0, 1, 1);
+
+      const data = ctx.getImageData(0, 0, 1, 1).data;
+
+      return { r: data[0], g: data[1], b: data[2], a: data[3] / 255 };
+    }, property),
+  ]);
+
+  return {
+    foreground: propertyColor,
+    background: stack.background,
+    ratio: contrastRatio(propertyColor, stack.background),
+  };
+};
+
 export const THEMES = ["light", "dark"] as const;
 
 export type Theme = (typeof THEMES)[number];

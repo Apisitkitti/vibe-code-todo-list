@@ -3,8 +3,10 @@ import type { Locator, Page } from "@playwright/test";
 import {
   formatRgb,
   measureContrast,
+  measurePropertyAgainstBackdrop,
   setTheme,
   THEMES,
+  type ContrastReading,
   type Theme,
 } from "./support/contrast";
 import { expect, test } from "./support/fixtures";
@@ -255,6 +257,101 @@ test.describe("DEF-15 — the muted token clears 4.5:1 on every surface", () => 
         "completed row title on a hovered row",
         theme,
       );
+    }
+  });
+});
+
+/**
+ * DEF-14 — the primary button.
+ *
+ * `--accent` is rgb(4,133,247) with an `--accent-foreground` of rgb(252,252,252)
+ * at 14px/500, which QA measured at **3.59:1 in both themes** across three
+ * different buttons on three different routes (`docs/QA-REPORT.md` §A2). 14px
+ * at weight 500 is not large text, so 4.5:1 is the right bar.
+ *
+ * One token, so one fix — and one risk, which is what the rest of this block
+ * is for. `--accent` is not only the button fill: `--focus` is aliased to it
+ * (§2.1, "do not restyle"), and `--accent-soft-foreground` is mixed from it for
+ * the selected filter chip. Darkening it to clear 4.5:1 on white text moves all
+ * three, and in **dark** the other two move the wrong way — a darker ring on a
+ * near-black page, and a darker chip label. Both are measured here so the fix
+ * cannot buy the button at their expense.
+ */
+test.describe("DEF-14 — the primary button label clears 4.5:1", () => {
+  test("the quick-add Add button, in both themes", async ({ signedIn }) => {
+    const addButton = signedIn.getByRole("button", { name: "Add", exact: true });
+
+    await expect(addButton).toBeVisible();
+
+    for (const theme of THEMES) {
+      await setTheme(signedIn, theme);
+      await expectReadable(addButton, "quick-add Add button label", theme);
+    }
+  });
+
+  test("the same token on an auth route, in both themes", async ({ page }) => {
+    // `Create account` is a different route and a different component, and QA
+    // confirmed the defect travels with the token rather than with the button.
+    await page.goto("/sign-up");
+
+    const submit = page.getByRole("button", { name: "Create account", exact: true });
+
+    await expect(submit).toBeVisible();
+
+    for (const theme of THEMES) {
+      await setTheme(page, theme);
+      await expectReadable(submit, "Create account button label", theme);
+    }
+  });
+
+  test("the focus ring and the selected filter chip survive the change", async ({
+    signedIn,
+    todos,
+  }) => {
+    await todos.quickAdd("accent regression row");
+    await expect(todos.doneCounter).toBeVisible();
+
+    const selectedChip = signedIn.locator('[role="radio"][aria-checked="true"]');
+    const addButton = signedIn.getByRole("button", { name: "Add", exact: true });
+
+    await expect(selectedChip).toBeVisible();
+
+    const expectAtLeast = (
+      reading: ContrastReading,
+      minimum: number,
+      label: string,
+      theme: Theme,
+    ) => {
+      expect
+        .soft(
+          reading.ratio,
+          `${label} [${theme}] — ${formatRgb(reading.foreground)} on ${formatRgb(reading.background)}`,
+        )
+        .toBeGreaterThanOrEqual(minimum);
+    };
+
+    for (const theme of THEMES) {
+      await setTheme(signedIn, theme);
+
+      // SC 1.4.11, 3:1 — the ring is painted outside the control, so it is
+      // judged against what the control sits on.
+      expectAtLeast(
+        await measurePropertyAgainstBackdrop(addButton, "--focus"),
+        3,
+        "focus ring against its backdrop",
+        theme,
+      );
+
+      // SC 1.4.11, 3:1 — the filled button has to be findable as a control.
+      expectAtLeast(
+        await measurePropertyAgainstBackdrop(addButton, "--accent"),
+        3,
+        "primary button fill against the page",
+        theme,
+      );
+
+      // SC 1.4.3, 4.5:1 — `--accent-soft-foreground` is mixed from the accent.
+      await expectReadable(selectedChip, "selected status filter label", theme);
     }
   });
 });

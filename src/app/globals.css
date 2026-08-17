@@ -21,9 +21,10 @@
   text exactly as typed.` — the only *visible* statement of the quick-add
   parser's escape hatch — which is why QA ranked this above DEF-14 (§A6).
 
-  `oklch(0.518 …)` = rgb(104,104,113) clears all three with headroom, and it is
-  a small step: `--muted` still reads as clearly secondary against
-  `--foreground`. Only the lightness moves; chroma and hue are HeroUI's.
+  `oklch(0.518 …)` = rgb(103,103,112) clears all three with headroom — measured
+  5.14 / 4.65 / 5.60 respectively — and it is a small step: `--muted` still
+  reads as clearly secondary against `--foreground`. Only the lightness moves;
+  chroma and hue are HeroUI's.
 
   **Light only.** Dark's `--muted` already measures 7.72:1 / 6.75:1 and is left
   alone. The guard is what keeps it that way: HeroUI scopes its dark palette to
@@ -41,4 +42,42 @@
 */
 :root:not(.dark):not([data-theme="dark"]) {
   --muted: oklch(0.518 0.0138 285.94);
+}
+
+/*
+  DEF-14: `--accent` is `oklch(0.6204 …)` = rgb(4,133,247), and every primary
+  button paints `--accent-foreground` (rgb(252,252,252)) on it at 14px/500 —
+  **3.59:1**, against SC 1.4.3's 4.5:1. QA confirmed the single-token diagnosis
+  across three buttons on three routes (§A2). Nothing here qualifies as large
+  text, so 4.5 is the bar, and the label cannot get any lighter than it already
+  is: the blue is the half that has to move.
+
+  Deliberately **not** guarded by theme. HeroUI's dark block never redefines
+  `--accent`, so light and dark share this one value and both measured 3.59:1 —
+  a light-only override would fix half the defect and leave no trace of the
+  other half.
+
+  Lightness only, from 0.6204 to 0.556; HeroUI's chroma and hue are untouched,
+  so this is the same blue, darker. It resolves to rgb(0,112,225) after the
+  browser's gamut mapping. Measured, light / dark:
+
+    button label on the fill      3.59 -> 4.65  |  3.59 -> 4.65
+    button fill vs the page       3.38 -> 4.37  |  5.50 -> 4.25
+    focus ring vs its backdrop    3.38 -> 4.37  |  5.50 -> 4.25
+    selected filter chip label    4.69 -> 5.60  |  7.26 -> 6.18
+
+  The lines below the first are why they are measured at all. `--focus` is
+  aliased to `--accent` (§2.1, "do not restyle") and `--accent-soft-foreground`
+  is mixed from it, so darkening the accent to win 4.5:1 on the button moves
+  the ring and the selected filter chip too — and in **dark** it moves them the
+  wrong way, which is the direction a light-only eyeball check would miss. Each
+  stays clear of its floor (3:1 for the ring and the fill, 4.5:1 for the chip
+  label), and light actually gains: the ring was sitting at 3.38 against the
+  page, 0.38 above SC 1.4.11.
+
+  All four rows are pinned in `e2e/a11y-contrast.spec.ts`, so a future nudge to
+  this value cannot quietly spend the ring to buy the button.
+*/
+:root {
+  --accent: oklch(0.556 0.195 253.83);
 }
