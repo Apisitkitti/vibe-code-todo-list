@@ -722,6 +722,13 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       <TodoGroupedList
         todos={result.todos}
         pendingTodoIds={rowPendingIds()}
+        /*
+          The one row §8.3.2 still gives a row-level pending treatment to: a
+          confirmed delete is running against it and it is about to stop
+          existing. Everything else that is busy is busy optimistically and
+          says so through `aria-busy` and its disabled controls.
+        */
+        vanishingTodoId={isDeleting ? (pendingDelete?.id ?? null) : null}
         showTooltips={isDesktop}
         onToggle={(target, nextCompleted) => {
           void handleToggle(target, nextCompleted);

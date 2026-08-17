@@ -769,8 +769,38 @@ foreground. Keep the button width stable: render
 `<Spinner size="sm" color="current" />` plus the pending label, and set
 `isDisabled` rather than swapping the element.
 
-**Row-level pending** (toggle, delete): apply `opacity-60 pointer-events-none`
-to the `<li>`. No spinner — these are optimistic.
+**Row-level pending** (delete only): apply `pointer-events-none` to the `<li>`.
+No spinner, and **no `opacity-60` on the row in any state**.
+
+> **MI-6 — settled. §8.3.2 is the design; this paragraph was the half that was
+> wrong, and it is corrected here.**
+>
+> This section used to say `opacity-60 pointer-events-none` on *both* the
+> toggle and the delete, while §8.3.2 said the treatment should apply to the
+> delete alone. §8.3.2 wins, for the reason it gave — a toggle is optimistic,
+> so the row already shows its outcome and dimming it is visible latency for
+> its own sake.
+>
+> The measurement then went further than either paragraph did, so the dimming
+> is gone entirely rather than merely narrowed. `opacity` is a **group**
+> multiplier: it dims the row's own paint *and every descendant's*, the title
+> included. A completing row carries `text-muted line-through` from the moment
+> of the press, so the dim landed on the muted token and the title measured
+> **2.32:1** — below even the 3:1 large-text floor, on 16px text, for the
+> length of the round trip (QA §A4). Deleting an *already-completed* row
+> reaches the identical 2.32:1 by the identical route, so keeping the dim for
+> the delete alone would not have been enough: it is the group opacity that is
+> the defect, not which mutation raised it.
+>
+> Nothing is lost. The row still announces itself with `aria-busy`, and its
+> controls still read as unavailable because they are genuinely disabled and
+> HeroUI dims a disabled control itself through `--disabled-opacity`. SC 1.4.11
+> exempts an inactive component from its contrast floor; a dimmed *title* has
+> no such exemption. Measured after the change: **4.83:1 light / 6.75:1 dark**,
+> the token's ordinary value on the Card.
+>
+> Pinned by `e2e/a11y-contrast.spec.ts`, which measures both mutation paths in
+> both themes.
 
 **Route transitions.** `/todos` gets a `loading.tsx` rendering the same header
 plus the skeleton list.
@@ -1470,6 +1500,15 @@ still re-runs the scoped endpoint. This is what §1 already promised. The row's
 current `opacity-60 pointer-events-none` pending treatment should then apply
 only to *delete*, where the row is about to vanish and a stable, dimmed row is
 honest; on a toggle it is now visible latency for its own sake.
+
+> **MI-6, settled: this paragraph is the design, and §4.8 has been corrected to
+> match it.** One amendment, from measurement rather than from taste: the
+> `opacity-60` is dropped for the delete too, and only `pointer-events-none`
+> remains. A row-level `opacity` dims the title with everything else, and on an
+> already-completed row — whose title is `text-muted line-through` — that lands
+> at **2.32:1**, the same number the toggle produced. "A stable, dimmed row is
+> honest" survives as intent; the disabled controls and `aria-busy` carry it,
+> and the title keeps its contrast. See §4.8 for the full reasoning.
 
 *Accessibility:* `aria-checked` flips with the visual state instead of lagging
 behind it, which is strictly more correct for a screen reader. §6.4's "checkbox

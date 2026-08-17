@@ -78,6 +78,12 @@ const ActionTooltip = ({
 export interface TodoRowProps {
   todo: TodoItemData;
   isPending: boolean;
+  /**
+   * A confirmed delete is in flight against this row — it is about to stop
+   * existing. The one case §8.3.2 keeps a row-level pending treatment for, and
+   * the only thing that still separates it from an ordinary busy row.
+   */
+  isVanishing: boolean;
   showTooltips: boolean;
   onToggle: (todo: TodoItemData, nextCompleted: boolean) => void;
   onEdit: (todo: TodoItemData) => void;
@@ -87,6 +93,7 @@ export interface TodoRowProps {
 export const TodoRow = ({
   todo,
   isPending,
+  isVanishing,
   showTooltips,
   onToggle,
   onEdit,
@@ -114,8 +121,33 @@ export const TodoRow = ({
       // around the pill instead of across it. Not a `--field-border-width`
       // case: this is a plain border utility on an `<li>`, so HeroUI's 0px
       // field default (DEF-08) does not reach it.
+      // No `opacity-60` on the row, in either state, and that is a contrast
+      // decision rather than a cosmetic one.
+      //
+      // `opacity` is a **group** multiplier: it dims the row's own paint and
+      // every descendant's, the title included. A completing row already
+      // carries `text-muted line-through` optimistically, so the dim landed on
+      // the muted token and the title measured **2.32:1** — below even the 3:1
+      // large-text floor, on 16px text, during exactly the window the user is
+      // watching to find out what happened (QA §A4). Deleting an
+      // already-completed row reached the identical number by the identical
+      // route, so restricting the dim to delete would not have been enough on
+      // its own.
+      //
+      // Nothing is lost by dropping it. The row still announces itself with
+      // `aria-busy`, and its controls still *look* unavailable, because they
+      // are genuinely disabled and HeroUI dims a disabled control itself via
+      // `--disabled-opacity` — which SC 1.4.11 exempts as an inactive
+      // component, where a dimmed *title* has no such exemption.
+      //
+      // `pointer-events-none` stays for the delete alone (§8.3.2): that row is
+      // about to vanish. A toggle keeps its pointer surface, because the flip
+      // is optimistic and already shown — dimming and deadening it is visible
+      // latency for its own sake. `isDisabled` on the controls is what
+      // actually prevents the out-of-order PATCHes m-4 describes; this only
+      // ever stopped a mouse (QA DEF-12).
       className={`group flex items-center gap-3 rounded-2xl border border-border-secondary px-4 py-3.5 hover:bg-surface-hover ${
-        isPending ? "pointer-events-none opacity-60" : ""
+        isVanishing ? "pointer-events-none" : ""
       }`}
     >
       <Checkbox
