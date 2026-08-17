@@ -39,10 +39,13 @@ import { getRequest, readList } from "../support/request";
  *     to a bare `i` under glibc, which is what `ILIKE` uses, and to `i` plus a
  *     combining dot in JavaScript. That divergence is why the toast once said
  *     "hidden" about a row sitting in the list.
- *  2. **The server's search will change.** Backlog #4 adds `note` to the `OR`,
+ *  2. **The server's search changes.** Backlog #4 added `note` to the `OR`,
  *     at which point a todo whose note matches is returned by the handler
- *     while this predicate still calls it hidden — silently, and with no test
- *     in `src/lib` able to notice.
+ *     while a title-only predicate still calls it hidden — silently, and with
+ *     no test in `src/lib` able to notice. This file is what noticed: the
+ *     `Call the vet` seed below carries `about milk` as its note and was
+ *     already here, so widening the handler alone turned it red. It was the
+ *     hypothetical this test was written for, and it behaved as advertised.
  *
  * So the property asserted here is the one that actually matters, and it is
  * deliberately **one-directional**:

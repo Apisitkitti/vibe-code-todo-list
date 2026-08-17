@@ -54,8 +54,29 @@ export const GET = async (request: NextRequest) => {
     where.priority = priority;
   }
 
+  /*
+    Backlog #4: the note is searched as well as the title. The note is the
+    2000-character field where the detail actually lives, so a search that
+    could not see it answered `No matches` about todos the user had written
+    the term into themselves.
+
+    **The `OR` sits *beside* `userId`, never around it.** Prisma ANDs the
+    top-level keys of a `where`, so this reads `userId = me AND (title ~ q OR
+    note ~ q)` — the scope still constrains every branch. Nesting it the other
+    way, or folding `userId` into one arm, makes the other arm unscoped and
+    turns a search box into a reader of everybody's todos; that is the whole
+    reason this one line was reviewed as a security change. `userId` is set
+    above and is not touched here, which is the property to check when reading
+    this diff.
+
+    `mode: "insensitive"` on both, matching the title behaviour this widens
+    rather than inventing a second rule for the second field.
+  */
   if (query !== "") {
-    where.title = { contains: query, mode: "insensitive" };
+    where.OR = [
+      { title: { contains: query, mode: "insensitive" } },
+      { note: { contains: query, mode: "insensitive" } },
+    ];
   }
 
   const [todos, totalCount, completedCount] = await Promise.all([

@@ -33,7 +33,14 @@ const EMPTY_RESULT: TodoListResult = {
 
 export interface UseTodoListReturn {
   result: TodoListResult;
-  /** For the optimistic writes, which own the arithmetic in `todoListState`. */
+  /**
+   * For the optimistic writes, which own the arithmetic in `todoListState`.
+   *
+   * Not the raw `useState` setter: going through it is what marks the result
+   * as post-write, so a list load already in flight cannot answer over the
+   * top of it (DEF-20, `appliedStampRef` below). Writes must not reach
+   * `result` any other way.
+   */
   setResult: React.Dispatch<React.SetStateAction<TodoListResult>>;
   isLoading: boolean;
   loadError: string | null;
@@ -52,7 +59,7 @@ export interface UseTodoListReturn {
 }
 
 export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
-  const [result, setResult] = useState<TodoListResult>(EMPTY_RESULT);
+  const [result, setLoadedResult] = useState<TodoListResult>(EMPTY_RESULT);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   /**
@@ -124,6 +131,46 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
    */
   const landedLoadsRef = useRef(0);
 
+  /**
+   * The freshness half of DEF-20, and the case counting landed loads cannot
+   * see.
+   *
+   * `landedLoadsRef` answers "did a load replace `result` *while* my write was
+   * in flight?", which covers every interleaving where the load lands first.
+   * The residual is the mirror image: a `GET` the server answered **before**
+   * the write committed, whose response lands **after** the `PATCH` response.
+   * At the moment the toggle checks, nothing has landed — the counter agrees
+   * with itself, `replaceTodo` splices in the authoritative row — and then the
+   * stale answer arrives and overwrites all of it with counts computed from a
+   * database that had not seen the write. The header drifts and stays drifted,
+   * because nothing on the toggle path refetches any more (m-7).
+   *
+   * A response cannot be asked when it was computed, so the ordering is
+   * imposed on this side instead. Two numbers do it:
+   *
+   *  - `loadStampRef` — a monotonic stamp handed to each load **when it is
+   *    issued**. Never reset; never reused.
+   *  - `appliedStampRef` — the newest stamp whose answer is currently
+   *    rendered.
+   *
+   * The rule is one line in each direction:
+   *
+   *  1. **A load may only replace `result` if it is strictly newer than the
+   *     newest one already applied.** Strictly: an equal stamp is the load
+   *     already applied, and re-applying it would undo whatever a write put on
+   *     top of it.
+   *  2. **A write moves `appliedStampRef` up to the issued high-water mark.**
+   *     Every load already in flight was asked of a database that predates the
+   *     write, so from this instant their answers are all older than what is
+   *     on screen — which is precisely rule 1 refusing them.
+   *
+   * Rule 2 is what makes this a *freshness* stamp rather than a de-duplicator,
+   * and it is the half that fixes the defect. It also strands the load it
+   * refuses, so the drop path re-asks: see the `finally` in the effect.
+   */
+  const loadStampRef = useRef(0);
+  const appliedStampRef = useRef(0);
+
   const { status, priority, query } = filters;
   const filterKey = `${status}|${priority}|${query}`;
 
@@ -136,6 +183,37 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
     setLastFilterKey(filterKey);
     setIsLoading(true);
   }
+
+  /**
+   * The only way a *write* reaches `result`, and the only place rule 2 above
+   * is applied.
+   *
+   * Wrapping the setter rather than exposing a `markWrite()` beside it is
+   * deliberate: the rule is enforced at the module *boundary*, so
+   * `TodoListScreen` needs no change and cannot forget it, where a
+   * `markWrite()` to be called first holds only until the next caller forgets.
+   *
+   * Inside the hook it is a convention, not a guarantee. `setLoadedResult` has
+   * two call sites — this one and the load path, which skips the bump on
+   * purpose because a load is not a write — so a third added here could break
+   * rule 2 without a compiler noticing. The boundary claim is the one that is
+   * checkable, and it checks out: no caller of `setLoadedResult` exists
+   * outside this file.
+   *
+   * The bump is unconditional, including when the updater is a no-op that
+   * returns the identical object (`todoListState` invariant 3). React bails
+   * out of the re-render either way; what matters here is that the *decision*
+   * was made against post-write knowledge, so a read taken before it must not
+   * be allowed to speak over it afterwards. `replaceTodo` no-opping because
+   * the row left the filter is exactly that case, and it is the one this
+   * defect was reported against.
+   */
+  const setResult: React.Dispatch<React.SetStateAction<TodoListResult>> = (
+    action,
+  ) => {
+    appliedStampRef.current = loadStampRef.current;
+    setLoadedResult(action);
+  };
 
   const markPending = (todoId: string) => {
     setPendingTodoIds((ids) => new Set(ids).add(todoId));
@@ -202,16 +280,77 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
 
   useEffect(() => {
     let isCurrent = true;
+    /*
+      Stamped at issue, which is where the number means what rule 1 reads it
+      as: *when this question was asked*, to be compared against what has been
+      applied since.
+
+      Reading the stamp at landing instead would pass every test on this
+      branch — `isCurrent` retires a superseded load before it reaches the
+      check, so the only load that ever gets there is the newest issued, and
+      the two readings coincide. The distinction is therefore not observable
+      today and this comment does not claim it is. Issue-time is kept because
+      it is the reading the rule is written in, and because it stays correct
+      if that coincidence ever stops holding.
+    */
+    loadStampRef.current += 1;
+
+    const loadStamp = loadStampRef.current;
+    /*
+      Set on the drop path and read in `finally`, so the re-ask is issued after
+      this load has finished failing to matter. Requesting the reload inline
+      would bump the token during the same microtask that is still resolving
+      this one, which is harmless but reads as if the two were related.
+    */
+    let wasRefused = false;
 
     void getTodoList({ status, priority, query })
       .then((nextResult) => {
         if (!isCurrent) return;
 
+        /*
+          Rule 1. `<=`, not `<`: an answer whose stamp equals the applied one
+          *is* the applied one, and re-applying it would throw away the write
+          that has since been layered on top — which is the defect, reached by
+          a different door.
+
+          `isCurrent` above does not subsume this and is not subsumed by it.
+          That guard is about the *question* being stale (the filters moved
+          on); this one is about the *answer* being stale (a write happened
+          after it was asked). A load can be current and stale at once, and
+          that combination is DEF-20.
+        */
+        if (loadStamp <= appliedStampRef.current) {
+          wasRefused = true;
+
+          return;
+        }
+
+        /*
+          What makes `appliedStampRef` mean what it is documented to mean
+          above: *the newest stamp whose answer is currently rendered*.
+
+          **Deleting this line leaves the whole suite green, and it must stay
+          anyway.** In every interleaving reachable today the write-side bump
+          to the issued high-water mark dominates it — a write raises the mark
+          past this load regardless, and no two landing loads are ever compared
+          against each other, because `isCurrent` retires the older one first.
+          So its value here is the invariant, not any behaviour a test can
+          reach: without it the ref would name a write's high-water mark and
+          nothing else, and rule 1 would be comparing a load against a number
+          that had stopped describing what is on screen. The next change to
+          this file — a second concurrent reader, a load that survives its own
+          supersession — would be reasoning from a false statement.
+
+          Recorded here rather than left for a future reader to rediscover from
+          a green suite and delete.
+        */
+        appliedStampRef.current = loadStamp;
         // Counted here, at the one line that discards a toggle's optimistic
         // arithmetic, so every way of starting a load is covered by
         // construction rather than by remembering to bump a token.
         landedLoadsRef.current += 1;
-        setResult(nextResult);
+        setLoadedResult(nextResult);
         setLoadError(null);
       })
       .catch((error: unknown) => {
@@ -222,7 +361,45 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
         );
       })
       .finally(() => {
-        if (isCurrent) setIsLoading(false);
+        if (!isCurrent) return;
+
+        /*
+          Refusing a load leaves the question unanswered. A filter change is
+          the ordinary way into this window, and its `GET` is the only thing
+          that would ever put the newly-filtered rows on screen — dropping it
+          silently would fix the counter by freezing the list, which is a worse
+          bug than the one being fixed.
+
+          So the refusal re-asks. This terminates: the re-ask is issued after
+          the write that refused the first one, so it carries a stamp above
+          `appliedStampRef` and lands. Only a write landing inside *its* window
+          refuses it again, which is a user pressing faster than the server
+          answers, not a loop.
+
+          **`isLoading` stays up across the re-ask, and that is the whole of
+          the difference between this and a lie.** The load being refused
+          answered nothing, so the state the user would be shown the instant
+          the skeleton came down is the *previous* question's — the old
+          filter's rows sitting under the new filter's heading, for a full
+          round trip and with nothing indicating a wait, because the re-ask is
+          deliberately silent. Reporting "loaded" about a load that was thrown
+          away is the same class of claim the counter drift was: the screen
+          asserting something settled that is not. Returning before
+          `setIsLoading(false)` simply lets the skeleton the filter change
+          already raised span the answer it was raised for.
+
+          Nothing is raised here, only left alone. A refusal reached from a
+          silent reload — a token bump rather than a filter change — has no
+          skeleton up to begin with and gains none, which is right: that path
+          has valid rows on screen and never promised otherwise.
+        */
+        if (wasRefused) {
+          requestReload();
+
+          return;
+        }
+
+        setIsLoading(false);
       });
 
     // A response that arrives after the filters moved on must not win.
