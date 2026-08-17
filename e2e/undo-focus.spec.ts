@@ -1,0 +1,181 @@
+import type { Page } from "@playwright/test";
+
+import { markedCompleteToast, markedNotCompleteToast } from "./support/copy";
+import { expect, test, type TodosScreen } from "./support/fixtures";
+
+/**
+ * NFR-04 — the Undo toast must be reachable by keyboard inside its window, and
+ * focus must not be lost or trapped when a toast appears and expires.
+ *
+ * QA measured the old behaviour end to end (`docs/QA-REPORT.md` §A3): a
+ * keyboard toggle under `?status=active` removes the row, focus falls to
+ * `<body>`, and the toast is the last thing in the document — three tab stops
+ * behind every remaining row, against a 12s timeout. At 19 todos it was not
+ * reachable at any human pace. The fix is in `src/lib/rowFocus.ts`: land focus
+ * back on the row that took the removed row's place, then step onto the Undo.
+ *
+ * **Why the list here is deliberately long.** The defect was length-dependent,
+ * so a three-todo account passed it. Eight todos puts more than twenty tab
+ * stops between where focus used to land and the toast, which is well past the
+ * point QA showed the timer wins. A fix that only works on a short list fails
+ * this spec.
+ */
+
+const LIST_SIZE = 8;
+const TOGGLED_TITLE = "row one keyboard toggle";
+
+/** What has focus, named by the contract attribute rather than by geometry. */
+const activeSlot = async (page: Page): Promise<string> =>
+  page.evaluate(() => {
+    const active = document.activeElement;
+
+    if (active === null || active === document.body) return "body";
+
+    return (
+      active.closest("[data-slot]")?.getAttribute("data-slot") ??
+      active.tagName.toLowerCase()
+    );
+  });
+
+/**
+ * Establishes keyboard modality before landing on the row.
+ *
+ * The rescue is deliberately keyboard-only, and react-aria decides modality
+ * from real events — so this presses a real Tab rather than assuming it. The
+ * subsequent `focus()` is how the test skips the tab-walk *into* the list,
+ * which is not what is under test; the walk *out* of it is.
+ */
+const focusFirstRowFromKeyboard = async (page: Page, title: string) => {
+  await page.keyboard.press("Tab");
+  await page
+    .getByRole("checkbox", { name: `Mark "${title}" as complete` })
+    .evaluate((element: HTMLElement) => {
+      element.focus();
+    });
+};
+
+const seedList = async (todos: TodosScreen, page: Page) => {
+  await todos.quickAdd(TOGGLED_TITLE);
+  await expect(page.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+
+  for (let index = 1; index < LIST_SIZE; index += 1) {
+    await todos.quickAdd(`filler row ${index}`);
+    await expect(page.locator("main").getByText(`filler row ${index}`)).toBeVisible();
+  }
+};
+
+test.describe("NFR-04 — Undo reachability and focus", () => {
+  test("a keyboard toggle that removes the row lands focus on Undo, and Enter restores it", async ({
+    signedIn,
+    todos,
+  }) => {
+    await seedList(todos, signedIn);
+
+    // The filter that makes the toast the only route back (US-07).
+    await signedIn.goto("/todos?status=active");
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+
+    await focusFirstRowFromKeyboard(signedIn, TOGGLED_TITLE);
+    expect(await activeSlot(signedIn)).not.toBe("body");
+
+    await signedIn.keyboard.press("Space");
+
+    // The row leaves the filtered list, and its Undo is the only way back.
+    await expect(
+      signedIn.locator("main").getByText(TOGGLED_TITLE),
+    ).toHaveCount(0);
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(TOGGLED_TITLE) }),
+    ).toBeVisible();
+
+    /*
+      The whole criterion, in one assertion: focus is *on* the Undo, with no
+      tab-walk in between and therefore no dependence on how many todos the
+      account has. Before the fix this read "body".
+    */
+    await expect
+      .poll(() => activeSlot(signedIn))
+      .toBe("toast-action-button");
+
+    // And it is genuinely operable from there, not merely focused.
+    await signedIn.keyboard.press("Enter");
+
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+    await expect(
+      todos.toastTitles.filter({
+        hasText: markedNotCompleteToast(TOGGLED_TITLE),
+      }),
+    ).toBeVisible();
+  });
+
+  test("focus is neither lost nor trapped when the toast goes away", async ({
+    signedIn,
+    todos,
+  }) => {
+    await seedList(todos, signedIn);
+
+    await signedIn.goto("/todos?status=active");
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+
+    await focusFirstRowFromKeyboard(signedIn, TOGGLED_TITLE);
+    await signedIn.keyboard.press("Space");
+
+    await expect.poll(() => activeSlot(signedIn)).toBe("toast-action-button");
+
+    /*
+      Not trapped: Tab out of the toast has to move focus somewhere real. A
+      region that held focus would report the action button again.
+    */
+    await signedIn.keyboard.press("Tab");
+    expect(await activeSlot(signedIn)).not.toBe("toast-action-button");
+    expect(await activeSlot(signedIn)).not.toBe("body");
+
+    // Back onto Undo, then spend the toast — the "expires while it had focus"
+    // half of the criterion. Focus must land somewhere, not on `<body>`.
+    await signedIn.keyboard.press("Shift+Tab");
+    await expect.poll(() => activeSlot(signedIn)).toBe("toast-action-button");
+
+    await signedIn.keyboard.press("Enter");
+
+    await expect(todos.undoButton).toHaveCount(0);
+    await expect.poll(() => activeSlot(signedIn)).not.toBe("body");
+  });
+
+  test("a pointer toggle does not pull focus into the toast, even with a row focused", async ({
+    signedIn,
+    todos,
+  }) => {
+    await seedList(todos, signedIn);
+
+    await signedIn.goto("/todos?status=active");
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+
+    /*
+      The case that makes the modality gate load-bearing rather than
+      decorative. A bare mouse press is not enough on its own: react-aria does
+      not focus a checkbox on pointer press, so focus is already on `<body>`
+      and the rescue would decline for want of an anchor whatever the gate
+      said. Putting a row under the keyboard *first* and then clicking a
+      different row is the shape where focus **is** in the list and the press
+      **is** a pointer — the only thing standing between that and a hijacked
+      Undo is the modality check.
+    */
+    await focusFirstRowFromKeyboard(signedIn, "filler row 1");
+    expect(await activeSlot(signedIn)).not.toBe("body");
+
+    await todos.toggle(TOGGLED_TITLE, true);
+
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(TOGGLED_TITLE) }),
+    ).toBeVisible();
+
+    /*
+      A pointer user is not standing anywhere, and arming Undo under a Space
+      press they meant for the row they had tabbed to would be a worse bug
+      than the one being fixed.
+    */
+    await expect
+      .poll(() => activeSlot(signedIn))
+      .not.toBe("toast-action-button");
+  });
+});
