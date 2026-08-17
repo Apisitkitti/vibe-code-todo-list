@@ -697,6 +697,11 @@ describe("heldRelease — a refusal covers the reading, and only that", () => {
    * this way and a caller can still ask for it. The fix is that nothing does:
    * a chip releases its own kind and `Esc` releases the chips on screen, so the
    * bar never reaches this branch.
+   *
+   * It therefore pins behaviour that violates its own precondition. If the
+   * step-over is ever gated on `canLift`, this expectation changes — that is a
+   * hardening, not a break, and this test should be updated rather than
+   * treated as a regression.
    */
   test("refusing a kind that was never offered reads past the chips", () => {
     const shown = parse("tomorrow high");

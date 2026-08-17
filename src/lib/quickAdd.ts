@@ -79,7 +79,17 @@ dayjs.extend(customParseFormat);
  * a kind that fired was lifted, so releasing it moves exactly its own words
  * from `lifted` to `steppedOver`, `canLift` subtracts both, the budget is
  * unchanged at every step, and the scan therefore stops where it stopped
- * before. Same cursor, same `tail`, one chip fewer (QA DEF-24).
+ * before. Same cursor, same `tail`, one chip fewer (QA DEF-24). A refusal
+ * already standing is carried along unchanged: it did not fire in this parse
+ * either, so it is stepped over identically in both, and only the newly
+ * released kind moves between the two terms.
+ *
+ * Gating the step-over on `canLift` would reach the same `tail`, and is
+ * deliberately not done: it would leave a refusal of a kind that was never
+ * offered, which then suppresses that kind's chip on a later line where it
+ * *does* become readable — a parse the user cannot see, which §7.17 ranks below
+ * a visible unwanted chip. `handleKeyDown` in `QuickAddForm.tsx` is where that
+ * trade is made.
  *
  * The output is deliberately the existing contract: `dueAt` is the
  * `YYYY-MM-DD` wire format `todoFormSchema` and `parseDueDate` already own, so

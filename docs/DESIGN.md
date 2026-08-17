@@ -1284,10 +1284,11 @@ chip at once, from the keyboard, without leaving the input — **every chip, and
 nothing that is not a chip.** A word rule 2 declined to lift was never offered,
 so it is not `Esc`'s to refuse; refusing it anyway would record the refusal
 against a longer reading than the one on screen, and the user's own title would
-then be able to revoke it. A parse the user
-cannot see and cannot refuse is the thing this feature must never ship — which
-is why the reading is also **announced through a polite live region**, not
-merely drawn. The chips are buttons a screen-reader user only meets by tabbing
+then be able to revoke it (QA DEF-24).
+
+**A parse the user cannot see and cannot refuse** is the thing this feature must
+never ship — which is why the reading is also **announced through a polite live
+region**, not merely drawn. The chips are buttons a screen-reader user only meets by tabbing
 to them, so without the announcement the guarantee in this paragraph would
 hold for sighted users only.
 
