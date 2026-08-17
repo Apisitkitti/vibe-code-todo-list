@@ -20,8 +20,10 @@ import {
 /**
  * Per-test isolation and the helpers every spec shares.
  *
- * Isolation is by account, not by database: the suite runs against the real
- * Neon instance, so a test may only ever see rows it created itself. Each test
+ * Isolation is by account first, and by database as well: `resolveTestDatabaseUrl`
+ * points the suite at a local `todo_app_test`, and refuses to run when that URL
+ * matches the app's own. The account rule stands on its own regardless of which
+ * database is underneath — a test may only ever see rows it created itself. Each test
  * signs up a brand-new account through the UI, does its work inside that
  * account, and deletes it afterwards. Two tests can therefore never observe
  * each other's todos, and no test can observe production data — `GET

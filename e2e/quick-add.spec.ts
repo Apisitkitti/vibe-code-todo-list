@@ -12,6 +12,7 @@ import {
   QUICK_ADD_SUBMIT_LABEL,
   TITLE_FIELD_LABEL,
   addedToast,
+  ariaQuoted,
   dueChipLabel,
   keepInTitleLabel,
   priorityChipLabel,
@@ -56,6 +57,17 @@ const RETYPED_TITLE = "Buy fresh organic";
 /** DEF-23's line, and the title the bar hands the modal after reading it. */
 const DRAFT_LINE = "Draft the quarterly report and circulate it tomorrow high";
 const DRAFT_TITLE = "Draft the quarterly report and circulate it";
+
+/** QA re-gate reproduction C: `Esc`, then the space that used to revoke it. */
+const MEETING_LINE = "Remember the meeting friday";
+
+/**
+ * DEF-24's line. Every word is vocabulary, which is what makes it degenerate:
+ * rule 2 refuses the date because lifting `in 3 days` would empty the title, so
+ * the only chip is the priority and `in 3 days` is the user's own title.
+ */
+const VOCABULARY_LINE = "in 3 days high";
+const CORRECTED_LINE = "in 4 days high";
 
 test.describe("quick-add bar", () => {
   test("focus, type, Enter — and focus stays in the bar for the next one", async ({
@@ -183,6 +195,46 @@ test.describe("quick-add bar", () => {
   }
 
   /**
+   * The same family again, from the other end: a refusal must survive the
+   * *next* refusal. `releaseKinds` folds the kinds already held into the new
+   * record, and without that fold the second press replaces the first — the
+   * date chip comes back and the date is applied, because refusing the
+   * priority revoked a refusal of something else.
+   *
+   * Found by mutation while fixing DEF-24: dropping the fold left all 25 cases
+   * of this spec green. Every other test here presses at most one chip.
+   */
+  test("pressing the second chip keeps the first refusal", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    const dueChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Tomorrow"), "tomorrow"),
+    });
+    const priorityChip = page.getByRole("button", {
+      name: keepInTitleLabel(priorityChipLabel("High"), "high"),
+    });
+    const typed = "Call mum about tomorrow high";
+
+    await todos.quickAddInput.fill(typed);
+
+    await dueChip.click();
+    await expect(dueChip).toHaveCount(0);
+
+    await priorityChip.click();
+
+    // Neither is back: two presses, two refusals, both standing.
+    await expect(priorityChip).toHaveCount(0);
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Enter");
+
+    await expect(todos.row(typed)).toBeVisible();
+    await expect(todos.row(typed).locator("time")).toHaveCount(0);
+    await expect(todos.row(typed)).toContainText("Medium");
+  });
+
+  /**
    * Review B-2, and QA/Senior F1. The release used to be a bare set of kinds
    * that nothing ever cleared, so one `Esc` left the parser dead for
    * everything typed afterwards — no chips, no date, no priority, and no
@@ -264,6 +316,102 @@ test.describe("quick-add bar", () => {
     // The refusal held: the word is in the title and the row carries no date
     // at all — `TodoDueDate` renders a `<time>` or nothing.
     await expect(todos.row(LITERAL_TITLE).locator("time")).toHaveCount(0);
+  });
+
+  /**
+   * QA re-gate reproduction C. The same invisible keystroke as the test above,
+   * behind the *other* control: the suite pinned chip + space and `Esc` +
+   * retype, and this is the third corner — `Esc` + space. It passed when QA ran
+   * it by hand and nothing in the repository held it there.
+   */
+  test("a refusal made with Esc survives a trailing space too", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    /*
+      Matched on the tail of the `aria-label` rather than the whole of it:
+      `friday` formats as a date (`Aug 21`), so the chip's own wording depends
+      on the day this suite runs. The words it offers to put back do not.
+      `getByRole` matches the accessible name by substring.
+    */
+    const dueChip = page.getByRole("button", {
+      name: `keep ${ariaQuoted("friday")} in the title`,
+    });
+
+    await todos.quickAddInput.fill(MEETING_LINE);
+    await expect(dueChip).toBeVisible();
+
+    await todos.quickAddInput.press("Escape");
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("End");
+    await todos.quickAddInput.press(" ");
+
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Enter");
+
+    await expect(todos.row(MEETING_LINE)).toBeVisible();
+    await expect(todos.row(MEETING_LINE).locator("time")).toHaveCount(0);
+  });
+
+  /**
+   * **DEF-24**, and the fourth member of the family that keeps landing in this
+   * one place: a refusal recorded against a reading the user was never shown.
+   *
+   * `Esc` released *both* kinds regardless of which had fired. A step-over is
+   * not gated by rule 2, so releasing the date — which rule 2 had refused,
+   * because lifting `in 3 days` would empty the title — walked the scan past
+   * words that are still title and recorded them in the tail. Correcting the
+   * `3` to a `4` then looked like an edit to the reading: refusal gone, chip
+   * back, and `Enter` saved `in 4 days` at High priority. DEF-22's harm, with
+   * `Esc` in place of the chip.
+   *
+   * The line is deliberately all vocabulary, because that is the only shape
+   * that reaches it — with any ordinary word in the line rule 2's budget leaves
+   * a survivor, the date is lifted, and its chip is on screen to be refused.
+   */
+  test("a refusal made with Esc survives correcting a word of the title", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    const priorityChip = page.getByRole("button", {
+      name: keepInTitleLabel(priorityChipLabel("High"), "high"),
+    });
+
+    await todos.quickAddInput.fill(VOCABULARY_LINE);
+
+    // One chip, and it is the priority: the date was never offered, so it is
+    // not `Esc`'s to refuse either.
+    await expect(priorityChip).toBeVisible();
+    await expect(
+      page.getByRole("group", { name: CHIP_GROUP_LABEL }).getByRole("button"),
+    ).toHaveCount(1);
+
+    await todos.quickAddInput.press("Escape");
+    await expect(priorityChip).toHaveCount(0);
+
+    // `in |3 days high` — the user's own title, three words from the tail.
+    await todos.quickAddInput.press("Home");
+    await todos.quickAddInput.press("ArrowRight");
+    await todos.quickAddInput.press("ArrowRight");
+    await todos.quickAddInput.press("ArrowRight");
+    await todos.quickAddInput.press("Shift+ArrowRight");
+    await todos.quickAddInput.press("4");
+
+    await expect(todos.quickAddInput).toHaveValue(CORRECTED_LINE);
+    await expect(priorityChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Enter");
+
+    // The whole line, exactly as typed — not `in 4 days` with the last word
+    // eaten off it.
+    await expect(todos.row(CORRECTED_LINE)).toBeVisible();
+    await expect(todos.row(CORRECTED_LINE).locator("time")).toHaveCount(0);
+    // `PriorityChip` always renders, so this reads the saved priority rather
+    // than the absence of a chip: the refused word did not become High.
+    await expect(todos.row(CORRECTED_LINE)).toContainText("Medium");
+    await expect(todos.row(CORRECTED_LINE)).not.toContainText("High");
   });
 
   /**
