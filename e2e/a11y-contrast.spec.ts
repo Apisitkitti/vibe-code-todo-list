@@ -167,3 +167,94 @@ test.describe("the row a mutation is working on stays readable", () => {
     held.release();
   });
 });
+
+/**
+ * DEF-15 — the muted token.
+ *
+ * QA measured it at **4.43:1** on the page background in light
+ * (`docs/QA-REPORT.md` §A2): 0.07 short of AA, and it fails only *outside* the
+ * Card, where the same token reads 4.83:1. Dark passes at 7.72:1.
+ *
+ * QA re-ranked this above DEF-14 for one reason, recorded in §A6: that token
+ * now carries `Press Esc to keep your text exactly as typed.` — the only
+ * **visible** statement of the quick-add parser's escape hatch. §7.17 makes
+ * "a parse the user cannot see and cannot refuse" the one thing the feature may
+ * never ship, and the sentence telling a sighted user how to refuse was the
+ * thing below the floor.
+ *
+ * Every surface the token lands on is measured here, not just the one QA
+ * named, because the fix is to the token and a token fix has to hold
+ * everywhere. That includes `--surface-hover`, which nobody had measured: a
+ * completed row under the pointer is the *tightest* surface of the three, and
+ * it was failing at 4.02:1.
+ */
+test.describe("DEF-15 — the muted token clears 4.5:1 on every surface", () => {
+  test("the quick-add chip hint, on the page background", async ({
+    signedIn,
+    todos,
+  }) => {
+    // A reading with chips is what puts the hint on screen (§7.17).
+    await todos.quickAddInput.fill("pay rent friday high");
+
+    const hint = signedIn.locator(
+      '[role="group"][aria-label="Read from your text"] > [aria-hidden="true"]',
+    );
+
+    await expect(hint).toBeVisible();
+
+    for (const theme of THEMES) {
+      await setTheme(signedIn, theme);
+      await expectReadable(hint, "quick-add chip hint (the Esc escape hatch)", theme);
+    }
+  });
+
+  test("the done counter and the account menu, on the page background", async ({
+    signedIn,
+    todos,
+  }) => {
+    await todos.quickAdd("counter contrast row");
+    await expect(todos.doneCounter).toBeVisible();
+
+    const accountMenu = signedIn.getByRole("button", { name: "Account menu" });
+
+    for (const theme of THEMES) {
+      await setTheme(signedIn, theme);
+      await expectReadable(todos.doneCounter, "done counter", theme);
+      // Same token, same surface — QA noted it travels with the count.
+      await expectReadable(accountMenu, "account menu label", theme);
+    }
+  });
+
+  test("a completed row's title, on a hovered row", async ({
+    signedIn,
+    todos,
+  }) => {
+    await todos.quickAdd("hovered completed row");
+    await expect(rowTitle(signedIn, "hovered completed row")).toBeVisible();
+
+    await todos.toggle("hovered completed row", true);
+    await expect(
+      todos.toastTitles.filter({ hasText: "marked complete" }),
+    ).toBeVisible();
+
+    const row = signedIn
+      .locator("main")
+      .getByRole("listitem")
+      .filter({ hasText: "hovered completed row" });
+
+    /*
+      `--surface-hover` is the tightest of the three surfaces this token lands
+      on, and it is the one a mouse user is looking at while they read a
+      completed row. It was never in QA's audit; it measured 4.02:1.
+    */
+    for (const theme of THEMES) {
+      await setTheme(signedIn, theme);
+      await row.hover();
+      await expectReadable(
+        rowTitle(signedIn, "hovered completed row"),
+        "completed row title on a hovered row",
+        theme,
+      );
+    }
+  });
+});

@@ -144,6 +144,23 @@ Assignments:
   `globals.css`. If a colour is missing, compose it with `color-mix` from an
   existing token, matching the pattern `variables.css` uses.
 
+  **One exception, and the only one: a token whose shipped value fails a WCAG
+  floor.** A contrast failure is not a palette preference, and it cannot be
+  composed around — every consumer of the token is affected, so correcting it
+  anywhere but the token means correcting it in a dozen places and missing the
+  thirteenth. Such an override must (a) change only the failing channel,
+  keeping HeroUI's hue and chroma, (b) name the defect, the measured
+  before/after and the surfaces it was measured on, in a comment, and (c) be
+  scoped so it cannot reach the theme that was already passing.
+  `--muted` is the one instance today (DEF-15); see `src/app/globals.css`.
+
+  Point (c) is not boilerplate. HeroUI scopes its dark palette to
+  `.dark, [data-theme="dark"]`, which has the **same specificity** as a bare
+  `:root` — so an unguarded `:root { --muted: … }` in `globals.css` comes later
+  in the cascade and silently overwrites the dark value as well. Measured, that
+  mutation drops dark's muted text from 7.72:1 to 3.62:1. Guard with
+  `:root:not(.dark):not([data-theme="dark"])`, and test both themes.
+
 ---
 
 ## 4. Screen inventory

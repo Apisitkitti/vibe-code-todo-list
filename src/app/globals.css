@@ -3,3 +3,42 @@
 @source "../../src";
 
 @custom-variant dark (&:where(.dark, .dark *));
+
+/*
+  The one place this app overrides a HeroUI token, and it is an accessibility
+  correction rather than a palette opinion. `docs/DESIGN.md` §3 carries the
+  standing rule and the exception this is taken under.
+
+  DEF-15: `--muted` in the light theme is `oklch(0.5517 …)` = rgb(113,113,122).
+  Measured through the browser's parser, that is:
+
+    4.43:1 on --background     (rgb(245,245,245))  page-level muted text
+    4.02:1 on --surface-hover  (rgb(234,234,234))  a completed row under the pointer
+    4.83:1 on --surface        (rgb(255,255,255))  muted text on the Card
+
+  Two of the three are below SC 1.4.3's 4.5:1, and the `--surface-hover` case
+  was never in QA's audit at all. The token now carries `Press Esc to keep your
+  text exactly as typed.` — the only *visible* statement of the quick-add
+  parser's escape hatch — which is why QA ranked this above DEF-14 (§A6).
+
+  `oklch(0.518 …)` = rgb(104,104,113) clears all three with headroom, and it is
+  a small step: `--muted` still reads as clearly secondary against
+  `--foreground`. Only the lightness moves; chroma and hue are HeroUI's.
+
+  **Light only.** Dark's `--muted` already measures 7.72:1 / 6.75:1 and is left
+  alone. The guard is what keeps it that way: HeroUI scopes its dark palette to
+  `.dark, [data-theme="dark"]`, which has the *same* specificity as a bare
+  `:root`, so an unguarded `:root { --muted: … }` here would come later in the
+  cascade and overwrite dark's value too. `src/app/layout.tsx` stamps both the
+  class and the attribute before first paint, so both are excluded.
+
+  `--muted` is only ever a text colour — HeroUI reads it for `--color-muted`
+  and `--field-placeholder` and never as a background — so nothing is paired
+  against it that this could unbalance.
+
+  Pinned by `e2e/a11y-contrast.spec.ts`, which measures every surface the token
+  lands on, in both themes.
+*/
+:root:not(.dark):not([data-theme="dark"]) {
+  --muted: oklch(0.518 0.0138 285.94);
+}
