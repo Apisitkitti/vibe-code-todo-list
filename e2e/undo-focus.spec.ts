@@ -264,3 +264,73 @@ test.describe("NFR-04 — when there is no toast to move to", () => {
     await expect.poll(() => activeSlot(signedIn)).not.toBe("body");
   });
 });
+
+/**
+ * The half of the rescue that declines.
+ *
+ * `focusIsUnclaimed` exists to stop step 2 taking focus the user has already
+ * put somewhere themselves. Every other test here exercises the rescue
+ * *moving* focus; none of them notices if the guard stops working — replacing
+ * its body with `return true` leaves them all green, because the pointer test
+ * is carried by the modality gate rather than by this guard.
+ *
+ * The realistic shape of the failure is the expensive one: the toggle's write
+ * is still in flight, the user has moved on and is typing the next todo, and
+ * the toast arriving yanks the caret out of the input mid-word. Whatever they
+ * type next goes to a button.
+ */
+test.describe("NFR-04 — the rescue stands down once the user has moved", () => {
+  test("a toast arriving does not steal focus from the quick-add bar", async ({
+    signedIn,
+    todos,
+  }) => {
+    const TYPED = "the next todo, half typed";
+
+    await seedList(todos, signedIn);
+
+    await signedIn.goto("/todos?status=active");
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+
+    /*
+      Held so the toast cannot arrive until the user is demonstrably somewhere
+      else. Without this the test would be racing the round trip rather than
+      asserting anything.
+    */
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await signedIn.route("**/api/todos/*/status", async (route) => {
+      await held;
+      await route.continue();
+    });
+
+    await focusFirstRowFromKeyboard(signedIn, TOGGLED_TITLE);
+    await signedIn.keyboard.press("Space");
+
+    // The row is gone optimistically and step 1 has moved focus to a row.
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toHaveCount(0);
+
+    // The user moves on and starts typing the next todo.
+    await todos.quickAddInput.click();
+    await todos.quickAddInput.pressSequentially(TYPED);
+    await expect(todos.quickAddInput).toBeFocused();
+
+    release();
+
+    await expect(todos.undoButton).toBeVisible();
+
+    /*
+      Step 2 fires on the frame the action button appears, so once the button
+      is visible the steal has either happened or is one frame away. A bounded
+      wait is the honest way to assert a negative here — a web-first assertion
+      for "focus did not move" would pass on the frame before it did.
+    */
+    await signedIn.waitForTimeout(700);
+
+    expect(await activeSlot(signedIn)).not.toBe("toast-action-button");
+    await expect(todos.quickAddInput).toBeFocused();
+    await expect(todos.quickAddInput).toHaveValue(TYPED);
+  });
+});

@@ -1024,16 +1024,45 @@ Do not introduce them without updating this document.
    useful from the first frame regardless of what step 2 does. Both halves are
    pinned in `e2e/undo-focus.spec.ts`, the second by failing the status write.
 
-   **The cost, stated honestly: it is one surprise per toggle, not one
-   surprise.** After each qualifying toggle focus sits on `Undo`, so the next
-   `Space` activates Undo and restores the row rather than toggling the next
-   one. Burst-completing a list from the keyboard is a real pattern here, and
-   under a status filter that pattern now needs a deliberate `Shift+Tab` (or a
-   fresh Tab into the list) between rows. We take that trade because the
-   alternative is an Undo the user cannot reach at all, and because the row
-   they just completed is the one most likely to need undoing — but it is a
-   real cost, not a rounding error, and it is the first thing to revisit if
-   burst capture becomes a complaint.
+   **The cost, stated honestly: it is one surprise per toggle, and there is no
+   cheap way out of it.** After each qualifying toggle focus sits on `Undo`, so
+   the next `Space` activates Undo and restores the row rather than toggling
+   the next one. Burst-completing a list from the keyboard is a real pattern
+   here, and under a status filter it now costs a detour on every row.
+
+   Measured from focus-on-`Undo`, because an earlier draft of this section
+   named a workaround that does not exist:
+
+   | Keys | Where focus lands |
+   |---|---|
+   | `Shift+Tab` | the toast **container** (it is focusable) — still in the region |
+   | `Shift+Tab` ×2 | out of the document entirely |
+   | `F6` / `Shift+F6` / `Escape` | nothing moves; still on `Undo` |
+   | `Tab` | the toast's `Close` button |
+   | `Tab` ×2 | out of the document |
+   | `Tab` ×3 | back in at the **top of the page** (theme toggle) |
+   | `Tab` ×5 | the quick-add input — the first stop inside `<main>` |
+
+   So: **`Shift+Tab` does not work, and neither does `Escape` or `F6`.** The
+   only way back into the list is forward — `Tab` out of the toast, round
+   through the top of the page, and on down through the filter bar to the
+   rows. Nothing is trapped, but nothing is cheap either.
+
+   Two consequences worth knowing before touching this:
+
+   - **A toast with focus on it does not expire.** react-aria pauses the
+     timeout while focus is inside the region, so parking on `Undo` keeps the
+     toast alive indefinitely rather than handing focus back after 12s.
+   - The affordance's own exit is `Enter` — which undoes the toggle. That is
+     the right behaviour for Undo and the wrong one for "let me carry on", so
+     it is not an escape route.
+
+   We take the trade because the alternative is an Undo that cannot be reached
+   at all, and because the row just completed is the one most likely to need
+   undoing. But it is a real cost, not a rounding error, and it is the first
+   thing to revisit if burst capture becomes a complaint — the shape of a fix
+   would be a route back to the list from the toast, not a retreat on the
+   rescue.
 
    **Keyboard only.** react-aria does not focus a control on pointer press, and
    a mouse user who has a row focused from earlier must not have Undo armed
