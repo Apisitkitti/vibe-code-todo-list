@@ -2572,3 +2572,425 @@ re-derived independently matched the claim. The tap target is genuinely
 hittable. The smoke pass is clean. **The accessibility queue's colour and
 target work is ready; its focus work is not.**
 
+
+---
+
+# Re-gate — DEF-25 / DEF-26 / DEF-27 — 2026-08-17
+
+Gate: `develop` → `main` (auto-deploy). Tester: QA engineer. Branch `develop`
+@ `cacabe8` (`Merge branch 'fix/undo-focus-identity' into develop`), working
+tree clean. Node 24. `E2E_PORT=3491`.
+
+**Environment changed under this checkout and the report says so rather than
+pretending continuity.** The Postgres that served the previous gate was a
+container that no longer exists; both databases were rebuilt empty on the
+Homebrew `postgresql@18` cluster — **PostgreSQL 18.4**, confirmed by
+`select version()`, against whatever the container ran. Every account below was
+created fresh through the UI inside this run. I saw nothing with the shape of a
+version or collation difference: the case-insensitive search work from the
+previous gate is exercised again in §5 and behaves identically.
+
+Narrow re-gate as instructed. The previous gate's contrast measurements, target
+probes, line-1 race work and full regression sweep stand and were not repeated.
+
+Defect numbering continues from `DEF-27`. One new defect: **DEF-28**.
+
+---
+
+## 0. Verdict, up front
+
+### **SHIP.**
+
+**DEF-25 is closed on its verbatim repro**, checked against the database and
+not the screen. **DEF-26 is closed at 12 of 12**, from 8 of 12 failing.
+**DEF-27's tables now read true** from where a user actually stands. Ten fresh
+identity attacks from angles the Senior's three did not cover produced **zero
+`DELETE`s** and zero mis-identified toasts.
+
+One new defect, **DEF-28 — Medium, not blocking**: the rescue still fires after
+the user has deliberately moved to *another row*, because the guard admits any
+row checkbox rather than the one it placed focus on. The consequence is a
+toggle, not a deletion — announced, reversible, and requiring a slow write. It
+should be fixed, and it does not need to hold this release. §6.
+
+I also owe an answer on the design call I argued against, and on the hazard
+being deferred. Both in §7 and §8. Short version: **the hop is fine now and I
+withdraw the objection**; the deferral is sound, with one cheap improvement I
+would make alongside it.
+
+---
+
+## 1. Quality gate
+
+`rm -rf .next` first, then build, then typecheck; `npm run lint` unpiped.
+
+| Gate | Result |
+|---|---|
+| `npm run build` | ✓ compiled, TypeScript pass, 8/8 static pages |
+| `npx tsc --noEmit` | exit 0 |
+| `npm run lint` (unpiped) | exit 0 |
+| `npm run test:run` | **311 passed / 311**, 13 files |
+| `npx playwright test` | **152 passed / 152**, 4.3m, no retries, no flakes |
+
+The suite grew by six over the previous gate, and the six are the ones that
+matter: `undo-focus.spec.ts` now pins *which* toast the rescue lands on, with
+older toasts deliberately standing, at both widths. That is the assertion whose
+absence let DEF-25 through — the old spec checked the focused element's
+`data-slot`, which the wrong toast's button satisfied just as well.
+
+---
+
+## 2. DEF-25 — **closed**
+
+### The repro, run verbatim
+
+Under `Active`: quick-add `keepme`, then `target`; keyboard `Space` on
+`target`'s checkbox; then `Enter`.
+
+**Where focus landed**, read out of the DOM:
+
+```
+focus:               BUTTON[data-slot="toast-action-button"]  #undo-4
+owner toast:         Todo “target” marked complete
+owner is frontmost:  true
+toasts on screen:   *Todo “target” marked complete      <- focus is HERE
+                     Todo “keepme” added
+                     Todo “anchor” added
+                     Account created for “…”
+```
+
+Focus is on the Undo for the toggle that just happened, with two older `added`
+toasts standing exactly as in the original repro. The token `#undo-4` is
+visible on the button, so the identity is checkable rather than inferred.
+
+**What `Enter` did**, on the wire:
+
+```
+PATCH /api/todos/cmsxe9a5h0002dyve19ebxg7x/status
+```
+
+No `DELETE`. **Database before and after:**
+
+```
+before: total 3, completed 0, titles [target:open, keepme:open, anchor:open]
+after:  total 3, completed 0, titles [target:open, keepme:open, anchor:open]
+```
+
+`keepme` intact. `target` un-completed — `Enter` undid the toggle the user
+actually made, which is what §6.8 promises and what the previous build did not
+do. **Closed.**
+
+Re-run at 390px with the same result: right toast, `PATCH`, nothing destroyed.
+
+### The fix reads as sound
+
+I read `db8302e` before testing it. Selecting on a token minted per toast and
+carried to its own button through `actionProps` is the right shape: it answers
+"which toast is mine", which is a question no positional selector can express.
+The commit's own note that the same wrong choice caused DEF-26 matches what I
+measured independently at the previous gate — the `<body>` landings and the
+dead toast-container landings were the same bug wearing two faces, and they
+disappeared together.
+
+---
+
+## 3. DEF-26 — **closed, 12 of 12**
+
+Twelve trials, four fresh todos each, keyboard toggle of the last row under
+`Active`, varying the gap between the last quick-add and the toggle, with the
+toast stack allowed to grow to 29 deep.
+
+| Gap | Trials | Previous gate | This gate |
+|---|---|---|---|
+| 0ms | 3 | wrong toast ×2, dead container ×1 | **correct ×3** |
+| 300ms | 3 | `<body>` ×3 | **correct ×3** |
+| 1500ms | 3 | `<body>` ×3 | **correct ×3** |
+| 4000ms | 3 | `<body>` ×3 | **correct ×3** |
+
+**Correct: 12/12. `<body>`: 0/12. `DELETE`s: 0.**
+
+"Correct" here is the strict test, not the old one: the focused element must be
+a `toast-action-button` **and** its owning toast's title must be
+`Todo “<the todo just toggled>” marked complete`. Every trial's token was the
+freshly-minted one (`undo-5`, `undo-10`, `undo-15`, … monotonic), and every
+owning toast was frontmost.
+
+Stack depth made no difference — trial 10 landed correctly with 29 toasts on
+screen. That is the condition that used to guarantee failure.
+
+---
+
+## 4. DEF-27 — **closed**
+
+§6.8's table is now stated for the case it is measured in — one toast, focus on
+the frontmost toast's `Undo` — and names the dev overlay as the reason absolute
+counts do not travel. Measured against the corrected text, from where the
+rescue leaves focus:
+
+| Keys | §6.8 now says | I measured |
+|---|---|---|
+| `Shift+Tab` | the toast **container** | toast container ✓ |
+| `Shift+Tab` ×2 | **back into the list**, the last row's `Delete` | `Delete "ay"` ✓ |
+| `F6` / `Shift+F6` / `Escape` | nothing moves | nothing moves ✓ |
+| `Tab` | the toast's `Close` | `Close` ✓ |
+| `Tab` ×3 onward | round through theme toggle → `Account menu` → quick-add | confirmed ✓ |
+
+Every row reads true. The explanation the section now carries for why my
+earlier reading differed — that only the frontmost toast's container is in the
+tab order, so `Shift+Tab` from a **non**-frontmost toast's `Undo` skips it — is
+correct, and it is the right diagnosis: I was measuring from the state DEF-25
+had put focus in, which the rescue can no longer reach. Backwards is now two
+presses to the list, and that is a genuine improvement in the section's own
+terms.
+
+The dev-overlay caveat is also right and worth keeping: I saw `NEXTJS-PORTAL`
+take a stop on some runs and not others within this same session, which is
+exactly why an absolute count should not be in the contract.
+
+---
+
+## 5. Fourth-defect hunt — ten attacks, zero destroyed todos
+
+Angles chosen to miss the Senior's three. Every one watched every non-`GET`
+request and compared the database before and after.
+
+| # | Attack | Result |
+|---|---|---|
+| H1 | Slow `PATCH` (2500ms); user tabs to **another row** meanwhile | **DEF-28** — see §6. No data loss |
+| H2 | Quick-add lands **between** step 1 and step 2, becoming frontmost | Rescue **declined**; focus stayed in the quick-add input where the user put it. `Enter` wrote nothing ✓ |
+| H3 | Two toggles racing, second fired before the first settles | Both landed on their own tokens; `Enter` undid the toggle whose rescue resolved last. Recoverable; see the note below |
+| H4 | Pointer toggle → keyboard toggle → pointer toggle, interleaved | Pointer toggles leave focus on `<body>` (correct, rescue is keyboard-only); the keyboard one landed on its own toast. `Enter` undid `k1` and left `p1` alone ✓ |
+| H5 | `added` + `updated` + `deleted` + a pointer toggle's toast all stacked, then a keyboard toggle | Landed on `Todo “target” marked complete`. `Enter` → `PATCH`. The edit was **not** reverted, the delete stayed deleted ✓ |
+| H6 | After `Enter` restores the row, what does the next `Space` do? | Focus sits on the "marked not complete" toast **container**; `Space` writes nothing. Harmless dead end — see the note below |
+| H7 | Toggling the **only** row with older toasts standing | Landed on its own toast ✓ |
+| H8 | Refused write (500) with older toasts standing | No token minted, no step 2, focus left in the list on a row ✓ |
+| H9 | The DEF-25 repro at **390px** | Right toast, `PATCH`, nothing destroyed ✓ |
+| H10 | **Ten consecutive keyboard toggles** in one burst | 10 `PATCH`, **0 `DELETE`**, total unchanged, and all ten landed on their own toast (`undo-12` … `undo-21`) ✓ |
+
+**Search, re-checked on PostgreSQL 18.4** as part of the smoke: a query
+matching only a todo's **note** (`carrier`) returns that row and no other, and
+the widened client predicate does not call it hidden. No behaviour differs from
+the previous gate's readings on the old cluster. I found nothing with the shape
+of a version or collation difference and am not filing one.
+
+Two observations from the table above, neither a defect:
+
+- **H3.** With two rescues genuinely in flight, `Enter` undid the *first*
+  toggle rather than the most recent, because that rescue's step 2 resolved
+  last. Each rescue still landed on its own token — the identity guarantee
+  holds — they simply finished out of order under input the user deliberately
+  raced. Both toasts are on screen and both actions are toggles.
+- **H6.** After `Enter` undoes a toggle, focus ends on the replacement toast's
+  **container**, which is inert: `Space` there does nothing. `undoToggle`
+  raises a plain toast with no action, so there is no token and no step 2. Not
+  a trap and not a mutation — just a dead end where the user has to `Shift+Tab`
+  out. Worth a line in the backlog, not a defect.
+
+---
+
+## 6. DEF-28 — **Medium** — the rescue fires after the user has moved to another row
+
+### Severity
+
+**Medium. Not blocking.** The wrong mutation under the user's next keypress is
+a *toggle* — announced by its own toast, reversible by its own Undo, nothing
+destroyed. It needs a write slow enough for the user to re-navigate during it.
+It is filed because it is the same *shape* as DEF-25 with a survivable
+consequence, and because the guard's own comment promises the behaviour it does
+not deliver.
+
+### Repro
+
+1. Under `Active`, with several rows, on a slow connection (I injected a
+   2500ms delay on `PATCH /api/todos/*/status`).
+2. From the keyboard, `Space` on a row's checkbox. The row leaves; step 1 lands
+   focus on the row that replaced it.
+3. **While the write is still in flight**, `Tab` three times — one row — to a
+   different row's checkbox. The user has now deliberately chosen where they
+   are standing.
+4. Wait for the write to land.
+
+### Expected
+
+The rescue stands down. `src/lib/rowFocus.ts` says so in as many words —
+*"Anything else means the user has taken focus somewhere themselves, and it is
+not ours to move"* — and §6.8 repeats it: *"the rescue stands down once the
+user has moved focus themselves."*
+
+### Actual
+
+Focus is pulled off the row the user chose and onto the toast's `Undo`:
+
+```
+after step 1:   INPUT: Mark "r6" as complete      <- the rescue put it here
+user tabbed to: INPUT: Mark "r5" as complete      <- the user chose this
+after the toast arrives:
+                BUTTON[toast-action-button]: Undo (toast: Todo “target” marked complete)
+```
+
+**3 of 3 trials yanked.** The consequence, measured end to end: the user walks
+to `victim` intending to complete it, focus is taken to `target`'s `Undo`, and
+their `Space` un-completes `target`. Database before and after:
+
+```
+before: [anchor:open, r2:open, r3:open, target:open, victim:open]
+after:  [anchor:open, r2:open, r3:open, target:open, victim:open]
+```
+
+Nothing destroyed — and nothing the user asked for either. They pressed a key
+on what they believed was `victim` and got a silent no-op plus an undone
+completion elsewhere.
+
+### Cause, and why the existing test does not see it
+
+`focusIsUnclaimed` returns true for `rowCheckboxes().includes(active)` — **any**
+row checkbox, not the one step 1 placed focus on. A user who tabs from one row
+to another is indistinguishable from one who has not moved.
+
+The guard is correct for everything outside the list: moving to the search
+field instead of another row makes the rescue decline, and focus stays put
+(measured). That is exactly the case `undo-focus.spec.ts:539` pins — *"a toast
+arriving does not steal focus from the quick-add bar"*. The row-to-row case has
+no coverage, which is why the suite is green through it.
+
+At normal speed it mostly does not fire — 1 of 3 trials, and that one had the
+tab racing the response. It needs the slow write.
+
+### Suggested fix
+
+`focusRowAfterRemoval` already knows the exact element it focused. Have the
+guard compare against **that element** rather than against the set of row
+checkboxes. The regression test should tab to a *neighbouring row* rather than
+out of the list, and hold the write open long enough for the move to be
+unambiguous.
+
+---
+
+## 7. The design call I argued against — **I withdraw the objection**
+
+I argued the automatic hop was worse than what it replaced: the old failure was
+inert (`<body>`; a stray `Space` scrolled) and the new one was armed (focus
+moved, unasked, onto a control that mutates data). The coordinator kept the hop
+on the reasoning that the armed-ness came from focusing the *wrong* toast, and
+that with the right one `Enter` undoes the toggle the user just made.
+
+Having tried it: **that reasoning holds and my objection does not.** The
+evidence is §2 through §5 — 12/12, 10/10 in a burst, correct across mixed toast
+stacks, at mobile width, on an emptied list, and declining properly on a
+refused write and when the user leaves the list. In every one of those, the
+control under the user's finger is the exact inverse of the action they just
+took. That is about the least surprising thing that can be there after a
+toggle, and it is categorically different from a `DELETE` for a todo they never
+touched. I was generalising from a broken implementation to the design, and
+that was the wrong inference.
+
+What I still think, narrowed: the burst-completion cost is real and unchanged —
+after each qualifying toggle, `Space` activates Undo instead of toggling the
+next row, and §6.8 is right to call that a real cost rather than a rounding
+error. And DEF-28 shows the armed property has a residual: a rescue that fires
+after the user has moved is a mutation they did not choose. But that is a
+bounded bug with a known fix, not a property of the design. **Ship the hop.**
+
+---
+
+## 8. The deferred hazard — **the reasoning is right, with one cheap addition**
+
+The recorded hazard: with a stack on screen, `Tab` ×2 from the toggle's `Undo`
+reaches the *next* toast's `Undo`, and for an `added` toast that is a `DELETE`.
+Confirmed — from `target`'s Undo, `Tab` ×1 is its `Close`, `Tab` ×2 is
+`keepme`'s `Undo`.
+
+I agree it should not hold this release, and for the reason given: two
+deliberate forward presses into a visible, titled toast is not the same event
+as one unprompted keypress on a control the app put under your finger. The
+first is the user operating a thing they can see; the second is the app
+choosing for them. Fixing it properly does mean changing what a toast stack is,
+and that is a bigger design question than a release gate should force.
+
+**One thing I would add to the ticket, because it is cheap and it is the half
+that actually bites.** Every `Undo` button's accessible name is the bare word
+`Undo` — no `aria-label`, no `aria-describedby`, no `aria-labelledby`. I
+checked all three toasts on screen:
+
+```
+Todo “target” marked complete  -> action name: "Undo"
+Todo “keepme” added            -> action name: "Undo"
+Todo “anchor” added            -> action name: "Undo"
+```
+
+A sighted user tabbing forward sees which toast they are in. A screen-reader
+user hears "Undo, button" three times and has no way to tell the one that
+reverses a completion from the one that deletes a todo. Naming the action —
+`Undo — Todo “keepme” added`, or wiring `aria-describedby` to the toast title —
+costs one prop, needs no change to what a stack is, and removes most of the
+hazard for the users most exposed to it. Worth doing before the structural
+question is answered, not after.
+
+---
+
+## 9. Smoke pass — **clean**
+
+Desktop 1280×800 and mobile 390×844, on the rebuilt PostgreSQL 18.4, every
+response and console message watched.
+
+| Step | Result |
+|---|---|
+| Quick-add with parse (`Buy milk tomorrow high`) | `Buy milk`, `Priority: High`, `Tomorrow` |
+| Quick-add chips (`pay rent friday high`) | `Due Aug 21 ×`, `High priority ×`, hint present |
+| `Esc` to refuse the chips | Text kept |
+| Modal create with note | `Vet appointment` created |
+| Edit | → `Vet appointment (moved)` |
+| Toggle + Undo | `1 of 2 done` → Undo → `0 of 2 done` |
+| Filters | `?status=active` in the URL, 1 row; `Completed` 1 row; `All` restores |
+| Search on a **note** (`carrier`) | 1 row; clear restores 2 |
+| Clear button | Clears; 44×44 at mobile |
+| Due-date grouping | Sections render and rows sit in the right one |
+| Delete | Confirm dialog, row gone |
+| Sign out | Lands on `/sign-in` |
+| Sign back in | Lands on `/todos`, rows survived |
+| Mobile: toggle, Undo, search, clear | All correct, **zero console output at all** |
+
+**4xx/5xx: none. Console errors: none.** The only console output on desktop is
+HeroUI's `A PressResponder was rendered without a pressable child` warning,
+which predates this branch and does not appear at mobile width.
+
+---
+
+## 10. What I did not test
+
+- **Anything the coordinator said stands.** Contrast, tap-target probes, the
+  line-1 race work and the full regression sweep were not repeated; they are in
+  the previous section and were not touched by `db8302e`.
+- **Real assistive technology**, again. §8's point about the `Undo` name is
+  derived from the DOM and the accessible-name computation, not from listening
+  to a screen reader read a live toast stack. It is the same gap I flagged last
+  time and it is now the most valuable single thing left untested in this area.
+- **Production-build tab order.** §6.8 already states the dev overlay as the
+  known difference; I did not build and serve production to count stops.
+
+---
+
+## 11. Ship / do not ship
+
+**SHIP.**
+
+All three defects I held the release for are closed, each on its own
+reproduction rather than on a suite going green: DEF-25 verbatim and confirmed
+against the database, DEF-26 from 8/12 failing to 12/12 passing, DEF-27's
+tables true from where a user stands. Ten fresh attacks built specifically to
+break the new identity scheme — slow writes, interleaved pointer and keyboard,
+racing toggles, four kinds of toast stacked in orders nobody had tried, a
+ten-toggle burst — destroyed nothing and mis-identified nothing.
+
+**DEF-28 goes to the backlog, not in front of this release.** It costs a
+keypress and an unwanted-but-reversible toggle, on a slow connection, to a user
+who navigates during a write. That is a real bug and it should be fixed with
+the one-line guard change described in §6 — but holding a release for it, when
+the alternative is leaving DEF-25's fix unshipped, would be the wrong trade.
+
+The environment moved under this checkout mid-gate and I want that on the
+record rather than smoothed over: this is PostgreSQL 18.4 on empty databases,
+not the cluster the previous readings came from. I looked for a difference in
+the place one would surface first — the case-insensitive search over titles and
+notes — and found none.
+
