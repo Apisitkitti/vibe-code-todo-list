@@ -310,7 +310,16 @@ Not yet built. It is the follow-up to US-06's sections and ships as its own chan
 - The dated list header line above the list (US-12). Moved in with the ordering
   work because it is only meaningful once the sections exist, and once they do
   it costs a date format and two counts the list has already computed.
-- Text search over the todo list, combinable with the filters and reflected in the URL.
+- Text search over the todo list, combinable with the filters and reflected in
+  the URL. A todo matches when the term appears in **either its title or its
+  note**, case-insensitively, as a substring of either. Widened from titles
+  only (backlog #4): the note is the 2000-character field where the detail
+  actually lives, so a search that could not see it returned `No matches` for
+  todos the user had written the term into themselves. The scope is unchanged
+  by this — search reads only the session user's own rows, and widening what is
+  matched never widens whose rows are matched (NFR-01, and the test that pins
+  it is `tests/api/isolation.test.ts` → "a term inside A's note matches
+  nothing").
 - Undo on the completion toggle, offered from its toast. Toggling is the one
   mutation with no confirmation dialog, so undo is what makes it reversible;
   it re-runs the same scoped endpoint rather than taking a shortcut. The toast

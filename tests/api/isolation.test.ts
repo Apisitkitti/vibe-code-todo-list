@@ -77,6 +77,14 @@ let todoOfB: { id: string };
 const A_TITLE = "Buy milk";
 const A_NOTE = "Semi-skimmed, from the corner shop";
 
+/**
+ * B's own row. Its note shares no word with A's title or note, so a search
+ * that finds it says something about the note clause and nothing about scope,
+ * and vice versa.
+ */
+const B_TITLE = "B's own errand";
+const B_NOTE = "Ring the caterer before Friday";
+
 const NONEXISTENT_ID = "totally-made-up-id-xyz";
 
 const asUser = (user: TestUser) =>
@@ -104,7 +112,13 @@ beforeEach(async () => {
     note: A_NOTE,
     priority: "high",
   });
-  todoOfB = await createTodo(userB.id, { title: "B's own errand" });
+  todoOfB = await createTodo(userB.id, {
+    title: B_TITLE,
+    // B's own note, so the note clause can be shown to *work* and not only to
+    // be scoped — see the second control in "search stays inside the caller's
+    // own rows".
+    note: B_NOTE,
+  });
 
   asUser(userB);
 });
@@ -244,10 +258,21 @@ describe("a foreign id is indistinguishable from a nonexistent one", () => {
 });
 
 /**
- * The highest-value case on the list. The pending "search notes too" change is
- * a one-line edit to this `where` clause, and a reviewer would reasonably
- * classify it as unrelated to authorization — which is exactly how the user
- * scope gets dropped from it.
+ * The highest-value case on the list. The "search notes too" change (backlog
+ * #4) is a one-line edit to this `where` clause, and a reviewer would
+ * reasonably classify it as unrelated to authorization — which is exactly how
+ * the user scope gets dropped from it. Moving to an `OR` is the specific
+ * hazard: written at the wrong nesting level, `{ userId }` stops being ANDed
+ * with the search and every user's rows match.
+ *
+ * **Two controls, not one, now that two fields are searched.** A refusal test
+ * only means something if the search it is running could have succeeded. The
+ * title control alone was enough while `title` was the only clause; with
+ * `note` in the predicate, "a term inside A's note matches nothing" would pass
+ * just as happily against a `where` whose note clause had been dropped
+ * altogether. So B's own note is searched too, and the pair separates the two
+ * failure modes: a broken clause fails the control, a broken scope fails the
+ * refusal.
  */
 describe("search stays inside the caller's own rows", () => {
   test("A's exact title matches nothing for B", async () => {
@@ -281,6 +306,29 @@ describe("search stays inside the caller's own rows", () => {
     const body = await readList(response);
 
     expect(body.todos.map((todo) => todo.id)).toEqual([todoOfB.id]);
+  });
+
+  /**
+   * The second control, and the one that makes "a term inside A's note matches
+   * nothing" a statement about *scope*. `caterer` appears in exactly one note
+   * in the database and in no title anywhere, so this can only pass through
+   * the clause backlog #4 added.
+   */
+  test("B's own note is found, so the note clause is genuinely exercised", async () => {
+    const response = await GET(getRequest("/api/todos?query=caterer"));
+    const body = await readList(response);
+
+    expect(response.status).toBe(200);
+    expect(body.todos.map((todo) => todo.id)).toEqual([todoOfB.id]);
+  });
+
+  /** Case-insensitively, the same as the title clause it joins. */
+  test("a note match is case-insensitive, like the title match beside it", async () => {
+    const response = await GET(getRequest("/api/todos?query=CATERER"));
+
+    expect((await readList(response)).todos.map((todo) => todo.id)).toEqual([
+      todoOfB.id,
+    ]);
   });
 });
 
