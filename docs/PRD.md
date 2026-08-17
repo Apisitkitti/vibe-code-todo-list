@@ -317,9 +317,13 @@ Not yet built. It is the follow-up to US-06's sections and ships as its own chan
   actually lives, so a search that could not see it returned `No matches` for
   todos the user had written the term into themselves. The scope is unchanged
   by this — search reads only the session user's own rows, and widening what is
-  matched never widens whose rows are matched (NFR-01, and the test that pins
-  it is `tests/api/isolation.test.ts` → "a term inside A's note matches
-  nothing").
+  matched never widens whose rows are matched (NFR-01). What pins that is a
+  **pair** of tests in `tests/api/isolation.test.ts`, not either alone: "a term
+  inside A's note matches nothing" is the refusal, and "B's own note is found"
+  is the control that gives the refusal meaning — without it the refusal passes
+  just as happily against a `where` with no note clause at all, measuring
+  nothing. The argument is written out at that file's "search stays inside the
+  caller's own rows".
 - Undo on the completion toggle, offered from its toast. Toggling is the one
   mutation with no confirmation dialog, so undo is what makes it reversible;
   it re-runs the same scoped endpoint rather than taking a shortcut. The toast

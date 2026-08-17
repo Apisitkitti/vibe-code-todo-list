@@ -273,6 +273,15 @@ describe("a foreign id is indistinguishable from a nonexistent one", () => {
  * altogether. So B's own note is searched too, and the pair separates the two
  * failure modes: a broken clause fails the control, a broken scope fails the
  * refusal.
+ *
+ * That was checked rather than argued: with the note clause deleted from the
+ * handler's `where`, "a term inside A's note matches nothing" stays green and
+ * only the controls go red; with `{ userId }` folded into the `OR` instead,
+ * the refusals go red and the controls stay green. Neither test is redundant
+ * and neither can stand in for the other.
+ *
+ * `docs/PRD.md` cites this pair — not either half — as what pins NFR-01 for
+ * the widened search.
  */
 describe("search stays inside the caller's own rows", () => {
   test("A's exact title matches nothing for B", async () => {

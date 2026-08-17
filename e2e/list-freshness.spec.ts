@@ -200,4 +200,163 @@ test.describe("a list load answered before a write it lands after", () => {
     await expect(todos.doneCounter).toHaveText(doneCount(1, 3));
     await expect(todos.rowByText(TOGGLED_TITLE)).toHaveCount(0);
   });
+
+  /**
+   * The refusal window, which the test above passes straight through.
+   *
+   * A refused load re-asks, and until that re-ask lands there is nothing newer
+   * to render — so what the user is shown in between is whatever the *previous*
+   * question returned. Under a filter change that is the old filter's rows
+   * sitting under the new filter's heading, which is precisely the state the
+   * skeleton exists to prevent: `useTodoList` already raises `isLoading` during
+   * render when the filter key moves, for the documented reason that a frame of
+   * stale rows reads as the app ignoring you (review m-8).
+   *
+   * Dropping the skeleton when the refused answer arrives spends that guarantee
+   * on a load that was then thrown away. The window is a full round trip — a
+   * few tens of milliseconds locally and a real pause on a real connection —
+   * and the re-ask is deliberately silent, so nothing raises it again.
+   *
+   * **Both the mechanism and the harm are asserted, and the harm comes first.**
+   * A skeleton assertion alone could pass on the frame before the refusal has
+   * been processed; a stale row rendered under `Completed` cannot appear for a
+   * frame and then be right, and it persists for as long as the re-ask is
+   * parked. So the absent stale row is what makes this test fail honestly, and
+   * the skeleton is what says why.
+   */
+  test("the skeleton spans the refusal, not just the load that was refused", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await seedTodos(page, [TOGGLED_TITLE, SECOND_TITLE, THIRD_TITLE]);
+
+    await page.goto(ACTIVE_URL);
+    await expect(todos.rowByText(TOGGLED_TITLE)).toBeVisible();
+    await expect(todos.doneCounter).toHaveText(doneCount(0, 3));
+
+    let releaseToggle = () => {};
+    const toggleHeld = new Promise<void>((resolve) => {
+      releaseToggle = resolve;
+    });
+
+    await page.route(TODO_STATUS_URL, async (route) => {
+      await toggleHeld;
+      await route.continue();
+    });
+
+    await todos.toggle(TOGGLED_TITLE, true);
+
+    await expect(todos.rowByText(TOGGLED_TITLE)).toHaveCount(0);
+    await expect(todos.doneCounter).toHaveText(doneCount(1, 3));
+
+    /*
+      Two gates this time. The first `GET` is the one that will be refused, held
+      exactly as above. The second — the re-ask the refusal makes — is held too,
+      which is what turns an instant into a window the test can stand inside and
+      look around.
+    */
+    let releaseStaleList = () => {};
+    const staleListHeld = new Promise<void>((resolve) => {
+      releaseStaleList = resolve;
+    });
+
+    let markListAnswered = () => {};
+    const listAnswered = new Promise<void>((resolve) => {
+      markListAnswered = resolve;
+    });
+
+    let releaseReask = () => {};
+    const reaskHeld = new Promise<void>((resolve) => {
+      releaseReask = resolve;
+    });
+
+    let markReaskRequested = () => {};
+    const reaskRequested = new Promise<void>((resolve) => {
+      markReaskRequested = resolve;
+    });
+
+    let listCallCount = 0;
+
+    await page.route(TODO_LIST_URL, async (route) => {
+      if (route.request().method() !== "GET") {
+        return route.fallback();
+      }
+
+      listCallCount += 1;
+
+      if (listCallCount === 1) {
+        const answer = await route.fetch();
+
+        markListAnswered();
+
+        await staleListHeld;
+        await route.fulfill({ response: answer });
+
+        return;
+      }
+
+      if (listCallCount === 2) {
+        // The re-ask. Signalled on arrival, so the assertions below run after
+        // the refusal has been fully processed rather than racing it.
+        markReaskRequested();
+
+        await reaskHeld;
+        await route.continue();
+
+        return;
+      }
+
+      await route.fallback();
+    });
+
+    await statusFilter(page, "completed").click();
+
+    // The filter change raised the skeleton on its own, before any of this.
+    await expect(todos.listSkeleton).toBeVisible();
+
+    await listAnswered;
+
+    const patchResponse = page.waitForResponse(
+      (response) =>
+        TODO_STATUS_URL.test(response.url()) &&
+        response.request().method() === "PATCH",
+    );
+
+    releaseToggle();
+
+    expect((await patchResponse).status()).toBe(200);
+
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(TOGGLED_TITLE) }),
+    ).toBeVisible();
+
+    // The refusal happens here: the stale answer lands, is refused, and the
+    // re-ask goes out. Awaiting the re-ask's arrival is what makes everything
+    // below a statement about the window rather than about a frame.
+    releaseStaleList();
+
+    await reaskRequested;
+
+    /*
+      The harm, and the assertion that fails honestly. `Book the venue` is
+      active; it belongs to the list the user has already left. Rendering it
+      under `Completed` — with no skeleton and no pending anything — tells the
+      user the server answered when it has not, and it stays on screen for the
+      whole round trip.
+    */
+    await expect(todos.rowByText(SECOND_TITLE)).toHaveCount(0);
+    await expect(todos.rowByText(THIRD_TITLE)).toHaveCount(0);
+
+    // And the mechanism: the skeleton the filter change raised is still up,
+    // because the question it was raised for still has no answer.
+    await expect(todos.listSkeleton).toBeVisible();
+
+    // Released, and the window closes the way it should: the re-ask lands, the
+    // skeleton comes down, and the list is the one the filter asked for.
+    releaseReask();
+
+    await expect(todos.listSkeleton).toHaveCount(0);
+    await expect(todos.rowByText(TOGGLED_TITLE)).toBeVisible();
+    await expect(todos.doneCounter).toHaveText(doneCount(1, 3));
+  });
 });

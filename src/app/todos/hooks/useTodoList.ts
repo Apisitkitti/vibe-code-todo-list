@@ -189,11 +189,16 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
    * is applied.
    *
    * Wrapping the setter rather than exposing a `markWrite()` beside it is
-   * deliberate, and it is the same argument that moved the load counter onto
-   * the line that replaces `result`: a rule enforced at the one statement that
-   * can break it holds by construction, while a rule enforced by remembering
-   * to call something first holds until the next caller. `TodoListScreen`
-   * needs no change and cannot forget.
+   * deliberate: the rule is enforced at the module *boundary*, so
+   * `TodoListScreen` needs no change and cannot forget it, where a
+   * `markWrite()` to be called first holds only until the next caller forgets.
+   *
+   * Inside the hook it is a convention, not a guarantee. `setLoadedResult` has
+   * two call sites — this one and the load path, which skips the bump on
+   * purpose because a load is not a write — so a third added here could break
+   * rule 2 without a compiler noticing. The boundary claim is the one that is
+   * checkable, and it checks out: no caller of `setLoadedResult` exists
+   * outside this file.
    *
    * The bump is unconditional, including when the updater is a no-op that
    * returns the identical object (`todoListState` invariant 3). React bails
@@ -276,10 +281,17 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
   useEffect(() => {
     let isCurrent = true;
     /*
-      Stamped at issue, not at landing. The whole point is to compare *when the
-      question was asked* against what has been applied since, and a stamp
-      taken on arrival would carry no information the arrival order does not
-      already have.
+      Stamped at issue, which is where the number means what rule 1 reads it
+      as: *when this question was asked*, to be compared against what has been
+      applied since.
+
+      Reading the stamp at landing instead would pass every test on this
+      branch — `isCurrent` retires a superseded load before it reaches the
+      check, so the only load that ever gets there is the newest issued, and
+      the two readings coincide. The distinction is therefore not observable
+      today and this comment does not claim it is. Issue-time is kept because
+      it is the reading the rule is written in, and because it stays correct
+      if that coincidence ever stops holding.
     */
     loadStampRef.current += 1;
 
@@ -314,6 +326,25 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
           return;
         }
 
+        /*
+          What makes `appliedStampRef` mean what it is documented to mean
+          above: *the newest stamp whose answer is currently rendered*.
+
+          **Deleting this line leaves the whole suite green, and it must stay
+          anyway.** In every interleaving reachable today the write-side bump
+          to the issued high-water mark dominates it — a write raises the mark
+          past this load regardless, and no two landing loads are ever compared
+          against each other, because `isCurrent` retires the older one first.
+          So its value here is the invariant, not any behaviour a test can
+          reach: without it the ref would name a write's high-water mark and
+          nothing else, and rule 1 would be comparing a load against a number
+          that had stopped describing what is on screen. The next change to
+          this file — a second concurrent reader, a load that survives its own
+          supersession — would be reasoning from a false statement.
+
+          Recorded here rather than left for a future reader to rediscover from
+          a green suite and delete.
+        */
         appliedStampRef.current = loadStamp;
         // Counted here, at the one line that discards a toggle's optimistic
         // arithmetic, so every way of starting a load is covered by
@@ -332,8 +363,6 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
       .finally(() => {
         if (!isCurrent) return;
 
-        setIsLoading(false);
-
         /*
           Refusing a load leaves the question unanswered. A filter change is
           the ordinary way into this window, and its `GET` is the only thing
@@ -346,8 +375,31 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
           `appliedStampRef` and lands. Only a write landing inside *its* window
           refuses it again, which is a user pressing faster than the server
           answers, not a loop.
+
+          **`isLoading` stays up across the re-ask, and that is the whole of
+          the difference between this and a lie.** The load being refused
+          answered nothing, so the state the user would be shown the instant
+          the skeleton came down is the *previous* question's — the old
+          filter's rows sitting under the new filter's heading, for a full
+          round trip and with nothing indicating a wait, because the re-ask is
+          deliberately silent. Reporting "loaded" about a load that was thrown
+          away is the same class of claim the counter drift was: the screen
+          asserting something settled that is not. Returning before
+          `setIsLoading(false)` simply lets the skeleton the filter change
+          already raised span the answer it was raised for.
+
+          Nothing is raised here, only left alone. A refusal reached from a
+          silent reload — a token bump rather than a filter change — has no
+          skeleton up to begin with and gains none, which is right: that path
+          has valid rows on screen and never promised otherwise.
         */
-        if (wasRefused) requestReload();
+        if (wasRefused) {
+          requestReload();
+
+          return;
+        }
+
+        setIsLoading(false);
       });
 
     // A response that arrives after the filters moved on must not win.
