@@ -150,6 +150,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   const [lastFilterKey, setLastFilterKey] = useState<string | null>(null);
   const formState = useOverlayState();
 
+  /**
+   * The reload token as of this render, readable from an async callback that
+   * closed over an older one. A toggle compares it before and after its write
+   * to tell whether a reload replaced local state mid-flight — the case where
+   * its own optimistic arithmetic was thrown away and the counts need the
+   * server's answer instead.
+   */
+  const reloadTokenRef = useRef(reloadToken);
+
   const router = useRouter();
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
   const { status, priority, query } = filters;
@@ -410,6 +419,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       gone. Under "All" neither happens.
     */
     const leavesList = !todoMatchesStatusFilter(nextCompleted, status);
+    const tokenAtPress = reloadTokenRef.current;
 
     markPending(todo.id);
     setResult((current) =>
@@ -422,7 +432,23 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       if (reloadOnSuccess) {
         reloadSilently();
       } else {
-        setResult((current) => replaceTodo(current, saved));
+        /*
+          A reload landing between the press and this response replaces local
+          state with a server count that predates the write — and the row it
+          would have been corrected against may be gone with it, so
+          `replaceTodo` no-ops and the counter sits one low.
+
+          It used to self-heal because every toggle refetched. It no longer
+          does, which is the point of m-7, so nothing would put the number
+          right for as long as the user keeps toggling (QA S-C, review MA-2).
+          Comparing the reload token spends the extra request only on the
+          interleaved case; an uninterrupted toggle is still one request.
+        */
+        if (reloadTokenRef.current === tokenAtPress) {
+          setResult((current) => replaceTodo(current, saved));
+        } else {
+          reloadSilently();
+        }
       }
 
       onSuccess();
@@ -640,6 +666,10 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       />
     );
   };
+
+  useEffect(() => {
+    reloadTokenRef.current = reloadToken;
+  }, [reloadToken]);
 
   useEffect(() => {
     let isCurrent = true;
