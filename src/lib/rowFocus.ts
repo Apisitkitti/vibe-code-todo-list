@@ -9,17 +9,33 @@
  * at any human pace (`docs/QA-REPORT.md` §A3), which makes the toast a
  * recovery path that exists only for short lists.
  *
- * Two moves fix it, and they have to happen in this order:
+ * Two moves fix it, in this order:
  *
  * 1. **Land focus back in the list**, on the row that took the removed row's
- *    place. This is what stops focus being lost at all, and it is also what
- *    gives the toast region something to hand focus *back* to: react-aria
- *    records the element focus arrived from (`lastFocused` in
- *    `useToastRegion`) and restores to it when the last toast goes away. Enter
- *    the region from `<body>` and there is nothing to restore, so the toast
- *    expiring drops focus a second time.
- * 2. **Then move to the toast's action**, which is now one deliberate hop
- *    rather than a race down the list.
+ *    place.
+ * 2. **Then move to the toast's action**, which is one deliberate hop rather
+ *    than a race down the list.
+ *
+ * **Why step 1 is first, and why it is not redundant.** Step 2 is what
+ * satisfies the reachability criterion, and on the happy path it catches focus
+ * whether or not step 1 ran — disabling step 1 leaves every reachability test
+ * green. Step 1 earns its place on the paths where step 2 *cannot* run: a
+ * refused write raises no Undo toast at all, and `focusIsUnclaimed` declines
+ * when the user has already taken focus somewhere themselves. On those paths
+ * step 1 is the whole of the fix, and `e2e/undo-focus.spec.ts` pins it with a
+ * 500 on the status write. Doing it first is what makes it a fallback rather
+ * than a cleanup: focus is somewhere useful from the first frame, whatever
+ * step 2 goes on to do.
+ *
+ * An earlier version of this comment claimed step 1 also supplied the toast
+ * region with a restore target (`lastFocused` in react-aria's
+ * `useToastRegion`, which `react-aria-components` does delegate to). That hook
+ * really does record and restore — but it is **not** what keeps focus alive
+ * here, and the claim was never tested: skipping step 1 entirely leaves the
+ * "focus is not lost when the toast goes away" assertion passing. The restore
+ * path also cannot be reached by expiry, because the Undo timer pauses while
+ * focus is inside the region. The reason above is the one that survives a
+ * dependency upgrade.
  *
  * Step 2 waits for a frame at a time because HeroUI mounts every toast inside
  * `document.startViewTransition` (`docs/DESIGN.md` §4.10) — the toast is
@@ -95,6 +111,30 @@ export const readFocusedRow = (): RowFocusAnchor | null => {
   if (index < 0) return null;
 
   return { index, rowCount: checkboxes.length };
+};
+
+/**
+ * Whether the toast step is still allowed to take focus.
+ *
+ * Two states qualify, and the second is the one that is easy to leave out:
+ *
+ * - Focus is on a row — where step 1 put it, and the user has not moved since.
+ * - Focus is on `<body>`, i.e. **nowhere**. That is what an emptied list
+ *   leaves: toggling the only row in an active list gives step 1 no row to
+ *   land on, so it returns `false` with focus still on the floor. Requiring a
+ *   row here would make the rescue decline in the one state where nothing else
+ *   can catch focus at all — the user who has just finished their last todo,
+ *   and for whom US-07 makes the toast the only route back.
+ *
+ * Anything else means the user has taken focus somewhere themselves, and it is
+ * not ours to move.
+ */
+export const focusIsUnclaimed = (): boolean => {
+  const active = document.activeElement;
+
+  if (active === null || active === document.body) return true;
+
+  return rowCheckboxes().includes(active as HTMLElement);
 };
 
 const nextFrame = (): Promise<void> =>

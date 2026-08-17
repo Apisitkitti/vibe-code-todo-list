@@ -179,3 +179,88 @@ test.describe("NFR-04 — Undo reachability and focus", () => {
       .not.toBe("toast-action-button");
   });
 });
+
+/**
+ * K2 — the list that empties.
+ *
+ * The rescue has two steps: land back in the list, then step onto the Undo.
+ * When the toggled row was the *only* row, step 1 has nowhere to land —
+ * `nextFocusIndex` returns `null` and focus is still on `<body>`. Step 2 then
+ * has to be the thing that catches it, which is exactly the state where
+ * nothing else can.
+ *
+ * This is not an edge case dressed up as one: a one-item active list is where
+ * a user finishes their last todo, and US-07 makes the toast the only route
+ * back from it.
+ */
+test.describe("NFR-04 — the last row in the list", () => {
+  test("emptying the list still lands focus on Undo", async ({
+    signedIn,
+    todos,
+  }) => {
+    await todos.quickAdd(TOGGLED_TITLE);
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+
+    await signedIn.goto("/todos?status=active");
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+
+    await focusFirstRowFromKeyboard(signedIn, TOGGLED_TITLE);
+    await signedIn.keyboard.press("Space");
+
+    // The list is now empty — the empty state has replaced every row.
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toHaveCount(0);
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(TOGGLED_TITLE) }),
+    ).toBeVisible();
+
+    await expect.poll(() => activeSlot(signedIn)).toBe("toast-action-button");
+
+    await signedIn.keyboard.press("Enter");
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+  });
+});
+
+/**
+ * What step 1 is actually for.
+ *
+ * Step 2 — moving onto the Undo — is what satisfies NFR-04's reachability
+ * criterion, and on the happy path it catches focus whether or not step 1 ran.
+ * Step 1 earns its place on the paths where **step 2 cannot run at all**, and
+ * this is the plainest of them: a refused write raises no Undo toast, so there
+ * is nothing to move to. Without step 1 focus stays on `<body>`, which is the
+ * half of NFR-04 that is about focus never being lost rather than about Undo
+ * being reachable.
+ */
+test.describe("NFR-04 — when there is no toast to move to", () => {
+  test("a refused toggle still leaves focus in the list", async ({
+    signedIn,
+    todos,
+  }) => {
+    await seedList(todos, signedIn);
+
+    await signedIn.goto("/todos?status=active");
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+
+    // No Undo is offered for a write that failed, so step 2 is skipped.
+    await signedIn.route("**/api/todos/*/status", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "INTERNAL",
+          message: "Something went wrong on our end.",
+        }),
+      }),
+    );
+
+    await focusFirstRowFromKeyboard(signedIn, TOGGLED_TITLE);
+    await signedIn.keyboard.press("Space");
+
+    // The row comes back and the failure is reported.
+    await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
+    await expect(todos.undoButton).toHaveCount(0);
+
+    // Focus is somewhere a keyboard user can carry on from — not on the floor.
+    await expect.poll(() => activeSlot(signedIn)).not.toBe("body");
+  });
+});

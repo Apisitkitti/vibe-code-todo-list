@@ -21,9 +21,9 @@ import { getErrorMessage } from "@/lib/getErrorMessage";
 import { createHandoff } from "@/lib/handoff";
 import {
   focusFrontmostToastAction,
+  focusIsUnclaimed,
   focusRowAfterRemoval,
   readFocusedRow,
-  rowCheckboxes,
 } from "@/lib/rowFocus";
 import type { TodoItemData, TodoListFilters } from "@/lib/todo";
 import {
@@ -552,25 +552,26 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       /*
         Step 1, and it is deliberately not awaited behind the request: the row
         is already gone optimistically, so waiting for the server would leave
-        focus on `<body>` for the whole round trip. Landing back in the list
-        also gives `useToastRegion` an element to restore focus *to* when the
-        toast expires — entering it from `<body>` leaves react-aria with
-        nothing recorded, and the expiry drops focus a second time
+        focus on `<body>` for the whole round trip.
+
+        It is also the fallback for every path step 2 cannot take — a refused
+        write raises no Undo toast, and `focusIsUnclaimed` declines once the
+        user has moved focus themselves. Running it first means focus is
+        somewhere useful from the first frame whatever step 2 does next
         (`src/lib/rowFocus.ts`).
       */
       await focusRowAfterRemoval(focusAnchor);
       await running;
 
       /*
-        Step 2. Guarded on focus still being on a row, so a user who has
-        already tabbed somewhere themselves is not dragged into the toast —
-        and skipped entirely when the write failed, where the row comes back
-        and there is no Undo to reach.
+        Step 2. Guarded on focus being unclaimed — still on a row where step 1
+        left it, or on `<body>` because the list emptied and step 1 had nowhere
+        to land — so a user who has already tabbed somewhere themselves is not
+        dragged into the toast. Skipped entirely when the write failed, where
+        the row comes back and there is no Undo to reach.
       */
       if (undoIsOffered) {
-        await focusFrontmostToastAction(() =>
-          rowCheckboxes().includes(document.activeElement as HTMLElement),
-        );
+        await focusFrontmostToastAction(focusIsUnclaimed);
       }
 
       return;

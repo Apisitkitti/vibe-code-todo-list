@@ -996,20 +996,37 @@ Do not introduce them without updating this document.
    filter removes the row (US-07), focus fell to `<body>`, and the Undo that is
    the *only* route back sat behind every remaining row at three tab stops
    each, against a 12s timeout. QA measured it unreachable at 19 todos at any
-   human pace (`docs/QA-REPORT.md` §A3). Moving focus costs a keyboard user one
-   surprise; not moving it costs them the todo.
+   human pace (`docs/QA-REPORT.md` §A3).
 
-   The order is not incidental. Landing on the neighbouring row first is what
-   gives react-aria's toast region an element to restore focus *to* when the
-   toast expires — it records where focus arrived from, so entering the region
-   straight from `<body>` would drop focus a second time on expiry.
+   **The order.** Step 2 is what satisfies the reachability criterion; on the
+   happy path it catches focus whether or not step 1 ran. Step 1 is there for
+   the paths step 2 *cannot* take — a refused write raises no toast to move to,
+   and the rescue stands down once the user has moved focus themselves. Doing
+   it first makes it a fallback rather than a cleanup: focus is somewhere
+   useful from the first frame regardless of what step 2 does. Both halves are
+   pinned in `e2e/undo-focus.spec.ts`, the second by failing the status write.
+
+   **The cost, stated honestly: it is one surprise per toggle, not one
+   surprise.** After each qualifying toggle focus sits on `Undo`, so the next
+   `Space` activates Undo and restores the row rather than toggling the next
+   one. Burst-completing a list from the keyboard is a real pattern here, and
+   under a status filter that pattern now needs a deliberate `Shift+Tab` (or a
+   fresh Tab into the list) between rows. We take that trade because the
+   alternative is an Undo the user cannot reach at all, and because the row
+   they just completed is the one most likely to need undoing — but it is a
+   real cost, not a rounding error, and it is the first thing to revisit if
+   burst capture becomes a complaint.
 
    **Keyboard only.** react-aria does not focus a control on pointer press, and
    a mouse user who has a row focused from earlier must not have Undo armed
    under a Space press they meant for that row. Gate on modality
    (`useFocusVisible`), not on whether focus happens to be in the list.
-   Implementation and the frame-timing trap are in `src/lib/rowFocus.ts`;
-   pinned by `e2e/undo-focus.spec.ts`.
+
+   **An emptied list still gets the rescue.** Toggling the only row leaves step
+   1 with nowhere to land, so the guard on step 2 admits focus on `<body>` as
+   well as focus on a row. Requiring a row would make the rescue decline in the
+   one state where nothing else can catch focus. Implementation and the
+   frame-timing trap are in `src/lib/rowFocus.ts`.
 9. **Motion.** The only animations are HeroUI's own (skeleton shimmer, dialog
    entry, toast slide). Add `motion-reduce:transition-none` to the row action
    opacity transition.
