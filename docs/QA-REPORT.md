@@ -984,3 +984,1041 @@ gate as explicit scope.
 
 *Report written incrementally during the pass; every result above was observed,
 and the places where I inferred rather than observed are marked as such.*
+
+---
+---
+
+# Accessibility audit — 2026-08-17
+
+**Not a release gate.** This is the bounded re-test I asked for as a condition
+of the last ship: the five contrast and tap-target defects that had gone two
+gates without measurement, plus NFR-04's Undo criterion, plus the surfaces
+added in the last two releases that nobody had ever measured. **No story walk,
+no isolation run, no suite run** — those were done at the gate above and
+nothing since has touched them.
+
+## A0. What was actually measured, and on which tree
+
+This matters more than usual, so it goes first.
+
+The checkout was **not on `develop`**. It was on `feature/quick-add`, and it
+moved **three times underneath me** during the audit:
+
+| Observed | HEAD | State |
+|---|---|---|
+| audit start | `5c2cd9d` | identical to `develop` |
+| during harness build | `5255f36` | develop + 2 commits, quick-add bar present |
+| after phase 1–4 | `f6c44fb` | branch **force-reset**; quick-add gone from the tree entirely, replaced by a `useTodoList` extraction |
+| at write-up | `f6c44fb` | quick-add **re-staged** in the index (`git status` shows the developer's staged work again); measurements were already complete |
+
+`develop` itself never moved — it is still `5c2cd9d`. I did not switch
+branches, commit, or touch anything but this file; the movement is the
+developer's, and the working tree was clean at every observation.
+
+**Why the numbers below are still `develop`'s numbers.** Every file carrying a
+surface I measured is **byte-identical to `develop`** — verified with
+`git diff develop HEAD -- <file>` returning zero lines, at both the quick-add
+HEAD and the reset HEAD:
+
+`TodoRow.tsx`, `TodoDueDate.tsx`, `TodoGroupedList.tsx`, `TodoFilters.tsx`,
+`TodosHeader.tsx`, `PriorityChip.tsx`, `globals.css`, `layout.tsx`,
+`sign-up/page.tsx`.
+
+The only audited file that ever differed was `TodoListScreen.tsx`, which
+carries the toast — so §A5 records exactly how that affects the NFR-04 result.
+
+**And I re-ran everything after the reset.** Phases 1–3 were executed twice,
+once on each tree. **Every contrast and tap-target figure reproduced to the
+last decimal place.** Where a figure below could only have come from the
+quick-add tree it is marked as such and corroborated from a develop-identical
+surface.
+
+## A1. Method
+
+Two independent measurements of every colour result, because one of them is a
+model and models are how I produced a wrong number last time by treating a
+12%-alpha layer as opaque.
+
+1. **Analytic.** `getComputedStyle`, the full ancestor stack composited root
+   downwards. Colours resolved by painting them into a 1×1 canvas and reading
+   the pixel back, so `color-mix()`, `lab()` and `oklab()` become real sRGB
+   rather than strings I parse by hand. Alpha composited per layer; `opacity`
+   handled as a **group** multiplier, not as a per-layer alpha.
+2. **Empirical.** Real screenshots at `deviceScaleFactor: 1` (so 1 CSS px = 1
+   image px), decoded to raw RGB. Background = modal pixel of the element's
+   box; foreground = the pixel furthest in luminance from it, which with the
+   app's grayscale `antialiased` rendering is a fully-covered glyph stem, not
+   an AA blend.
+
+**The two agreed to 2 d.p. on every shared target.** That is the cross-check.
+
+**Three hand-checks**, done on paper against the harness:
+
+- Muted `rgb(113,113,122)` at 60% over white → `169.8,169.8,175.2`; relative
+  luminance `0.9278 × 0.40098 + 0.0722 × 0.42981 = 0.4031`;
+  `1.05 / 0.4531 = ` **2.32**. Harness: 2.3178. ✅
+- Foreground `rgb(24,24,27)` at 60% over white → `116.4,116.4,118.2`;
+  L = 0.1764; `1.05 / 0.2264 = ` **4.64**. Harness: 4.6385. ✅
+- Screenshot ground truth for the same pending row: glyph core `[169,169,175]`
+  on `[255,255,255]` → **2.34** (integer-rounded pixels vs the model's
+  unrounded 2.32). ✅
+
+**Sanity check on the opacity model:** the row action buttons are `lg:opacity-0`
+at desktop, and the harness reports their painted colour as *exactly* the
+backdrop and their ratio as 1.00 — which is what a correct group-opacity
+implementation must do at `opacity: 0`. At mobile, where they are opaque, the
+same buttons report 17.72. The model behaves correctly at both ends.
+
+**Thresholds used** — from `docs/PRD.md`, not invented here:
+
+| Judged against | Source |
+|---|---|
+| **4.5:1** body text | NFR-06; WCAG 2.2 SC 1.4.3. Nothing measured qualifies as large text (needs ≥24px, or ≥18.66px bold) |
+| **3:1** control boundary | WCAG 2.2 SC 1.4.11, the standard the checkbox fix itself cites |
+| **44×44** tap target | NFR-05, "Primary tap targets are at least 44x44px" |
+| **24×24** tap target | WCAG 2.2 SC 2.5.8 (AA) — the floor below the project's own stricter bar |
+
+Environment: Node 24, `todo_app_dev`, my own `next dev` on port 3489, which I
+started myself. **No broad `pkill`; no process I did not start was signalled.**
+Fixture accounts `qa-a11y-*@qagate.test` created through the app's own sign-up,
+left in place so every measurement can be re-walked.
+
+## A2. The five untested defects — current status
+
+| Defect | Verdict | Measured | Threshold |
+|---|---|---|---|
+| **DEF-01** checkbox tap target | **Fixed** | 44×44 mobile / 36×36 desktop, all 5 hit points land | 44×44 (NFR-05) |
+| **DEF-08** checkbox contrast | **Fixed — and unmoved** | 5.14:1 dark / 3.40:1 light | 3:1 |
+| **DEF-14** primary button label | **Still broken** | **3.59:1** both themes | 4.5:1 |
+| **DEF-15** muted count | **Still broken** | **4.43:1** light (7.72:1 dark) | 4.5:1 |
+| **DEF-16** search clear button | **Still broken** | **20×20** at every width | 44×44 / 24×24 |
+
+### DEF-01 — **Fixed.** The row rewrite did not shrink the target
+
+The hit host is the `<label data-slot="checkbox-content">`, and its floor is
+`min-h-11 min-w-11 sm:min-h-9 sm:min-w-9` — **44×44 below 640px, 36×36 above**.
+
+`elementFromPoint` at the centre and all four corners returns an element inside
+that label at **both** widths and in both themes — 20 probes, 20 hits, every
+one of which drives the checkbox.
+
+**Why the markup churn was harmless, specifically:** the 44px floor lives on
+`Checkbox.Content`, not on the row. The border, the `gap-1.5` spacing that
+replaced `divide-y`, and `py-3` → `py-3.5` all change the row's box; none of
+them can shrink a child with its own min-size. `py-3.5` (14px) against a 44px
+child is not even the binding constraint on row height.
+
+**The 36×36 desktop figure is not a regression** — it is the deliberate `sm:`
+step-down for pointer input, it clears SC 2.5.8's 24×24, and NFR-05's 44×44 is
+written about phones. Recording it so nobody re-opens it as a defect later.
+
+### DEF-08 — **Fixed, and the composite did not move**
+
+`color-mix(in srgb, var(--foreground) 50%, transparent)`, 1px, resolving to
+`color(srgb 0.094 0.094 0.106 / 0.5)` light and `… 0.988 … / 0.5` dark.
+
+**5.14:1 dark, 3.40:1 light** — *identical to the numbers this defect was
+closed with.* The concern in the brief was that the row's new border and
+background relationship would move the composite. **It does not**, and the
+reason is checkable: at rest the `<li>` paints **no background** — it carries a
+border only — so the checkbox's backdrop is the Card surface both before and
+after the change.
+
+I also measured the **hovered** row specifically, because `docs/DESIGN.md`
+flags light-mode headroom as thin (3.25:1) once `divide-y` went. **Hovered:
+still 3.40:1 light / 5.14:1 dark.** `hover:bg-surface-hover` lands on the
+`<li>`, but the control's own field background is opaque, so the hover colour
+never reaches the surface the border is judged against.
+
+**Row border vs Card** (the `divide-y` replacement): **1.71:1 light / 1.79:1
+dark** — matching the developer's in-code claim of 1.71 / 1.78 to the decimal.
+A decorative separator, not a control boundary, so SC 1.4.11's 3:1 does not
+bind it. Recorded as verified-as-described, not as a defect.
+
+### DEF-14 — **Still broken. 3.59:1, unchanged, in both themes**
+
+`rgb(4,133,247)` with a white label at 14px/500. **3.59:1 light and dark**
+against 4.5:1. 14px at weight 500 is not large text, so 4.5 is the right bar.
+
+The "one token, every primary button" claim in the original defect **is
+correct, and I confirmed it across three different buttons on three different
+routes**:
+
+| Button | Route | Ratio |
+|---|---|---|
+| `New todo` | `/todos` (develop's own) | 3.59:1 |
+| `Create account` | `/sign-up` (file byte-identical to develop) | 3.59:1 |
+| `Add` | quick-add bar, while that tree existed | 3.59:1 |
+
+The third is from the now-deleted tree and is included only because it
+corroborates the token claim; the first two are develop's and stand on their
+own.
+
+### DEF-15 — **Still broken at 4.43:1 — but the diagnosis is now precise**
+
+`0 of 4 done`, muted `lab(47.87 …)` = `rgb(113,113,122)`, 14px/400, on page
+background `rgb(245,245,245)` → **4.43:1** (analytic and screenshot agree
+exactly). Dark: **7.72:1**, passes.
+
+**The token is not the problem — the surface is.** The identical muted token
+measures **4.83:1** wherever it sits on the Card (section headings, due-date
+text, §A4). It fails only against the page background *outside* the Card. It is
+0.07 short, on one surface.
+
+Same token, same surface, same failure: the **`Account menu` button label**
+(12px muted) — also **4.43:1** light. It travels with the count.
+
+### DEF-16 — **Still broken. 20×20, and it is the one control below the WCAG floor**
+
+`[data-slot="search-field-clear-button"]`, **20×20 at 375px and at 1280px**,
+measured with the field non-empty and the button confirmed visible (`padding:
+4px`, no min-size).
+
+It fails NFR-05's 44×44, and — alone among everything I measured — it also
+fails **WCAG 2.2 SC 2.5.8's 24×24 minimum**. Every other control in the app
+clears that floor: rows' edit/delete are 36×36 desktop / 44×44 mobile, filter
+toggles and the priority select are 44 at mobile.
+
+**Secondary, same control:** its accessible name is **"Close"**, not "Clear
+search" — HeroUI's default leaking through. "Close" describes dismissing
+something, which is not what it does.
+
+## A3. NFR-04 — the Undo toast by keyboard. **Verified, and it fails on any realistic list**
+
+Previously "unverified". It is now measured, at both widths, end to end.
+
+**First: my harness can deliver activation keys this time.** This has bitten me
+before with empty `key`/`code`/`keyCode`, so I proved it before drawing any
+conclusion. Recorded from a live `keydown` listener:
+
+```
+{ key: "Tab",   code: "Tab",   keyCode: 9,  which: 9,  isTrusted: true }
+{ key: "Enter", code: "Enter", keyCode: 13, which: 13, isTrusted: true }
+{ key: " ",     code: "Space", keyCode: 32, which: 32, isTrusted: true }
+```
+
+Fully populated and trusted. **No "could not verify" is being hidden behind a
+tooling excuse here.**
+
+### What happens
+
+Under `?status=active`, a keyboard toggle completes the row and the row leaves
+the filter — the US-07 ruling, so the toast is the only route back.
+
+1. **Focus is dropped on the floor.** The focused checkbox is destroyed with
+   its row, and `document.activeElement` becomes **`<body>`**. Measured at both
+   widths. There is no focus management on removal.
+2. **The toast is the last thing in the document.** `Toast.Provider` is a
+   portal in `<body>` after `<main>`, so Tab must cross **every remaining row**
+   to reach Undo — and each row is **3 tab stops** (checkbox, edit, delete).
+3. **The toast lives 12.0s.** Measured 12,015–12,029ms across runs;
+   `UNDO_WINDOW_MS = 12_000`, deliberately raised from HeroUI's 4s default.
+4. **The timer pauses once Undo has focus** — still present after 16s with the
+   button focused. So *reaching* it is the entire problem.
+
+### The result depends on how many todos you have
+
+| Account | Width | Tabs to Undo | Outcome |
+|---|---|---|---|
+| 3 todos | desktop | 9 | **Reached.** Enter fired the `PATCH`, row restored ✅ |
+| 3 todos | mobile | 6 | **Reached.** Enter fired the `PATCH`, row restored ✅ |
+| **19 todos, first row toggled** | desktop @ 300ms/tab | 39 tabs, 12.36s | **Toast expired mid-walk. Never reached** ❌ |
+| **19 todos, first row toggled** | desktop @ 500ms/tab | 23 tabs, 12.21s | **Toast expired mid-walk. Never reached** ❌ |
+
+The 3-todo pass is real but it is a *small-account* pass. The traversal cost is
+`3 × (rows below the toggled row) + 3`, against a fixed 12s budget, at a pace
+the user does not control. **At 19 todos it is not reachable at any human
+typing speed.** 300ms per keypress is brisk; 500ms is ordinary; both lose.
+
+**F6 works, partially.** react-aria's jump-to-toast-region hotkey moves focus
+to `[data-slot="toast-region"]` (`aria-label: "2 notifications."`) in one
+press, bypassing the row walk entirely — then needs **one further Tab** to land
+on Undo, since it lands on the region and not the button. So there *is* a route
+that beats the timer. It is undocumented, unhinted in the UI, and unknown to
+essentially every user.
+
+**Verdict: Still broken.** The PRD requires the toast to be "reachable by
+keyboard from where focus landed after the row was removed". Where focus lands
+is `<body>`, and from there the route is length-dependent and usually expires.
+The criterion passes only on a near-empty account.
+
+**Branch caveat, stated plainly.** `TodoListScreen.tsx` is the one audited file
+that differed from `develop`. But every mechanism above lives in code that is
+byte-identical to develop: the DOM order (`TodoGroupedList`, `TodoRow`), the
+portal position (`layout.tsx`), the 12s constant, and the absence of focus
+management. Quick-add's only effect was to add two tab stops **before** the
+list — which is not between the toggled row and the toast — and the figures
+above were reproduced after the branch was reset, with quick-add gone. **This
+result is develop's.**
+
+## A4. New surfaces from the last two releases
+
+Never measured before. Analytic and screenshot agreed exactly on all of these.
+
+| Surface | Light | Dark | Threshold | Verdict |
+|---|---|---|---|---|
+| Section headings (`Overdue`/`Today`/`Upcoming`/`No date`), 14px/600 muted | **4.83:1** | **6.75:1** | 4.5:1 | **Pass** |
+| Due-date row text, normal | **4.83:1** | **6.75:1** | 4.5:1 | **Pass** |
+| Due-date row text, **overdue** (`text-warning-soft-foreground`) | **5.72:1** | **11.74:1** | 4.5:1 | **Pass** |
+| Row title at rest | 17.72:1 | 17.27:1 | 4.5:1 | **Pass** |
+| **`opacity-60` pending row — completing** | **2.32:1** | **3.25:1** | 4.5:1 | **Fail** |
+| `opacity-60` pending row — un-completing | 4.64:1 | 6.85:1 | 4.5:1 | Pass (light is thin) |
+
+**The overdue treatment is not colour-alone** — it ships a `⚠` glyph plus an
+`sr-only` "Overdue — " prefix alongside the colour change, which is what
+NFR-04's "status is never conveyed by color alone" asks for. Confirmed in the
+DOM, not assumed.
+
+### The `opacity-60` signal defeats itself
+
+This is the one worth acting on, and it is the case the brief predicted:
+"if it drops below a legible threshold the signal is not being sent."
+
+Completing a row is the **common** direction, and it is the bad one. The
+optimistic flip applies `text-muted line-through` *before* the request settles,
+and the row is simultaneously dimmed to `opacity-60`. The two stack:
+
+```
+muted rgb(113,113,122) → 60% over white → rgb(170,170,175) → 2.32:1
+```
+
+**2.32:1 is below even the 3:1 large-text floor**, on 16px text, for the
+duration of the round trip. The row is not "dimmed but readable"; while the
+user is waiting to find out what happened, the thing they are waiting on is
+the least readable thing on the screen. Screenshot ground truth: **2.34:1**.
+
+The other direction (un-completing, where the title stays foreground) is
+**4.64:1** — it passes, with 0.14 of headroom.
+
+## A5. Summary table
+
+| Item | Verdict | Number | Threshold |
+|---|---|---|---|
+| DEF-01 tap target | **Fixed** | 44×44 mobile, 20/20 hit probes | 44×44 |
+| DEF-08 checkbox contrast | **Fixed** | 3.40 light / 5.14 dark (also on hover) | 3:1 |
+| DEF-14 primary button | **Still broken** | 3.59 both themes, 3 buttons | 4.5:1 |
+| DEF-15 muted count | **Still broken** | 4.43 light | 4.5:1 |
+| DEF-16 search clear | **Still broken** | 20×20 all widths | 44×44 / 24×24 |
+| NFR-04 Undo by keyboard | **Still broken** | focus → `<body>`; unreached at 19 todos | reachable |
+| Section headings | **Pass** | 4.83 / 6.75 | 4.5:1 |
+| Due date + overdue | **Pass** | 4.83–11.74 | 4.5:1 |
+| `opacity-60` pending row | **Fail** | 2.32 light | 4.5:1 |
+
+**Nothing regressed.** The two changes that prompted this audit — the row
+rewrite and the section headings — are both clean. What is broken was already
+broken, and has been through three gates.
+
+## A6. What I would fix first
+
+Ranked by what a user actually hits, not by the size of the gap.
+
+1. **NFR-04 — move focus when a toggle removes a row.** The only item here that
+   costs a user their data rather than their comfort. US-07 makes the toast the
+   sole route back; focus lands on `<body>`; the route out is 3 tab stops per
+   remaining row against a 12s clock, and it does not survive a 19-item list at
+   any human pace. Focusing the toast (or the next row) on removal fixes it
+   outright and is a few lines. **Everything else on this list is legibility;
+   this one is recoverability.**
+
+2. **DEF-16 — the 20×20 search clear.** The only control in the app below WCAG
+   2.2's 24×24 floor, and it is on the touch surface where it is smallest
+   relative to a finger. A missed tap here puts text back in the search box and
+   silently changes what list the user is looking at. One sizing class, and fix
+   the "Close" label while it is open.
+
+3. **The `opacity-60` pending row at 2.32:1.** Hit on *every single completion*
+   — the most frequent interaction in the product — and it is unreadable during
+   exactly the window the user is watching it. Raise the opacity to ~0.75, or
+   dim only the action buttons and leave the text alone. The dimming is meant
+   to say "working on it", not "you may not read this".
+
+4. **DEF-14 — primary button at 3.59:1.** Every primary button in every theme,
+   which sounds worse than it is: these are large, high-salience, and nobody
+   fails to *find* the blue button. It is a real AA failure and a one-token
+   fix, but it costs comprehension, not task completion. Darken the blue —
+   `rgb(4,133,247)` needs roughly a 20% luminance reduction to clear 4.5:1
+   against white.
+
+5. **DEF-15 — the muted count at 4.43:1.** Last deliberately. It is 0.07 short,
+   on one surface, in one theme, on decorative information that the list itself
+   already conveys. The precise fix is now known — the same token clears 4.83:1
+   on the Card, so either darken muted slightly or put the header on the Card
+   surface. Worth doing; not worth doing before the four above.
+
+**On the two conditions carried out of the last gate:** condition 1 (re-test or
+formally accept the five defects) is now discharged — two are genuinely fixed
+and three are confirmed still broken with current numbers. Condition 2
+(NFR-04's Undo criterion) is discharged as a **failure**, not a pass. Neither
+was accepted silently.
+
+---
+
+*Every number above was measured twice by independent methods and three of them
+were re-derived by hand; all figures were reproduced on both trees the checkout
+occupied during the audit. Where the tree moved under me, §A0 says so rather
+than quietly reporting whichever run looked cleaner.*
+
+---
+
+# Release gate — quick-add bar — 2026-08-17
+
+Gate: `develop` → `main` (auto-deploys to Vercel). Branch `develop` @ `421ff7b`
+(`Merge branch 'feature/quick-add' into develop`), working tree clean. Node
+24.14.0. App driven by hand in Chromium on **port 3100** against
+`todo_app_dev`; the Playwright run used its own server on 3117 against
+`todo_app_test`. Nothing was pointed at Neon.
+
+Seven commits since `main` @ `6cb2776`. New defects this pass start at
+**DEF-22**, continuing from DEF-21.
+
+> Written as each result was established. Everything below was run, on the
+> tree named above.
+
+---
+
+## 0. Verdict, up front
+
+### **HOLD**
+
+Two blocking defects, both in the quick-add bar, both the same shape as the two
+this feature already produced:
+
+- **DEF-22 — High — the refusal is revoked by any edit anywhere in the line,
+  including one that changes no word at all.** Press the chip to keep
+  `tomorrow` in your title, then fix a typo at the *start* of the line — or
+  just type a trailing space — and the word is lifted again. The todo saves
+  with the title short by a word and a due date the user explicitly refused.
+  **This is the third "a partial read leaves debris in the title", and it is
+  the one that survives the two fixes already in this branch.**
+- **DEF-23 — High — `More options` empties the bar before anything is
+  committed.** Cancel or press `Escape` in the modal and every character typed
+  is gone, with no Undo and nothing created. The bar deliberately keeps the
+  text on a 500 (`QuickAddBar`: "there is no route through this function that
+  loses a keystroke"); it does not keep it on a cancel, which is the more
+  common path.
+
+Both are single-cause and small to fix. Neither is in `parseQuickAdd` — the
+parser itself came through this gate clean.
+
+**The suites are green at the stated counts** — 274 Vitest, 86 Playwright, no
+retries. That was the entry condition and it held; it is not the verdict, and
+neither suite covers either defect above.
+
+**The regression sweep is clean.** Create, edit, delete, toggle, Undo, the
+counter, filters, search, due-date grouping, the empty state and its call to
+action, sign-out/sign-in and the `?next=` redirect all behave. The
+`useTodoList` extraction shows no seam: nothing regressed around it (§3).
+
+**Accessibility of the new UI is otherwise good** and better than the surfaces
+around it. The chips are keyboard-reachable, return focus to the input when
+activated, are announced through the live region, are 44 px on mobile, and
+measure **14.88:1** light / **14.52:1** dark. The two failures on the bar are
+both **already-filed** defects arriving on new furniture: DEF-14 (`Add`,
+3.59:1) and DEF-15 (the muted token, 4.43:1) — but DEF-15 now carries the
+feature's only *visible* statement of the escape hatch, which raises its
+stakes (§4.2).
+
+---
+
+## 1. DEF-22 — High — **a refusal is revoked by an edit that changes no word**
+
+**Blocking.** Third of the "partial read leaves debris in the title" family
+(after B-1, fixed in `dee0e1f`/`c1e6ead`, and RB-1, fixed in `beb4d66`).
+
+### Reproduction A — fix a typo at the far end of the line
+
+1. `/todos`, signed in. Type into the quick-add bar: `Cal mum about tomorrow`
+2. The chip `Due Tomorrow — keep "tomorrow" in the title` appears. **Press it.**
+   The chip goes; the bar reads `Cal mum about tomorrow`; the title is whole.
+   This is the case §7.17 says the chips exist for.
+3. Put the caret after `Cal` and type the missing `l` — a correction three
+   words away from the tail, which changes nothing the parser reads.
+4. **The chip is back.**
+5. Press `Enter`.
+
+**Expected:** a todo titled `Call mum about tomorrow`, no due date. The user
+refused this reading and did not withdraw the refusal.
+
+**Actual:** a todo titled **`Call mum about`**, priority Medium, **due
+Tomorrow**. Confirmed in the list and in the success toast.
+
+### Reproduction B — a trailing space (whitespace only)
+
+1. Type `Call mum about tomorrow`, press the chip. Chip gone.
+2. Press `End`, type **one space**.
+3. **The chip is back** — on a keystroke that adds no word, and that
+   `parseQuickAdd` itself discards (`input.trim()`, `split(/\s+/)`).
+4. `Enter` → title **`Call mum about`**, due Tomorrow.
+
+Backspacing the space away restores the refusal, which confirms the mechanism:
+the release is keyed to an *exact* string.
+
+### Reproduction C — the same, via `Esc`
+
+`Remember the meeting friday` → `Esc` → chip gone → type one trailing space →
+chip back → `Enter` → title **`Remember the meeting`**, due Aug 21.
+
+### Cause
+
+`QuickAddForm.tsx`, the `QuickAddRelease` record:
+
+```ts
+const activeRelease = release.text === text ? release.kinds : [];
+```
+
+`text` is the raw field value. Any difference — a leading edit, a trailing
+space, a doubled space — is a different string, so the refusal is dropped and
+the parse re-fires.
+
+The docstring on `QuickAddRelease` (review B-2) accepts one trade knowingly:
+*"an edit-and-retype re-offers a parse the user already refused"*. That
+argument is about the user **re-typing the tail**. It does not cover a
+correction elsewhere in the line, and it certainly does not cover whitespace —
+the parser's own rule 4 is that whitespace is not a word. The implementation is
+stricter than the reasoning that justifies it.
+
+### Severity
+
+High, and blocking. The failure is quiet in the way this feature says it must
+never be: it produces a *saved record* that is short by a word, reported by a
+success toast, and reached by pressing exactly the control the design deck
+calls "the whole mitigation". The chip is technically on screen at the moment
+of `Enter` — but the feature's own doctrine (rule 3, "nothing to notice and
+nothing to undo") treats "the user had to notice" as the weaker guarantee, and
+the trailing-space trigger is invisible by construction. Two blockers of this
+exact family have already shipped out of this branch; a third should not ship
+into `main`.
+
+### Suggested fix
+
+Key the release to the parse-relevant form of the text rather than the raw
+string — `text.trim().split(/\s+/).join(" ")` is the normalisation
+`parseQuickAdd` already performs — or key it to the token text it was made
+against. Either kills reproductions B and C outright and reduces A to "the tail
+changed", which is the trade B-2 actually argued for.
+
+---
+
+## 2. DEF-23 — High — **`More options` discards the typed text if the modal is cancelled**
+
+**Blocking.**
+
+### Reproduction
+
+1. `/todos`. Type into the bar:
+   `Draft the quarterly report and circulate it tomorrow high` (57 characters).
+2. Press **`More options`**. The modal opens, correctly pre-filled — Title
+   `Draft the quarterly report and circulate it`, High, due Tomorrow.
+3. Change your mind. Press **`Cancel`** (or **`Escape`**, or the close `×` —
+   all three close the dialog the same way).
+
+**Expected:** the modal closes and the bar still holds what was typed. Nothing
+was committed, so nothing should be lost.
+
+**Actual:** the bar is **empty**. No todo was created. There is no Undo — Undo
+belongs to mutations, and this was not one. The text is unrecoverable.
+
+Verified for `Cancel` and for `Escape`, with and without an active chip
+release, at desktop and at Pixel 7 width (the mobile modal is `size="full"`,
+which makes the accidental dismissal easier, not harder).
+
+### Cause
+
+`QuickAddForm.tsx`, the `More options` handler:
+
+```ts
+onPress={() => {
+  onMoreOptions(toFormValues());
+  clearTo("");
+}}
+```
+
+`clearTo("")` fires on the *press*, not on the modal's save. `TodoFormModal`'s
+`closeForm` only closes; there is no path back to the bar.
+
+### Why this is blocking rather than cosmetic
+
+- It contradicts the bar's own stated contract. `QuickAddBar` keeps every
+  character through a 500, a 502 and a field error, and `e2e/quick-add.spec.ts`
+  pins that — "retyping a todo the app lost is what makes people stop trusting
+  it (`docs/PRD.md` US-05)". Losing the text on a *user-initiated, reversible*
+  action is worse than losing it on a server error, and it is the path nothing
+  tests.
+- `Escape` is the dismissal a keyboard-first feature invites, and it is also
+  the key §7.17 trains the user to press in the bar itself, for a different
+  purpose.
+- §7.17 says `More options` "carries whatever is already typed into it". It
+  does not say the bar is emptied. The behaviour is undocumented as well as
+  lossy.
+
+### Suggested fix
+
+Clear the bar when the modal *saves*, not when it opens — or leave the text and
+let the create path clear it, since a create through the modal already
+refetches and toasts. Either way the bar must survive a cancel.
+
+---
+
+## 3. Regression sweep — **clean**
+
+Driven by hand on 3100 against `todo_app_dev`, on fresh accounts. The bar sits
+above the list and `useTodoList(filters)` was just extracted, so this
+concentrated on the seam between them.
+
+| Area | Result |
+|---|---|
+| Create (quick-add, ×3, burst) | Rows land in §2 order; counter `0 of 4 done` correct |
+| Create (modal, via `More options`) | Pre-filled from the parse; saves; toast + Undo |
+| Edit | `Beta task` → `Beta task edited`, row updates in place |
+| Toggle + Undo (default filter) | `0 of 4` → `1 of 4` → `0 of 4`; row restored |
+| Toggle + Undo (`?status=active`) | Row leaves the list on the flip, comes back in its §2 place on Undo; counter `0 of 3` → `1 of 3` → `0 of 3` |
+| Delete + confirm | Row removed, dialog names the todo, counter follows |
+| Filters | `?priority=high`, `?status=completed` both correct, with the right empty copy |
+| Search | `?q=Alpha` filters; `?q=zzzz` gives `No matches` / `No todos match "zzzz"` / `Clear search`; typing in the box drives the URL and back |
+| Create under an active search | `Todo "Zeta thing" added — hidden by your filters`, not inserted, Undo still offered — US-10 holds |
+| Grouping | `Upcoming` / `No date` headings correct |
+| Empty state | `Nothing here yet` + `Add a todo`; the CTA moves focus into the quick-add input (§7.18) |
+| Sign out / sign in | Account menu → `Sign out` → `/sign-in`; `/todos` while signed out → `/sign-in?next=%2Ftodos`; signing back in restores the same rows |
+| Console / network | No page errors, no console errors, **no 4xx/5xx** across the whole sweep |
+| Mobile (Pixel 7) | No horizontal overflow (`scrollWidth` 412 = `clientWidth` 412); bar, chips and buttons all usable |
+
+**No regression found around the hook extraction.** The counter, the optimistic
+toggle, the mid-flight reconciliation and the filtered-create receipt all still
+behave, including the two paths (`?status=active` toggle, create under a search)
+where a badly-moved hook would have shown.
+
+## 4. Accessibility — the new UI only
+
+### 4.1 Keyboard and focus — **pass**
+
+- Tab order from the input: `Add` → `Due …` chip → `… priority` chip →
+  `More options` → the filter bar. Every new control is reachable; the chips
+  sit between the submit button and `More options`, which is unusual but
+  consistent with their DOM position and is not a trap.
+- Activating a chip with `Enter` releases that kind and **returns focus to the
+  input** (measured: `INPUT[text]`), even though the pressed chip unmounts.
+- After a successful submit, focus is still in the input and the field is
+  cleared — the feature's headline claim, and it holds.
+- `Esc` in the input releases every chip without moving focus.
+- The focus ring on a chip renders (blue, `rgb(0,95,204)`, `data-focus-visible`
+  set) — verified from a screenshot, since the computed `outline-style` reads
+  `none` and the ring is drawn another way.
+- Mobile targets: chips **44 px** tall (137×44, 123×44), `More options`
+  110×44, `Add` 380×44. All clear the 44×44 floor.
+
+### 4.2 Live region — **pass, with one caveat**
+
+Empty when nothing is read; on `Buy milk tomorrow high` it reads exactly the
+§7.17 string: `Read from your text: Due Tomorrow, High priority. Press Esc to
+keep your text exactly as typed.` It clears on `Esc`. The visible hint is
+`aria-hidden`, so `dee0e1f` did what it claimed — the sentence is announced
+once, not twice.
+
+Caveat: the announcement is derived from the *reading*, so under DEF-22 it
+re-announces the parse the user refused. Fixing DEF-22 fixes this too.
+
+### 4.3 Contrast — measured, composited over the real stack
+
+Alpha composited up the ancestor chain to the page background; colours resolved
+through the browser's own parser (the theme uses `lab()`/`oklab()`, which a
+naive `rgb()` regex silently misreads). Ratios reproduced by hand.
+
+| Element | Light | Dark | Needs | Verdict |
+|---|---|---|---|---|
+| Chip label + `×` `rgb(24,24,27)` on `rgb(235,235,236)` | **14.88** | **14.52** | 4.5 | **Pass** |
+| `More options` | **14.88** | **14.52** | 4.5 | **Pass** |
+| Quick-add input text | **17.72** | **17.27** | 4.5 | **Pass** |
+| Chip hint `rgb(113,113,122)` on `rgb(245,245,245)` | **4.43** | 7.72 | 4.5 | **Fail (light)** — this is **DEF-15** |
+| `Add` button `rgb(252,252,252)` on `rgb(4,133,247)` | **3.59** | **3.59** | 4.5 | **Fail (both)** — this is **DEF-14** |
+
+**The chips themselves are fine** — they are the highest-contrast text on the
+bar. Neither failure is new: both are the tokens already filed as DEF-14 and
+DEF-15 in the 2026-08-17 audit, at the same numbers, now appearing on new
+furniture.
+
+**One thing has changed about DEF-15, though.** The muted token now carries
+`Press Esc to keep your text exactly as typed.` — the *only visible* statement
+of the escape hatch on which, per §7.17, the whole parser's licence to exist
+depends. It was ranked last of five when it was decorating a count the list
+already conveyed. At 4.43:1 on the sentence that tells a user how to refuse a
+parse, it should be re-ranked. **Not blocking** — it is 0.07 short, it passes in
+dark, and the live region carries the same sentence for screen-reader users —
+but it should not stay at the bottom of the queue.
+
+## 5. What the parser got right
+
+Worth recording, because it is where the risk was assumed to be and is not.
+
+- An exhaustive sweep of every 1–4-word input over a vocabulary-heavy alphabet,
+  under all four release combinations, holds three invariants with **no
+  counterexample**: no word is ever lost or duplicated between the title and
+  the chips; the title is never emptied; and a release never lets the parser
+  take *more* than it took unreleased (the RB-1 property).
+- Chips pressed in either order, on either word order, keep the other reading
+  (`Ring the bank high tomorrow` and `… tomorrow high`, priority-first and
+  date-first — four permutations, all correct).
+- Meant-literally cases all decline to fire: `Casual Friday`,
+  `high priority handover`, `ship the deck next friday`, `count the 3 days`,
+  `buy milk tomorrow!`, `buy milk, tomorrow.`, `review 2026-02-31`,
+  `renew the lease in 366 days`.
+- Rule 2 holds at the edge: `tomorrow high` → title `tomorrow`;
+  `high in 3 days` → title `high`.
+- **Non-English titles are safe.** `ซื้อนม tomorrow`, `买牛奶 high`,
+  `Приготовить ужин friday`, `אספקה tomorrow`, `café tomorrow` and
+  `🎉 party tomorrow high` all lift the trailing English vocabulary and leave
+  the non-English title whole. `réunion demain` fires nothing — the vocabulary
+  is English-only, which is a product decision, not a defect.
+- A 313-character line reports `Keep the title under 200 characters.` and
+  **keeps every character in the field**.
+- `More options` carries an active release correctly: after refusing the date,
+  the modal opens on the full title `Call mum about tomorrow` with no due date.
+
+## 6. Observations — not defects
+
+- **Pasting several lines** into the bar produces one todo:
+  `Buy milk⏎Call the vet tomorrow⏎high` becomes
+  `Buy milk Call the vet` + Tomorrow + High. That is what a single-line
+  `<input>` does with a multi-line paste, and the chips show the reading before
+  it commits. Worth a product decision (split on newlines? refuse?), not a bug.
+- **Trailing/repeated spaces are collapsed** into the saved title
+  (`buy milk   tomorrow   high   ` parses correctly). Correct, and the same
+  normalisation DEF-22 fails to apply to the release key.
+- Next 16 refuses a second `next dev` in the same directory, so the Playwright
+  run required stopping the manual server on 3100 first. Environmental.
+
+## 7. What I did not test
+
+- Real assistive technology. The live region and the labels were read from the
+  DOM and the accessibility tree, not heard through VoiceOver or NVDA.
+- Cross-user isolation and the API trust boundary — re-proved at the previous
+  gate (§4 above) and untouched by these seven commits.
+- Anything about the older accessibility queue beyond confirming DEF-14 and
+  DEF-15 still measure what they measured.
+
+## 8. Ship / do not ship
+
+**HOLD.** Fix DEF-22 and DEF-23 and this ships; both are contained, neither
+touches `parseQuickAdd`, and both should carry a test — the trailing-space
+revocation and the cancelled `More options` are each one assertion.
+
+DEF-15's re-ranking is a recommendation, not a condition.
+
+---
+
+# Re-gate — quick-add release blockers — 2026-08-17
+
+Gate: `develop` → `main` (auto-deploys to Vercel). Branch `develop` @ `c32a947`
+(`Merge branch 'fix/quick-add-release-blockers' into develop`), working tree
+clean. Node 24.14.0. Playwright drove its own `next dev` on **3117** against
+`todo_app_test`; Vitest ran against `todo_app_test`. The two `bun` processes
+listening on 3000 and 3100 are not mine and were left alone. Nothing was
+pointed at Neon.
+
+**Narrow re-gate**, not a second full gate. The parser sweep (§5 above), the
+regression sweep (§3) and the accessibility pass (§4) from the 2026-08-17 gate
+stand and were not repeated; this pass re-runs my own two blocking defects,
+probes for a third of the same family, and takes a smoke pass. Defect numbering
+continues from DEF-23, so the one new defect here is **DEF-24**.
+
+> Written as each result was established. Everything below was run, on the tree
+> named above.
+
+---
+
+## 0. Verdict, up front
+
+### **SHIP**
+
+**DEF-22 is closed.** All three of my reproductions — the typo fix at the far
+end of the line, the bare trailing space, and `Esc` followed by a trailing
+space — now save the full title with **no due date**, re-run verbatim in
+Chromium against a real account and a real database (§1).
+
+**DEF-23 is closed.** All three dismissals — `Cancel`, `Escape`, the close `×` —
+keep every character, keep an active chip refusal with them, and return focus
+to the quick-add input. A save through the modal clears the bar exactly once:
+one `POST`, one row, one toast (§3).
+
+**The residual behaves as `docs/DESIGN.md` §7.17 documents it**, and is not
+wider than the doc says. A pathless whole-line replacement keeps a refusal
+whose words the new line ends in; a submit clears it, and it does not reach a
+second todo (§2).
+
+**New: DEF-24 — Low — non-blocking.** `Esc` records the refusal against a
+reading wider than the one on screen, so on a line whose title is made
+entirely of parser vocabulary (`in 3 days high`, `next week high`,
+`tomorrow high`) a later edit to a *title* word revokes it and the refused word
+is eaten. Same family as DEF-22, at a small fraction of its reach: it needs a
+degenerate line, it needs `Esc` rather than the chip, and the chip is visibly
+back on screen when it happens. **I am not holding the release for it** (§4).
+
+The third failure the fix was asked to survive is not there. I looked for it
+two ways and found neither: an edit path that returns to the reading without
+leaving it, and a lapse firing when the reading never changed. The one-way rule
+holds — 0 resurrections in 4,000 randomised edit walks, and the one path that
+looked like a way back (erasing the prefix down to the tail word and retyping a
+new one) ends the refusal correctly, because deleting the space that separates
+two words merges them and leaves the reading (§1.4).
+
+---
+
+## 1. DEF-22 — **closed**
+
+Fixed in `b5f74a9` (`fix(quick-add): end a refusal at the edit that leaves the
+reading`) after `800a42c` — the raw-text keying I suggested — left
+reproduction A standing.
+
+The mechanism now: a refusal is `{ tail, kinds }` where `tail` is the words the
+parse read (`QuickAddResult.tail`), and `releaseAfterEdit` is applied to
+**every** edit, dropping the refusal the moment the text stops ending in those
+words. That is one-way, which is what stops a retyped line reviving it.
+
+### 1.1 The three reproductions, re-run verbatim — **all pass**
+
+Driven in Chromium (Playwright, desktop 1280×800) on fresh accounts against
+`todo_app_test`, asserting the saved row, not just the bar.
+
+| # | Steps | Result |
+|---|---|---|
+| A | Type `Cal mum about tomorrow`; press the `Due Tomorrow` chip; `Home`, `→→→`, type `l`; `Enter` | Saves **`Call mum about tomorrow`**, row carries **no `<time>`** — pass |
+| B | Type `Cal mum about tomorrow`; press the chip; `End`, one space; `Enter` | Saves **`Cal mum about tomorrow`**, no `<time>` — pass |
+| C | Type `Remember the meeting friday`; `Esc`; `End`, one space; `Enter` | Saves **`Remember the meeting friday`**, no `<time>` — pass |
+
+Reproduction C is the one the merged suite did not already cover — it pins
+`Esc` + trailing space, where `e2e/quick-add.spec.ts` pins chip + trailing
+space and `Esc` + retype. It passes, but nothing in the repository holds it
+there. **Worth one assertion in `e2e/quick-add.spec.ts`.**
+
+### 1.2 The same three at the state-machine level
+
+I transcribed the bar's state machine (`handleTextChange` → `releaseAfterEdit`,
+chip press → `releaseAgainst`, render → `heldRelease`, submit → `clearTo`) and
+drove `src/lib/quickAdd.ts` through it character by character, so each
+keystroke is a separate edit rather than one `fill`. A, B and C all produce
+`{ title: <the whole line>, dueAt: "", priority: "medium" }`.
+
+### 1.3 Hunt — a lapse firing when the reading never changed
+
+Exhaustive: every 2-word and 3-word line over a 12-word vocabulary alphabet
+plus 7 ordinary words, each chip pressed singly and together via `Esc`, then
+every word **outside the reading the chips named** replaced with each of four
+substitutes — **14,416 edits**. The refusal held on all but 89, and every one
+of those 89 falls in the single narrow class filed below as DEF-24. Outside
+that class, no edit the parser cannot see withdraws a refusal.
+
+### 1.4 Hunt — an edit path that returns to the reading without leaving it
+
+Not found, and the obvious candidate fails for a good reason. Because
+`stillReads` is a suffix test, a path that edits only the prefix never leaves
+the reading — so I tried to walk one all the way to a different todo: refuse
+`Due Tomorrow` on `Cal mum about tomorrow`, then erase the prefix one character
+at a time and type `Buy milk ` in front of the surviving word.
+
+The refusal **ends**, correctly, and the chip is back by the time the line
+reads `Buy milk tomorrow` (saved: title `Buy milk`, due Tomorrow). Deleting the
+space between two words merges them — `about tomorrow` becomes
+`abouttomorrow` — and that state is not the reading, so the one-way rule fires
+exactly as designed. There is no ordinary-typing route from one line to an
+unrelated line that never passes through such a state.
+
+Randomised walks agree: 4,000 trials, up to 12 word-level edits each, starting
+from a refusal — **0 resurrections**. Once a refusal has lapsed it never comes
+back without a fresh chip press.
+
+---
+
+## 2. The residual — **behaves as documented, and is bounded**
+
+`docs/DESIGN.md` §7.17 and the `QuickAddRelease` doc comment both state it: a
+single edit that replaces the line without passing through anything else keeps
+a refusal whose words the new line happens to end in.
+
+| Check | Result |
+|---|---|
+| One-edit whole-line replacement (`input` event, no intermediate states) ending in the same word keeps the refusal | **Yes** — as documented |
+| The refusal survives a *cancelled* `More options` handoff | **Yes** — intended; nothing was committed |
+| A submit clears it | **Yes** — `clearTo` sets `NO_RELEASE` |
+| It can reach a second todo | **No** — after submitting the pasted line, `Call the vet tomorrow` shows `Due Tomorrow` again |
+| The fast-typist path (`current.slice(submitted.length)`) leaves a stale refusal behind | **No** — `clearTo` runs on that branch too |
+
+Not wider than the doc says. The prefix-editing behaviour in §1.4 is the same
+guarantee stated from the other side — §7.17 explicitly says an edit outside
+the reading leaves the refusal standing — and it terminates on its own, so it
+is not a second residual.
+
+---
+
+## 3. DEF-23 — **closed**
+
+Fixed in `427fb4b` and `d6015a0`. The bar now awaits an answer from the modal
+(`src/lib/handoff.ts`), and only a save clears it.
+
+| Check | `Cancel` | `Escape` | close `×` |
+|---|---|---|---|
+| Bar keeps every character (57-char line) | pass | pass | pass |
+| An active chip refusal survives the handoff | pass | pass | pass |
+| Focus returns to the quick-add input | pass | pass | pass |
+| No todo created, no success toast | pass | pass | pass |
+| The line is still submittable as it stands | pass | pass | pass |
+
+The refusal check is the one the merged suite does not make: refuse
+`Due Tomorrow` on `Call mum about tomorrow`, press `More options` — the modal
+opens on the **full** title with no due date, so the refusal travelled — dismiss
+it, and the chip is still absent. `Enter` then saves `Call mum about tomorrow`
+with no `<time>`. All three dismissals.
+
+**A save clears the bar exactly once.** Typing
+`Draft the report tomorrow high`, `More options`, `Add todo`: **one**
+`POST /api/todos`, **one** row, **one** `Todo “Draft the report” added` toast,
+bar empty, and no stale refusal left behind — the next line gets its chip back.
+That is the invariant `d6015a0` and `createHandoff` were written for, and it
+holds.
+
+---
+
+## 4. DEF-24 — Low — **`Esc` records a refusal wider than the reading it refused**
+
+**Not blocking.** Same family as DEF-22, and the same harm, but reachable only
+on a line whose entire title is parser vocabulary.
+
+### Reproduction
+
+1. `/todos`, signed in. Type into the quick-add bar: `in 3 days high`.
+2. One chip appears: **`High priority`**. The title reads `in 3 days` — rule 2
+   refuses to lift the date because it would leave the title empty, so **no
+   date chip is offered and none is applied**.
+3. Press **`Esc`** to keep the text exactly as typed. The chip goes.
+4. Correct your own title, by keystroke, not by paste: `Home`, `→→→`,
+   `Shift+→`, type `4`. The line reads `in 4 days high`. **No word any chip
+   ever named has been touched.**
+
+**Expected:** the refusal holds — this is an edit to the title, outside the
+reading, and §7.17 says such an edit "cannot withdraw a refusal of what it
+read".
+
+**Actual:** the refusal lapses. `High priority` is back on screen, and `Enter`
+saves a todo titled **`in 4 days`** with priority **High** — the refused word
+eaten off the end of the title, exactly DEF-22's harm.
+
+Also reproduces on `next week high`, `tomorrow high`, `high friday`,
+`high in 3 days` and 20 other lines of the same shape.
+
+### Cause
+
+`handleKeyDown` releases `ALL_TOKEN_KINDS` — both kinds — regardless of which
+ones actually fired. `releaseAgainst` then re-parses with both released, and
+the released branch in `parseQuickAdd` steps over a matched run **without
+consulting `canLift`**. So the scan walks straight past the run that rule 2 had
+refused to lift, and the recorded `tail` reaches words that are still sitting
+in the title. `stillReads` then reads an edit to those title words as a change
+to the reading.
+
+Pressing the chip instead of `Esc` does not do this, because a chip only ever
+releases a kind that fired.
+
+### Bound — measured, not estimated
+
+41,356 lines of 2, 3 and 4 words over an 11-word vocabulary plus 3 ordinary
+words, each refused both ways:
+
+- **via a chip press: 0** lines record a tail wider than the chips claimed;
+- **via `Esc`: 24**, and every one of them has a title containing **no**
+  ordinary word — the whole line is vocabulary;
+- **0** affected lines have an ordinary word anywhere in the title.
+
+That bound is structural, not statistical: with any non-vocabulary word in the
+line, rule 2's budget always leaves a survivor, so the run is lifted, a chip is
+shown, and the recorded tail matches what the chip claimed.
+
+### Why it is not blocking
+
+- The line has to be built entirely from vocabulary — a todo literally titled
+  `in 3 days`, `next week` or `tomorrow`. DEF-22 fired on
+  `Call mum about tomorrow` with a typo, which is an ordinary Tuesday.
+- The refusal has to have been made with `Esc` rather than the chip.
+- When it fires, the chip is **on screen again** before the user presses Enter.
+  DEF-22's own doctrine ranks a visible unwanted chip well below a silently
+  disabled parser, and this is the visible one.
+- Nothing is lost that the user cannot see and re-type; there is a success
+  toast naming the saved title, and an Undo behind it.
+
+### Suggested fix
+
+Have `Esc` release the kinds that actually fired —
+`parsed.tokens.map(t => t.kind)` — rather than both unconditionally. That is
+the chip-press path, which the sweep above shows never records an over-wide
+tail. It changes one line, and it should carry the `in 3 days high` case as a
+test. The deeper cause — that a released run is stepped over without consulting
+`canLift`, so a release can make the scan read further left than the unreleased
+parse ever did — is worth a look at the same time, since it is the same shape
+as RB-1.
+
+---
+
+## 5. Smoke pass — **clean**
+
+One account, one session, Chromium at 1280×800, with the console and every
+response watched.
+
+| Step | Result |
+|---|---|
+| Create through the bar (×2, one with `tomorrow high`) | Rows land, toasts name them, chips read correctly |
+| Edit | `Buy milk` → `Buy oat milk`, `updated` toast |
+| Status toggle | Checkbox checks, `marked complete` toast |
+| Undo | Reverts, `marked not complete` toast |
+| One filter (`Active`) | URL carries `status=active`, completed row leaves, active row stays, `All` restores it |
+| One search (`vet`) | Matching row only; clearing restores the list |
+| Delete | Confirm dialog, row goes, `deleted` toast |
+| Sign out | Lands on `/sign-in` |
+| Sign back in | Lands on `/todos`, the todo and its completed state survived |
+
+**4xx/5xx: none. Console errors: none.** The only console output is HeroUI's
+`PressResponder was rendered without a pressable child` warning, which is a
+`warn` from the library's own toast internals and predates this branch.
+
+---
+
+## 6. Suites
+
+- **Vitest: 293 passed / 293, 12 files**, including the new
+  `tests/unit/handoff.test.ts` and the additions to `tests/unit/quickAdd.test.ts`
+  that the fix commits carry.
+- **Playwright: 102 passed / 102** across `chromium-desktop` and
+  `chromium-mobile`, no retries, no flakes. The four fix commits add 246 lines
+  to `e2e/quick-add.spec.ts`; all 23 of that spec's desktop cases pass.
+- The five checks I wrote for this re-gate (repro C, the refused chip through
+  all three dismissals, the exactly-once save, the residual bound, and the
+  DEF-24 case) were run as a scratch spec and removed afterwards; none of them
+  are in the repository. The first two are worth keeping — see §1.1 and §3.
+
+---
+
+## 7. What I did not test
+
+- The parser sweep, the regression sweep and the accessibility pass from the
+  gate above. They stand on that tree, and the four fix commits touch
+  `QuickAddForm`, `TodoListScreen`, `src/lib/handoff.ts` and the release
+  helpers in `src/lib/quickAdd.ts` — not `parseQuickAdd` itself.
+- Mobile width for the re-gate specifically. The full Playwright run covers
+  `chromium-mobile`, but my own five checks were desktop only.
+- Real assistive technology, again. DEF-24 puts a chip back on screen; whether
+  the live region announces that clearly to a screen-reader user mid-edit is
+  not something I can answer from the DOM.
+- DEF-14 and DEF-15 remain where they were. DEF-15 still carries the only
+  visible statement of the escape hatch at 4.43:1, and I still think it should
+  be re-ranked.
+
+---
+
+## 8. Ship / do not ship
+
+**SHIP.** Both blockers are closed on their own reproductions, the fix's stated
+rule survives every attack I could construct against it, the residual is
+exactly as wide as the doc admits, and the smoke pass is clean with no 4xx,
+no 5xx and no console errors.
+
+DEF-24 goes on the backlog, not in front of this release: it is one line to
+fix, it needs a todo titled `in 3 days` to reach, and it announces itself with
+a visible chip when it fires. It should not, however, sit there indefinitely —
+it is the fourth member of a family that has now cost this feature four fixes,
+and the family keeps coming back in the same place.

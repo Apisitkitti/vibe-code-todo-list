@@ -5,8 +5,9 @@ import {
   ADD_TODO_LABEL,
   CREATE_ACCOUNT_LABEL,
   DELETE_CONFIRM_ACTION,
-  NEW_TODO_LABEL,
+  MORE_OPTIONS_LABEL,
   PAGE_HEADING,
+  QUICK_ADD_LABEL,
   SAVE_CHANGES_LABEL,
   TITLE_FIELD_LABEL,
   UNDO_LABEL,
@@ -19,8 +20,10 @@ import {
 /**
  * Per-test isolation and the helpers every spec shares.
  *
- * Isolation is by account, not by database: the suite runs against the real
- * Neon instance, so a test may only ever see rows it created itself. Each test
+ * Isolation is by account first, and by database as well: `resolveTestDatabaseUrl`
+ * points the suite at a local `todo_app_test`, and refuses to run when that URL
+ * matches the app's own. The account rule stands on its own regardless of which
+ * database is underneath — a test may only ever see rows it created itself. Each test
  * signs up a brand-new account through the UI, does its work inside that
  * account, and deletes it afterwards. Two tests can therefore never observe
  * each other's todos, and no test can observe production data — `GET
@@ -76,6 +79,8 @@ export interface TodosScreen {
   checkbox: (title: string) => Locator;
   editButton: (title: string) => Locator;
   deleteButton: (title: string) => Locator;
+  quickAddInput: Locator;
+  quickAdd: (text: string) => Promise<void>;
   openCreate: () => Promise<void>;
   submitCreate: (title: string) => Promise<void>;
   createTodo: (title: string) => Promise<void>;
@@ -89,6 +94,10 @@ export interface TodosScreen {
 }
 
 const titleField = (page: Page) => page.getByRole("textbox", { name: TITLE_FIELD_LABEL });
+
+/** The quick-add input (§7.17). Its `Label` is `sr-only`, not absent. */
+const quickAddField = (page: Page) =>
+  page.getByRole("textbox", { name: QUICK_ADD_LABEL });
 
 /**
  * Waits until no toast view transition is in flight.
@@ -209,9 +218,20 @@ export const createTodosScreen = (page: Page): TodosScreen => {
   const deleteButton = (title: string) =>
     page.getByRole("button", { name: deleteLabel(title), exact: true });
 
+  /*
+    The toolbar `New todo` button is gone; the modal's only create entry point
+    is `More options` on the quick-add bar, which is present on every account
+    including a brand-new one.
+  */
   const openCreate = async () => {
-    await page.getByRole("button", { name: NEW_TODO_LABEL, exact: true }).click();
+    await page.getByRole("button", { name: MORE_OPTIONS_LABEL, exact: true }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
+  };
+
+  /** Types into the bar and presses Enter — the whole keyboard journey. */
+  const quickAdd = async (text: string) => {
+    await quickAddField(page).fill(text);
+    await quickAddField(page).press("Enter");
   };
 
   const submitCreate = async (title: string) => {
@@ -298,6 +318,8 @@ export const createTodosScreen = (page: Page): TodosScreen => {
     checkbox,
     editButton,
     deleteButton,
+    quickAddInput: quickAddField(page),
+    quickAdd,
     openCreate,
     submitCreate,
     createTodo,

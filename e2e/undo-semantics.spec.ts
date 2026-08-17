@@ -221,7 +221,25 @@ test.describe("Undo semantics", () => {
       `handleDelete`, the toast would sit there offering to delete a row that
       no longer exists, and pressing it would 404 — reporting a failure for a
       mutation that had already succeeded.
+
+      **Waited for, not read once.** This is a *precondition* — it establishes
+      that there is an Undo to disarm — and the file's argument for
+      point-in-time reads does not apply to it. That argument is about
+      *absence*: a retrying "count is zero" would be satisfied by the toast's
+      own expiry and would pass even if nothing dismissed anything, which is
+      why the two reads at the end of this test stay one-shot. Presence has no
+      such failure mode; retrying can only wait for a thing that either
+      appears or does not.
+
+      Read once, it was the flakiest line in the suite — 3 failures in 14
+      whole-file runs, none in 16 runs of the test alone. HeroUI raises every
+      toast inside `startViewTransition`, so the button exists a frame or two
+      after the toast is "shown", and a bare `count()` sampled that gap. Same
+      view transition as the Undo-press timing this suite already documents,
+      arriving from the other side: there it made a visible control unclickable,
+      here it makes a real control briefly uncountable.
     */
+    await expect(todos.undoButton).toBeVisible();
     expect(await todos.undoButton.count()).toBe(1);
 
     await todos.openDelete(TODO_TITLE);

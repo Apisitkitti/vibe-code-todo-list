@@ -31,8 +31,11 @@ const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
 const CREATE_PENDING_LABEL = "Adding…";
 const UPDATE_PENDING_LABEL = "Saving…";
 
-const toFormValues = (todo: TodoItemData | null): TodoFormValues => {
-  if (!todo) return DEFAULT_TODO_FORM_VALUES;
+const toFormValues = (
+  todo: TodoItemData | null,
+  draft: TodoFormValues | null,
+): TodoFormValues => {
+  if (!todo) return draft ?? DEFAULT_TODO_FORM_VALUES;
 
   return {
     title: todo.title,
@@ -47,6 +50,12 @@ export interface TodoFormModalProps {
   /** `null` puts the modal in create mode. */
   todo: TodoItemData | null;
   /**
+   * Create mode only: what the quick-add bar had already read from the typed
+   * text when `More options` was pressed, so nothing is typed twice
+   * (`docs/PRD.md` US-05). Ignored on an edit, where the record wins.
+   */
+  draft?: TodoFormValues | null;
+  /**
    * Hands the write's result to the list, which reloads and raises the success
    * toast. `previous` is the record's state when the form opened, or `null` on
    * a create — it is what an Undo restores.
@@ -59,7 +68,12 @@ export interface TodoFormModalProps {
  * through — no confirm dialog — and the list offers Undo on the toast
  * (`docs/CONVENTIONS.md` → Mutation UX).
  */
-export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
+export const TodoFormModal = ({
+  state,
+  todo,
+  draft = null,
+  onSaved,
+}: TodoFormModalProps) => {
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
   const isEdit = todo !== null;
 
@@ -100,7 +114,7 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
     setIsPending(true);
 
     // Captured before the write, since `todo` is the pre-edit record.
-    const previousValues = todo ? toFormValues(todo) : null;
+    const previousValues = todo ? toFormValues(todo, null) : null;
 
     let saved: TodoItemData;
 
@@ -157,7 +171,7 @@ export const TodoFormModal = ({ state, todo, onSaved }: TodoFormModalProps) => {
               <Modal.Body>
                 <TodoForm
                   formId={FORM_ID}
-                  defaultValues={toFormValues(todo)}
+                  defaultValues={toFormValues(todo, draft)}
                   serverFieldErrors={serverFieldErrors}
                   isDisabled={isPending}
                   onValidSubmit={(values) => {
