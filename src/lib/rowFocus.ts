@@ -66,7 +66,7 @@ const FRONTMOST_TOAST_ACTION_SELECTOR =
  * so a toast that never arrives leaves focus parked on the row from step 1
  * rather than hanging.
  */
-const MAX_WAIT_FRAMES = 60;
+export const MAX_WAIT_FRAMES = 60;
 
 /**
  * Where the user was standing when the mutation started: which row held focus,
@@ -142,6 +142,41 @@ const nextFrame = (): Promise<void> =>
     requestAnimationFrame(() => resolve());
   });
 
+/** The little of a row checkbox the wait loop actually needs. */
+interface FocusTarget {
+  focus: () => void;
+}
+
+/**
+ * What `focusRowAfterRemoval` reads the world through.
+ *
+ * Injectable for one reason: the loop below cannot be driven off its first
+ * iteration in a real browser. React commits a discrete-input update
+ * synchronously, so the row is gone by the first `requestAnimationFrame` every
+ * time — measured at `frame=1` for 4 rows unthrottled and 40 rows at 20× CPU
+ * throttling alike. That leaves the wait itself unexercised, and a fixed
+ * one-frame version passing for reasons that have nothing to do with being
+ * correct.
+ *
+ * The alternative was to put the optimistic `setResult` behind
+ * `startTransition` so React yields mid-commit. That would pin the loop, but
+ * by slowing the very thing §8.3.2 asks to be immediate — the box ticking
+ * under the finger — which is paying in product behaviour for a test. Driving
+ * the loop directly costs nothing at runtime: production passes no `deps` and
+ * gets the browser exactly as before.
+ */
+export interface RowFocusDeps {
+  readRows: () => readonly FocusTarget[];
+  getActiveElement: () => unknown;
+  waitFrame: () => Promise<void>;
+}
+
+const browserDeps: RowFocusDeps = {
+  readRows: rowCheckboxes,
+  getActiveElement: () => document.activeElement,
+  waitFrame: nextFrame,
+};
+
 /**
  * Puts focus back in the list once the row has actually gone.
  *
@@ -153,24 +188,33 @@ const nextFrame = (): Promise<void> =>
  * the same class of mistake as reading a count before the button had rendered
  * (`docs/DESIGN.md` §4.10); the cure is to wait on the condition, not the
  * clock.
+ *
+ * In today's React the condition happens to be true on the first check, so
+ * this is insurance rather than a bug being worked around. It is kept, and
+ * pinned in `tests/unit/rowFocus.test.ts`, because the thing it insures
+ * against — a commit that lands a frame later than the caller assumed — is a
+ * scheduling detail no caller should have to re-verify after every upgrade.
  */
 export const focusRowAfterRemoval = async (
   anchor: RowFocusAnchor,
+  deps: RowFocusDeps = browserDeps,
 ): Promise<boolean> => {
   for (let frame = 0; frame < MAX_WAIT_FRAMES; frame += 1) {
-    const checkboxes = rowCheckboxes();
+    const rows = deps.readRows();
 
-    if (checkboxes.length < anchor.rowCount) {
-      const index = nextFocusIndex(anchor.index, checkboxes.length);
+    if (rows.length < anchor.rowCount) {
+      const index = nextFocusIndex(anchor.index, rows.length);
 
       if (index === null) return false;
 
-      checkboxes[index]?.focus();
+      const target = rows[index];
 
-      return document.activeElement === checkboxes[index];
+      target?.focus();
+
+      return deps.getActiveElement() === target;
     }
 
-    await nextFrame();
+    await deps.waitFrame();
   }
 
   return false;
