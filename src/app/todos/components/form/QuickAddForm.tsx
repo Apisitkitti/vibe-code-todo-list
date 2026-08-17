@@ -224,7 +224,18 @@ export const QuickAddForm = ({
   const handleMoreOptions = async () => {
     const saved = await onMoreOptions(toFormValues());
 
-    if (!saved) return;
+    if (!saved) {
+      /*
+        The bar is where the user is again, and §7.17 now says so: the text is
+        "ready to submit as it stands". HeroUI restores focus to the button
+        that opened the dialog, which is the right default for a control that
+        did something and the wrong one for a handoff that was called off —
+        it leaves the caret one Tab from the line it was in the middle of.
+      */
+      inputRef.current?.focus();
+
+      return;
+    }
 
     clearTo("");
   };

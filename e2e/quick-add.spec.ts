@@ -429,7 +429,12 @@ test.describe("quick-add bar", () => {
 
       await expect(dialog).toHaveCount(0);
 
-      // Nothing was committed, so nothing should have been lost.
+      // Nothing was committed, so nothing should have been lost — and the bar
+      // is where the user is, which is what "ready to submit as it stands"
+      // means (§7.17). It is also the only outward sign that the handoff was
+      // *answered*: a dismissal that never answered would look identical here
+      // without it.
+      await expect(todos.quickAddInput).toBeFocused();
       await expect(todos.quickAddInput).toHaveValue(DRAFT_LINE);
       await expect(todos.row(DRAFT_TITLE)).toHaveCount(0);
       await expectNoFalseSuccess(todos.toasts, addedToast(DRAFT_TITLE));

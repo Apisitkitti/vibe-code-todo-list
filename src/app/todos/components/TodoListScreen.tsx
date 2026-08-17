@@ -17,6 +17,7 @@ import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
 import { useTodoList } from "@/app/todos/hooks/useTodoList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getErrorMessage } from "@/lib/getErrorMessage";
+import { createHandoff } from "@/lib/handoff";
 import type { TodoItemData, TodoListFilters } from "@/lib/todo";
 import {
   applyCompletion,
@@ -162,9 +163,9 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    *
    * A ref rather than state because nothing renders from it, and because it
    * has to be readable from a callback that may outlive the render it was made
-   * in. Settling it clears it, so it can only ever answer once.
+   * in. `Handoff` owns the answer-exactly-once invariant.
    */
-  const createHandoff = useRef<((saved: boolean) => void) | null>(null);
+  const moreOptionsHandoff = useRef(createHandoff<boolean>());
 
   /**
    * Returns whether it dismissed anything, which is what makes it usable as a
@@ -207,14 +208,6 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     undoToastKeys.current.set(todoId, key);
   };
 
-  /** Answers the bar's outstanding handoff, once. Nothing pending is a no-op. */
-  const settleHandoff = (saved: boolean) => {
-    const settle = createHandoff.current;
-
-    createHandoff.current = null;
-    settle?.(saved);
-  };
-
   /**
    * The modal's only remaining create entry point: `More options` on the bar,
    * carrying whatever it had already read. There is no toolbar button any
@@ -233,9 +226,13 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     setEditingTodo(null);
     formState.open();
 
-    return new Promise<boolean>((resolve) => {
-      createHandoff.current = resolve;
-    });
+    /*
+      `false` for anything still outstanding: two presses in one frame would
+      otherwise strand the first opener on a promise nothing can resolve
+      (Senior F5). Not reachable through the dialog today, which is the reason
+      to state it here rather than rely on it.
+    */
+    return moreOptionsHandoff.current.ask(false);
   };
 
   const openEdit = (todo: TodoItemData) => {
@@ -314,7 +311,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       has one outstanding — the modal cannot be opened twice over — and if it
       somehow did, `false` is the answer that keeps the user's text.
     */
-    settleHandoff(!isEdit);
+    moreOptionsHandoff.current.answer(!isEdit);
 
     showUndoableSuccess(
       saved.id,
@@ -684,11 +681,22 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   useEffect(() => {
     if (formState.isOpen) return;
 
-    const settle = createHandoff.current;
-
-    createHandoff.current = null;
-    settle?.(false);
+    moreOptionsHandoff.current.answer(false);
   }, [formState.isOpen]);
+
+  /*
+    Unmount is the third way the dialog can go away, and the only one with no
+    close to observe — navigating off `/todos` with it open would otherwise
+    leave the bar's `await` unreachable. Mount-lifetime, deliberately: a
+    cleanup keyed to `isOpen` would run on the *open* transition too, and
+    answer the handoff `openCreate` had just asked.
+  */
+  useEffect(
+    () => () => {
+      moreOptionsHandoff.current.answer(false);
+    },
+    [],
+  );
 
   const hasTodos = result.totalCount > 0 && loadError === null;
 
