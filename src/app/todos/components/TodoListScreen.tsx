@@ -12,12 +12,19 @@ import {
   useOverlayState,
 } from "@heroui/react";
 import { useRouter } from "next/navigation";
+import { useFocusVisible } from "react-aria";
 
 import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
 import { useTodoList } from "@/app/todos/hooks/useTodoList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { createHandoff } from "@/lib/handoff";
+import {
+  focusFrontmostToastAction,
+  focusIsUnclaimed,
+  focusRowAfterRemoval,
+  readFocusedRow,
+} from "@/lib/rowFocus";
 import type { TodoItemData, TodoListFilters } from "@/lib/todo";
 import {
   applyCompletion,
@@ -138,6 +145,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
 
   const router = useRouter();
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
+  /**
+   * Whether the user is driving from the keyboard. The focus rescue below only
+   * runs then, and that restriction is the point: a pointer user's focus is
+   * not a place they are standing, so moving it into a toast would arm Undo
+   * under a Space press they meant for something else. react-aria's own toast
+   * region draws the same line — on a removal it moves focus *out* of the
+   * region in pointer modality.
+   */
+  const { isFocusVisible } = useFocusVisible();
   const { status, priority, query } = filters;
 
   /**
@@ -497,7 +513,21 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     // that the change is visible immediately (review M-1, M-2).
     dismissUndo(todo.id);
 
-    await runToggle(todo, nextCompleted, {
+    /*
+      Read *before* the flip, because the flip is what destroys the answer: the
+      optimistic update removes the row on the very next render, taking the
+      checkbox the user is standing on with it (`docs/PRD.md` US-07). `null`
+      means there is nothing to rescue — the row is staying, or the press came
+      from a pointer, or focus was never on a row to begin with.
+    */
+    const focusAnchor =
+      isFocusVisible && !todoMatchesStatusFilter(nextCompleted, status)
+        ? readFocusedRow()
+        : null;
+
+    let undoIsOffered = false;
+
+    const running = runToggle(todo, nextCompleted, {
       onSuccess: () => {
         showUndoableSuccess(
           todo.id,
@@ -506,6 +536,8 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
             void undoToggle(todo, !nextCompleted);
           },
         );
+
+        undoIsOffered = true;
       },
       failureMessage: TOGGLE_FAILURE_MESSAGE,
       /*
@@ -515,6 +547,37 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       */
       reloadOnSuccess: false,
     });
+
+    if (focusAnchor !== null) {
+      /*
+        Step 1, and it is deliberately not awaited behind the request: the row
+        is already gone optimistically, so waiting for the server would leave
+        focus on `<body>` for the whole round trip.
+
+        It is also the fallback for every path step 2 cannot take — a refused
+        write raises no Undo toast, and `focusIsUnclaimed` declines once the
+        user has moved focus themselves. Running it first means focus is
+        somewhere useful from the first frame whatever step 2 does next
+        (`src/lib/rowFocus.ts`).
+      */
+      await focusRowAfterRemoval(focusAnchor);
+      await running;
+
+      /*
+        Step 2. Guarded on focus being unclaimed — still on a row where step 1
+        left it, or on `<body>` because the list emptied and step 1 had nowhere
+        to land — so a user who has already tabbed somewhere themselves is not
+        dragged into the toast. Skipped entirely when the write failed, where
+        the row comes back and there is no Undo to reach.
+      */
+      if (undoIsOffered) {
+        await focusFrontmostToastAction(focusIsUnclaimed);
+      }
+
+      return;
+    }
+
+    await running;
   };
 
   const handleDelete = async () => {
@@ -660,6 +723,13 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       <TodoGroupedList
         todos={result.todos}
         pendingTodoIds={rowPendingIds()}
+        /*
+          The one row §8.3.2 still gives a row-level pending treatment to: a
+          confirmed delete is running against it and it is about to stop
+          existing. Everything else that is busy is busy optimistically and
+          says so through `aria-busy` and its disabled controls.
+        */
+        vanishingTodoId={isDeleting ? (pendingDelete?.id ?? null) : null}
         showTooltips={isDesktop}
         onToggle={(target, nextCompleted) => {
           void handleToggle(target, nextCompleted);

@@ -19,6 +19,8 @@ const GROUP_HEADING_CLASS = "px-2 pt-1 text-sm leading-6";
 export interface TodoGroupedListProps {
   todos: TodoItemData[];
   pendingTodoIds: ReadonlySet<string>;
+  /** The row a confirmed delete is running against, if any (§8.3.2). */
+  vanishingTodoId: string | null;
   showTooltips: boolean;
   onToggle: (todo: TodoItemData, nextCompleted: boolean) => void;
   onEdit: (todo: TodoItemData) => void;
@@ -40,6 +42,7 @@ export interface TodoGroupedListProps {
 export const TodoGroupedList = ({
   todos,
   pendingTodoIds,
+  vanishingTodoId,
   showTooltips,
   onToggle,
   onEdit,
@@ -76,6 +79,7 @@ export const TodoGroupedList = ({
                 key={todo.id}
                 todo={todo}
                 isPending={pendingTodoIds.has(todo.id)}
+                isVanishing={todo.id === vanishingTodoId}
                 showTooltips={showTooltips}
                 onToggle={onToggle}
                 onEdit={onEdit}

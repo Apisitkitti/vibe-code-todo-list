@@ -152,10 +152,31 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
         onChange={setQuery}
         className="w-full sm:ml-auto sm:max-w-64"
       >
-        <SearchField.Group>
+        <SearchField.Group className="min-h-11 sm:min-h-9">
           <SearchField.SearchIcon />
           <SearchField.Input placeholder="Search todos" />
-          <SearchField.ClearButton />
+          {/*
+            HeroUI ships this control at 20×20 — `padding: 4px` around a 12px
+            icon and no min-size. That is below NFR-05's 44×44 and, alone in
+            this app, below WCAG 2.2 SC 2.5.8's 24×24 floor (QA DEF-16). Missing
+            it puts text back in the box and silently changes which list the
+            user is looking at.
+
+            The same `ICON_BUTTON_SIZING` step the row actions use (§6.3): 44
+            on phones, relaxing to 36 for pointer input. The group is given the
+            matching floor so the field grows with the button rather than the
+            button escaping it — and that also lines the search box up with the
+            status toggles and the priority select beside it, which were
+            already `min-h-11 sm:min-h-9`.
+
+            `aria-label` last, because `CloseButton` hardcodes `aria-label="Close"`
+            before spreading its props: "Close" describes dismissing something,
+            which is not what this does.
+          */}
+          <SearchField.ClearButton
+            className="min-h-11 min-w-11 sm:min-h-9 sm:min-w-9"
+            aria-label="Clear search"
+          />
         </SearchField.Group>
       </SearchField>
     </div>
