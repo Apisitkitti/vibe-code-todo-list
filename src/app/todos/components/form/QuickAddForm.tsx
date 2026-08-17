@@ -54,8 +54,19 @@ export interface QuickAddFormProps {
    * is what makes people stop trusting it (`docs/PRD.md` US-05).
    */
   onValidSubmit: (values: TodoFormValues) => Promise<boolean>;
-  /** Hands the current reading to the modal, so nothing is typed twice. */
-  onMoreOptions: (values: TodoFormValues) => void;
+  /**
+   * Hands the current reading to the modal, so nothing is typed twice, and
+   * resolves when that modal is done with: `true` if it saved, `false` if the
+   * user backed out of it.
+   *
+   * The same contract as `onValidSubmit`, for the same reason — **resolving
+   * `false` is what keeps every character on screen** (QA DEF-23). A handoff
+   * is not a commit, so `Cancel`, `Escape` and the close `×` must all cost
+   * nothing; the bar keeps its text through a 500, a 502 and a field error,
+   * and a reversible action the user chose cannot be the one path that loses
+   * it (`docs/PRD.md` US-05).
+   */
+  onMoreOptions: (values: TodoFormValues) => Promise<boolean>;
 }
 
 /**
@@ -178,6 +189,25 @@ export const QuickAddForm = ({
   };
 
   /**
+   * The handoff to the modal — and it clears the bar on the *save*, never on
+   * the press (QA DEF-23).
+   *
+   * Emptying it here used to be the last statement of this handler, which made
+   * `More options` the one control in the feature that could destroy typed
+   * text: the modal it opens is dismissible three ways, none of them commits
+   * anything, and there is no Undo for a mutation that never happened. Waiting
+   * for the answer costs nothing — a cancelled handoff leaves the bar exactly
+   * as the user left it, chips and all.
+   */
+  const handleMoreOptions = async () => {
+    const saved = await onMoreOptions(toFormValues());
+
+    if (!saved) return;
+
+    clearTo("");
+  };
+
+  /**
    * `handleSubmit` is called here, inside the event handler, rather than at the
    * `onSubmit` prop. Called during render it would be handed a callback that
    * reaches for `inputRef.current`, which is a ref read during render — the
@@ -288,8 +318,7 @@ export const QuickAddForm = ({
           className="min-h-11 sm:ml-auto sm:min-h-8"
           isDisabled={isPending}
           onPress={() => {
-            onMoreOptions(toFormValues());
-            clearTo("");
+            void handleMoreOptions();
           }}
         >
           {MORE_OPTIONS_LABEL}

@@ -1266,6 +1266,17 @@ whatever is already typed into it, and from every row's Edit button. Two
 capture paths, not three: the bar for a title, a day and a priority; the modal
 for a note or a date the vocabulary cannot say.
 
+**`More options` is a handoff, not a commit, and the bar is emptied by the
+save.** Opening the modal copies the reading into it and changes nothing else;
+if the user then dismisses that modal — `Cancel`, `Escape`, or the close `×`,
+all three the same — the bar still holds every character, chips and all, ready
+to submit as it stands. Only a modal that actually saves clears it. This is the
+same guarantee the bar already makes on a 500, a 502 and a field error, and it
+matters more here, not less: a server error is bad luck, while backing out of a
+dialog is a decision the user made about something that had not happened yet.
+Nothing was created, so there is no mutation and no Undo to recover with — the
+text is the only copy, and it is not the bar's to spend.
+
 **The chips are not decoration.** They are the whole mitigation for a parser
 that reads a word the user meant literally, so each one is a *control*: a
 button that puts its words back in the title. `Esc` does the same for every

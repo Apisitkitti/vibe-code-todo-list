@@ -1,4 +1,6 @@
 import {
+  ADD_TODO_LABEL,
+  CANCEL_LABEL,
   CHIP_GROUP_LABEL,
   CHIP_HINT,
   CREATE_FAILURE,
@@ -43,6 +45,10 @@ import { expect, test } from "./support/fixtures";
 const TODO_TITLE = "Buy milk";
 const SECOND_TITLE = "Call the vet";
 const LITERAL_TITLE = "Call mum about tomorrow";
+
+/** DEF-23's line, and the title the bar hands the modal after reading it. */
+const DRAFT_LINE = "Draft the quarterly report and circulate it tomorrow high";
+const DRAFT_TITLE = "Draft the quarterly report and circulate it";
 
 test.describe("quick-add bar", () => {
   test("focus, type, Enter — and focus stays in the bar for the next one", async ({
@@ -328,6 +334,79 @@ test.describe("quick-add bar", () => {
     await expect(
       page.getByRole("textbox", { name: TITLE_FIELD_LABEL }),
     ).toHaveValue(TODO_TITLE);
+  });
+
+  /**
+   * DEF-23. `More options` used to empty the bar on the *press*, so a modal
+   * the user backed out of took every character with it — no todo, no Undo,
+   * nothing to recover. The bar keeps its text through a 500, a 502 and a
+   * field error; a user-initiated, reversible dismissal cannot be the one path
+   * that loses it (`docs/PRD.md` US-05).
+   *
+   * All three dismissals, because they are three different code paths in
+   * `TodoFormModal`: `Cancel` goes through `closeForm`, while `Escape` and the
+   * close `×` go through the overlay state directly.
+   */
+  for (const dismissal of ["Cancel", "Escape", "the close ×"] as const) {
+    test(`More options keeps the typed text when the modal is dismissed with ${dismissal}`, async ({
+      todos,
+      signedIn: page,
+    }) => {
+      const dialog = page.getByRole("dialog");
+
+      await todos.quickAddInput.fill(DRAFT_LINE);
+      await page
+        .getByRole("button", { name: MORE_OPTIONS_LABEL, exact: true })
+        .click();
+
+      await expect(
+        page.getByRole("heading", { name: CREATE_MODAL_HEADING }),
+      ).toBeVisible();
+      // The handoff itself still works: nothing has to be typed twice.
+      await expect(
+        page.getByRole("textbox", { name: TITLE_FIELD_LABEL }),
+      ).toHaveValue(DRAFT_TITLE);
+
+      if (dismissal === "Cancel") {
+        await dialog.getByRole("button", { name: CANCEL_LABEL, exact: true }).click();
+      } else if (dismissal === "Escape") {
+        await page.keyboard.press("Escape");
+      } else {
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      }
+
+      await expect(dialog).toHaveCount(0);
+
+      // Nothing was committed, so nothing should have been lost.
+      await expect(todos.quickAddInput).toHaveValue(DRAFT_LINE);
+      await expect(todos.row(DRAFT_TITLE)).toHaveCount(0);
+      await expectNoFalseSuccess(todos.toasts, addedToast(DRAFT_TITLE));
+
+      // And the bar is still the bar: the text is submittable as it stands.
+      await todos.quickAddInput.press("Enter");
+      await expect(todos.row(DRAFT_TITLE)).toBeVisible();
+    });
+  }
+
+  /** The other half of DEF-23: the bar clears on the save, not on the press. */
+  test("More options clears the bar once the modal actually saves", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    await todos.quickAddInput.fill(DRAFT_LINE);
+    await page
+      .getByRole("button", { name: MORE_OPTIONS_LABEL, exact: true })
+      .click();
+
+    await expect(
+      page.getByRole("heading", { name: CREATE_MODAL_HEADING }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: ADD_TODO_LABEL, exact: true }).click();
+
+    await expect(todos.row(DRAFT_TITLE)).toBeVisible();
+    // Saved once, and the bar is empty and ready for the next todo.
+    await expect(todos.quickAddInput).toHaveValue("");
   });
 
   test("a 500 on create leaves the typed text in the input", async ({
