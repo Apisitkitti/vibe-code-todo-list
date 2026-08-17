@@ -40,9 +40,6 @@ const CHIP_HINT = "Press Esc to keep your text exactly as typed.";
 
 const ESCAPE_KEY = "Escape";
 
-/** Every kind, for the one keystroke that releases all of them at once. */
-const ALL_TOKEN_KINDS: readonly QuickAddTokenKind[] = ["due", "priority"];
-
 export interface QuickAddFormProps {
   /** Focused by the empty state's call to action, and after every create. */
   inputRef: RefObject<HTMLInputElement | null>;
@@ -78,8 +75,10 @@ export interface QuickAddFormProps {
  * **The chips are controls, not labels.** Each one is a button that puts its
  * words back into the title and releases its kind, which re-reads the text
  * with that kind stepped over rather than switched off — so releasing the date
- * never costs the priority. `Esc` does it for all of them without leaving the
- * input, which is the keyboard-first version of the same escape hatch.
+ * never costs the priority. `Esc` does it for every chip **on screen** without
+ * leaving the input, which is the keyboard-first version of the same escape
+ * hatch — and only for those, because a refusal of something never offered
+ * records a reading the user was never shown (`handleKeyDown`, QA DEF-24).
  * Without this the parser would be able to lift a word the user meant
  * literally with no way back, and that is the one failure this feature is not
  * allowed to have (`docs/DESIGN.md` §7.17).
@@ -251,11 +250,34 @@ export const QuickAddForm = ({
     void handleSubmit(() => submit())(event);
   };
 
+  /**
+   * `Esc` is **every chip at once, and nothing else** (QA DEF-24).
+   *
+   * It used to release both kinds unconditionally, which meant it could refuse
+   * a kind that was never offered — and refusing a kind rule 2 had *declined to
+   * lift* is not free. `releaseAgainst` re-reads the line with that kind
+   * stepped over, and a step-over is not gated by `canLift`, so the scan walked
+   * straight past a run that is still sitting in the title and recorded a
+   * `tail` reaching words no chip ever named. `stillReads` then read an edit to
+   * those title words as an edit to the reading, the refusal lapsed, the chip
+   * came back, and Enter ate the word: `in 3 days high`, `Esc`, correct your
+   * own `3` to a `4`, and you save `in 4 days` at High priority. That is
+   * DEF-22's harm reached through `Esc`.
+   *
+   * Releasing only the kinds on screen is exactly what pressing every chip in
+   * turn does, which is what §7.17 has always said `Esc` is, and it is why the
+   * chip path never had this defect. It is also provably safe rather than
+   * merely narrower: a kind that *fired* was lifted, so releasing it moves its
+   * words from `lifted` to `steppedOver` — one for one, and `canLift`
+   * subtracts both (RB-1). The budget is therefore unchanged at every step, the
+   * scan stops exactly where the user watched it stop, and the recorded reading
+   * is the reading on screen.
+   */
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key !== ESCAPE_KEY || parsed.tokens.length === 0) return;
 
     event.preventDefault();
-    releaseKinds(ALL_TOKEN_KINDS);
+    releaseKinds(parsed.tokens.map((token) => token.kind));
   };
 
   return (

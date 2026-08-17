@@ -67,6 +67,20 @@ dayjs.extend(customParseFormat);
  * take *more* than it took before: words handed back to the title are not
  * budget for rule 2 (`canLift`, review RB-1).
  *
+ * **A release is only ever asked for a kind that fired** — that is the caller's
+ * half of the contract, and `release` says why. Stepping over is deliberately
+ * *not* gated by `canLift`: nothing is being taken, so there is no survivor to
+ * count. That is right for a kind the reading lifted, and wrong for one rule 2
+ * had refused, because there the step-over walks past words that are still in
+ * the title. Nothing is eaten either way — a stepped-over run stays put — but
+ * the scan reads further left than the parse on screen did, and `tail` says so.
+ *
+ * Releasing only what fired keeps the two identical, and not merely closer:
+ * a kind that fired was lifted, so releasing it moves exactly its own words
+ * from `lifted` to `steppedOver`, `canLift` subtracts both, the budget is
+ * unchanged at every step, and the scan therefore stops where it stopped
+ * before. Same cursor, same `tail`, one chip fewer (QA DEF-24).
+ *
  * The output is deliberately the existing contract: `dueAt` is the
  * `YYYY-MM-DD` wire format `todoFormSchema` and `parseDueDate` already own, so
  * nothing downstream of the bar knows this module exists.
@@ -130,6 +144,12 @@ export interface QuickAddOptions {
    * Kinds the user asked to keep as literal text. A released kind is matched
    * and stepped over rather than skipped, so releasing one never costs the
    * other — see the note on B-1 above.
+   *
+   * **Only kinds this reading actually offered.** A step-over is not gated by
+   * rule 2, so releasing a kind the reading never lifted steps past a run rule
+   * 2 had refused and reports a `tail` covering words that are still title.
+   * Refusing what was never offered is not a thing the UI can ask for anyway —
+   * a chip releases its own kind, and `Esc` releases the chips on screen.
    */
   release?: readonly QuickAddTokenKind[];
 }
@@ -362,6 +382,13 @@ export const parseQuickAdd = (
  * a word inserted there, a trailing space and a doubled space all leave the
  * refusal standing, and a different tail word ends it (QA DEF-22).
  *
+ * **And the reading it is keyed to is the reading the user was shown.** The
+ * refusal's whole job is to survive edits the parse could not see, so a `tail`
+ * covering words the chips never named hands that protection to the wrong
+ * words — the user corrects their own title and the refusal lapses under them
+ * (QA DEF-24). `releaseAgainst` states the precondition that keeps the two the
+ * same reading.
+ *
  * **A lapsed refusal does not come back**, which is the other half of the rule
  * and lives in the bar rather than here: `releaseAfterEdit` is applied to every
  * edit, so once the text leaves the reading the refusal is gone for good. That
@@ -414,8 +441,15 @@ const stillReads = (release: QuickAddRelease, text: string) => {
  * Records a refusal of `kinds` against what `text` currently reads as.
  *
  * The tail is taken from the parse *under* the refusal, because that is the
- * reading the user is now looking at: a released run is stepped over rather
- * than skipped, so refusing one kind can let the scan reach further left (B-1).
+ * reading the user is left looking at once the released words are back in the
+ * title (B-1).
+ *
+ * **`kinds` must be kinds that reading offered** — the chip pressed, or every
+ * chip on screen. Given that, this is the same reading either way: releasing a
+ * kind that fired is budget-neutral for rule 2, so the scan stops where it
+ * already stopped. Given anything else, the recorded tail can reach past the
+ * chips into the title, and an edit the user makes to their own title then
+ * revokes a refusal it never touched (QA DEF-24). See `QuickAddOptions.release`.
  */
 export const releaseAgainst = (
   text: string,

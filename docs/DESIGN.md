@@ -1280,7 +1280,11 @@ text is the only copy, and it is not the bar's to spend.
 **The chips are not decoration.** They are the whole mitigation for a parser
 that reads a word the user meant literally, so each one is a *control*: a
 button that puts its words back in the title. `Esc` does the same for every
-chip at once, from the keyboard, without leaving the input. A parse the user
+chip at once, from the keyboard, without leaving the input — **every chip, and
+nothing that is not a chip.** A word rule 2 declined to lift was never offered,
+so it is not `Esc`'s to refuse; refusing it anyway would record the refusal
+against a longer reading than the one on screen, and the user's own title would
+then be able to revoke it. A parse the user
 cannot see and cannot refuse is the thing this feature must never ship — which
 is why the reading is also **announced through a polite live region**, not
 merely drawn. The chips are buttons a screen-reader user only meets by tabbing
@@ -1292,12 +1296,15 @@ priority read and its chip on screen; the released words go back into the
 title and the reading carries on past them.
 
 **A refusal belongs to the reading it was made against — not to the exact
-string.** Only trailing words are ever read, and whitespace is not a word, so
-an edit the parser cannot see must not be able to withdraw a refusal of what
-it read. Correcting a typo at the start of the line, inserting a word there,
-or typing one trailing space all leave the refusal standing. Changing a
-trailing word ends it, because that is a different reading: the chips come
-back, visibly, and are refusable again.
+string, and not to a wider reading than the chips showed.** Only trailing
+words are ever read, and whitespace is not a word, so an edit the parser
+cannot see must not be able to withdraw a refusal of what it read. Correcting
+a typo at the start of the line, inserting a word there, or typing one
+trailing space all leave the refusal standing — and so does correcting a word
+of the title on a line made entirely of vocabulary, such as the `3` in
+`in 3 days high`, where the only chip is the priority and `in 3 days` is
+title. Changing a trailing word ends it, because that is a different reading:
+the chips come back, visibly, and are refusable again.
 
 **And a refusal that has ended does not return.** Retyping the line reaches
 the same last word eventually, and on the text alone that would look like the

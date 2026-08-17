@@ -653,24 +653,100 @@ describe("heldRelease — a refusal covers the reading, and only that", () => {
 
   /**
    * The reading is taken from the parse *under* the refusal, because that is
-   * what the user is now looking at: releasing the date steps over `tomorrow`
-   * and lets the scan reach `high` behind it (B-1), so the tail is both words.
+   * what the user is left looking at once the released words are back in the
+   * title: releasing the date steps over `tomorrow` and lets the scan reach
+   * `high` behind it (B-1).
    *
-   * `Esc` on `tomorrow high` is the case that shows it. Rule 2 blocked the
-   * date, so only the priority had a chip — but Esc refuses every kind, and
-   * with that word stepped over the scan reaches the date behind it. Recording
-   * what the *unreleased* parse read would leave the first word outside the
-   * reading, and a later `tonight high` would then keep a refusal never made
-   * against it, silently: DEF-22 again by another route.
+   * Where the two readings could differ, they must not — which is `kinds`'
+   * precondition, and this is it stated as a value. **Releasing a kind that
+   * fired is budget-neutral:** its words move from `lifted` to `steppedOver`,
+   * `canLift` subtracts both (RB-1), and the scan therefore stops exactly where
+   * the user watched it stop. Every degenerate line QA measured DEF-24 on is in
+   * the table, because those are the lines where a lift was refused and there
+   * is something to the left of the chips to get wrong.
    */
-  test("a reading the release itself widened is recorded in full", () => {
-    const release = releaseAgainst("tomorrow high", ["due", "priority"], {
+  test("refusing the chips on screen records the reading on screen", () => {
+    for (const typed of [
+      "buy milk tomorrow high",
+      "Call mum about high tomorrow",
+      "in 3 days high",
+      "next week high",
+      "tomorrow high",
+      "high friday",
+      "high in 3 days",
+      "plan the week tomorrow high",
+    ]) {
+      const shown = parse(typed);
+      const offered = shown.tokens.map((token) => token.kind);
+
+      expect(releaseAgainst(typed, offered, { now: NOW }).tail).toEqual(shown.tail);
+    }
+  });
+
+  /**
+   * **DEF-24, and the reason `kinds` has a precondition at all.**
+   *
+   * A step-over is not gated by rule 2 — nothing is being taken, so there is no
+   * survivor to count — which is right for a kind that fired and wrong for one
+   * rule 2 refused. On `tomorrow high` the date was never offered: lifting it
+   * would empty the title, so `tomorrow` *is* the title and the only chip is
+   * the priority. Release the date anyway and the scan steps over a title word
+   * and reports it in the tail, which is a reading the user was never shown.
+   *
+   * Kept as an assertion rather than deleted because the parser still behaves
+   * this way and a caller can still ask for it. The fix is that nothing does:
+   * a chip releases its own kind and `Esc` releases the chips on screen, so the
+   * bar never reaches this branch.
+   */
+  test("refusing a kind that was never offered reads past the chips", () => {
+    const shown = parse("tomorrow high");
+
+    expect(shown.title).toBe("tomorrow");
+    expect(shown.tokens.map((token) => token.kind)).toEqual(["priority"]);
+    expect(shown.tail).toEqual(["high"]);
+
+    const overWide = releaseAgainst("tomorrow high", ["due", "priority"], {
       now: NOW,
     });
 
-    expect(release.tail).toEqual(["tomorrow", "high"]);
-    expect(heldRelease(release, "tomorrow high")).toEqual(["due", "priority"]);
-    expect(heldRelease(release, "tonight high")).toEqual([]);
+    // The title word, in a refusal that never named it.
+    expect(overWide.tail).toEqual(["tomorrow", "high"]);
+    // …and so an edit to the title revokes it, which is the whole defect.
+    expect(heldRelease(overWide, "tonight high")).toEqual([]);
+  });
+
+  /**
+   * DEF-24's reproduction, walked the way the bar walks it: read the line,
+   * refuse the chips it showed, edit a word of the title, and read it again
+   * under whatever refusal survived.
+   *
+   * `in 3 days high` shows one chip. Correcting the `3` to a `4` touches no
+   * word any chip named, so the refusal stands, no chip returns, and the line
+   * saves whole. Under the old `Esc` the refusal covered all four words, this
+   * lapsed, and the todo saved as `in 4 days` at High priority.
+   */
+  test("correcting a title word leaves a refusal of the chips standing", () => {
+    const typed = "in 3 days high";
+    const shown = parse(typed);
+
+    expect(shown).toMatchObject({ title: "in 3 days", priority: "high" });
+    expect(shown.tokens.map((token) => token.kind)).toEqual(["priority"]);
+
+    const release = releaseAgainst(typed, shown.tokens.map((token) => token.kind), {
+      now: NOW,
+    });
+    const edited = "in 4 days high";
+
+    expect(release.tail).toEqual(["high"]);
+    expect(heldRelease(release, edited)).toEqual(["priority"]);
+    expect(
+      parseQuickAdd(edited, { now: NOW, release: heldRelease(release, edited) }),
+    ).toMatchObject({
+      title: "in 4 days high",
+      dueAt: "",
+      priority: "medium",
+      tokens: [],
+    });
   });
 
   test("the refusal is what the parse is then handed, end to end", () => {
