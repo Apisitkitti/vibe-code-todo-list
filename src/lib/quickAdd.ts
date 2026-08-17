@@ -356,64 +356,57 @@ export const parseQuickAdd = (
 /**
  * A refusal, and the reading it was made against.
  *
- * **Keyed to the reading — the words the parse read, and where they sit —
- * rather than to the raw field value** (review B-2, QA DEF-22).
+ * Keyed to `tail` — the words the parse read — and to nothing else, because
+ * nothing else can change the reading: only trailing words are ever read
+ * (rule 1), and whitespace is not a word at all. So a typo fixed to the left,
+ * a word inserted there, a trailing space and a doubled space all leave the
+ * refusal standing, and a different tail word ends it (QA DEF-22).
  *
- * A release was first a bare set of kinds that nothing ever cleared, so one
- * `Esc` left the parser dead for everything typed afterwards — no chips, no
- * date, no priority and no signal that anything had been switched off — and the
- * same set leaked into the next todo during burst capture. Keying it to the text
- * fixed that, by making the refusal lapse the moment the text changed. But it
- * keyed to the *raw string*, and a raw string changes for reasons the parser
- * cannot see: fixing a typo three words to the left, or typing one trailing
- * space, revoked a refusal the user never withdrew, and the todo then saved
- * short by a word with a due date they had explicitly refused, under a success
- * toast (DEF-22, the third of this family).
+ * **A lapsed refusal does not come back**, which is the other half of the rule
+ * and lives in the bar rather than here: `releaseAfterEdit` is applied to every
+ * edit, so once the text leaves the reading the refusal is gone for good. That
+ * is what makes a retyped line a new line — to retype a line you must first
+ * leave the reading — and it is what keeps review B-2's guarantee that a
+ * refusal never outlives the text it was made against. Without it the refusal
+ * would simply reappear when the new line happened to end in the same word: no
+ * chip, no date and no signal, which is the silently disabled parser B-2 was
+ * filed about and is worse than an unwanted chip.
  *
- * So the rule is neither "the exact text" nor "forever":
- *
- * > **A refusal survives every edit that leaves the reading it was made against
- * > untouched, and lapses the moment that reading changes.**
- *
- * A reading is `tail` — rule 1's trailing run, the only words the parser ever
- * looks at — held in place by `wordCount`, the length of the line it was read
- * out of. So:
- *
- *  - A typo fixed to the left of the tail, a trailing space, a doubled space:
- *    the tail is the same words in the same place, and none of those edits is
- *    even visible to a parser that trims and splits on `/\s+/` before it reads
- *    anything. **The refusal holds.**
- *  - A different tail word, a word added or removed, the line replaced: this is
- *    a different reading of a different line. **The refusal lapses**, the chips
- *    come back, and they are refusable again.
- *
- * That second half is B-2's trade, kept deliberately and with its reasoning
- * intact: an unwanted chip is on screen and costs one keystroke, while a
- * silently disabled parser is invisible. `wordCount` is what keeps it — without
- * it a refusal of `tomorrow` would silently follow the user into every later
- * line ending in `tomorrow`, which is the stale parser B-2 was filed about.
- * What B-2 never argued for, and what DEF-22 was, is a refusal revoked by an
- * edit that changes no word the parse can reach.
+ * **The residual, stated rather than papered over:** a single edit that
+ * replaces the line without ever passing through a state that leaves the
+ * reading — a paste, in practice — keeps the refusal. No comparison of two
+ * texts can tell that from an edit to the left of the tail, because the two
+ * results are the same text; only the path differs, and a paste has no path. A
+ * submit clears the refusal outright (`clearTo`), so it cannot reach the next
+ * todo.
  */
 export interface QuickAddRelease {
   /** The reading refused, as `QuickAddResult.tail` had it. */
   tail: readonly string[];
-  /** Words in the whole line, which is what anchors `tail` to its place in it. */
-  wordCount: number;
   kinds: readonly QuickAddTokenKind[];
 }
 
-export const NO_RELEASE: QuickAddRelease = {
-  tail: [],
-  wordCount: 0,
-  kinds: [],
-};
+export const NO_RELEASE: QuickAddRelease = { tail: [], kinds: [] };
 
 /** The parser's own normalisation, and the only unit any of this compares in. */
 const toWords = (text: string): string[] => {
   const trimmed = text.trim();
 
   return trimmed === "" ? [] : trimmed.split(/\s+/);
+};
+
+/** Whether `text` still ends in the words the refusal was made against. */
+const stillReads = (release: QuickAddRelease, text: string) => {
+  const { tail, kinds } = release;
+
+  if (kinds.length === 0 || tail.length === 0) return false;
+
+  const words = toWords(text);
+  const offset = words.length - tail.length;
+
+  if (offset < 0) return false;
+
+  return tail.every((word, index) => word === words[offset + index]);
 };
 
 /**
@@ -429,33 +422,24 @@ export const releaseAgainst = (
   options: QuickAddOptions = {},
 ): QuickAddRelease => ({
   tail: parseQuickAdd(text, { ...options, release: kinds }).tail,
-  wordCount: toWords(text).length,
   kinds: [...new Set(kinds)],
 });
 
 /**
- * The kinds still refused for `text` — empty once the reading has changed.
+ * The refusal after an edit: itself while the reading is still there, and
+ * `NO_RELEASE` the moment it is not.
  *
- * Compared as word sequences, never as strings, which is the whole of DEF-22:
- * whitespace is not a word, so an edit made only of whitespace cannot withdraw
- * anything.
+ * **One-way.** Applied to every edit, this is what stops a refusal reappearing
+ * because the line was retyped to end in the same word — see `QuickAddRelease`.
  */
+export const releaseAfterEdit = (
+  release: QuickAddRelease,
+  text: string,
+): QuickAddRelease => (stillReads(release, text) ? release : NO_RELEASE);
+
+/** The kinds refused for `text` right now. Empty once the reading has gone. */
 export const heldRelease = (
   release: QuickAddRelease,
   text: string,
-): readonly QuickAddTokenKind[] => {
-  const { tail, wordCount, kinds } = release;
-
-  if (kinds.length === 0 || tail.length === 0) return [];
-
-  const words = toWords(text);
-
-  // Same line length, so the tail is still sitting where it was read from.
-  if (words.length !== wordCount) return [];
-
-  const offset = words.length - tail.length;
-
-  return tail.every((word, index) => word === words[offset + index])
-    ? kinds
-    : [];
-};
+): readonly QuickAddTokenKind[] =>
+  stillReads(release, text) ? release.kinds : [];

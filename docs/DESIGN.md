@@ -1292,16 +1292,27 @@ priority read and its chip on screen; the released words go back into the
 title and the reading carries on past them.
 
 **A refusal belongs to the reading it was made against — not to the exact
-string.** It lasts exactly as long as that reading: change a trailing word,
-add a word, remove one, or replace the line, and the parse starts fresh and
-visibly, chips back and refusable again. An unwanted chip is on screen and
-costs one keystroke; a silently disabled parser is invisible, which is the
-worse of the two. But the reverse is worse still, and it is what "exact
-string" bought: correcting a typo at the *start* of the line, or typing one
-trailing space, put back a reading the user had refused and saved the todo
-short by a word under a success toast. Only trailing words are ever read, and
-whitespace is not a word — so an edit the parser cannot see must not be able
-to withdraw a refusal of what it read.
+string.** Only trailing words are ever read, and whitespace is not a word, so
+an edit the parser cannot see must not be able to withdraw a refusal of what
+it read. Correcting a typo at the start of the line, inserting a word there,
+or typing one trailing space all leave the refusal standing. Changing a
+trailing word ends it, because that is a different reading: the chips come
+back, visibly, and are refusable again.
+
+**And a refusal that has ended does not return.** Retyping the line reaches
+the same last word eventually, and on the text alone that would look like the
+refusal all over again — chips gone, date silently applied, nothing on screen
+to say so. So the refusal ends at the first edit that leaves the reading, and
+retyping a line means passing through such an edit. This is what keeps a
+refusal from outliving the text it was made against, which matters more than
+the reverse: an unwanted chip is on screen and costs one keystroke, while a
+silently disabled parser is invisible.
+
+*Residual, stated because it is real:* a single edit that replaces the whole
+line without ever passing through anything else — a paste — keeps a refusal
+whose words the new line happens to end in. Two texts cannot be told apart by
+the path that produced them, and a paste has no path. Submitting clears the
+refusal outright, so it never reaches the next todo.
 
 **A capital letter switches the parser off for that word,** which is a
 stronger guarantee than any chip: nothing fires, so there is nothing to notice

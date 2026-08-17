@@ -16,6 +16,7 @@ import {
   NO_RELEASE,
   heldRelease,
   parseQuickAdd,
+  releaseAfterEdit,
   releaseAgainst,
   type QuickAddRelease,
   type QuickAddTokenKind,
@@ -105,7 +106,7 @@ export const QuickAddForm = ({
   });
 
   const text = useWatch({ control, name: "text" }) ?? "";
-  /** Only a refusal whose tail is still on screen counts. `QuickAddRelease`. */
+  /** Only a refusal whose reading is still on screen counts. See below. */
   const activeRelease = heldRelease(release, text);
   /*
     Read on every render rather than memoised against a captured `now`: "today"
@@ -142,6 +143,27 @@ export const QuickAddForm = ({
 
   const releaseKinds = (kinds: readonly QuickAddTokenKind[]) => {
     setRelease(releaseAgainst(getValues("text"), [...activeRelease, ...kinds]));
+  };
+
+  /**
+   * Every edit, and the one place a refusal ends.
+   *
+   * `releaseAfterEdit` is applied here rather than only derived at render
+   * because **a lapsed refusal must not come back** (Senior F1). Derivation
+   * alone answers "does the text end in the refused words *right now*", which
+   * a retyped line satisfies again the moment the user reaches the same last
+   * word — so the chips would vanish mid-sentence with no signal, which is the
+   * dead parser review B-2 was filed about. Dropping the state on the edit
+   * that leaves the reading makes it one-way: retyping a line means passing
+   * through a state that is not the reading, and that ends it.
+   *
+   * The derivation above stays, because it is what keeps this render
+   * self-consistent — the state update has not landed yet — and because
+   * `clearTo` is the other way a refusal ends.
+   */
+  const handleTextChange = (next: string, onChange: (value: string) => void) => {
+    onChange(next);
+    setRelease((current) => releaseAfterEdit(current, next));
   };
 
   const clearTo = (next: string) => {
@@ -243,7 +265,9 @@ export const QuickAddForm = ({
                 isLabelHidden
                 placeholder={FIELD_PLACEHOLDER}
                 value={field.value ?? ""}
-                onChange={field.onChange}
+                onChange={(next) => {
+                  handleTextChange(next, field.onChange);
+                }}
                 onBlur={field.onBlur}
                 onKeyDown={handleKeyDown}
                 isInvalid={errorMessage !== undefined}

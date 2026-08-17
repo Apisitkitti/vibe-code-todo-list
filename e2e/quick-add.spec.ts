@@ -46,6 +46,13 @@ const TODO_TITLE = "Buy milk";
 const SECOND_TITLE = "Call the vet";
 const LITERAL_TITLE = "Call mum about tomorrow";
 
+/**
+ * F1's replacement line: four words ending in `tomorrow`, exactly like
+ * `LITERAL_TITLE`, so nothing about its *shape* can be what tells them apart.
+ */
+const RETYPED_LINE = "Buy fresh organic tomorrow";
+const RETYPED_TITLE = "Buy fresh organic";
+
 /** DEF-23's line, and the title the bar hands the modal after reading it. */
 const DRAFT_LINE = "Draft the quarterly report and circulate it tomorrow high";
 const DRAFT_TITLE = "Draft the quarterly report and circulate it";
@@ -176,10 +183,18 @@ test.describe("quick-add bar", () => {
   }
 
   /**
-   * Review B-2. The release used to be a bare set of kinds that nothing ever
-   * cleared, so one `Esc` left the parser dead for everything typed
-   * afterwards — no chips, no date, no priority, and no signal that anything
-   * had been switched off.
+   * Review B-2, and QA/Senior F1. The release used to be a bare set of kinds
+   * that nothing ever cleared, so one `Esc` left the parser dead for
+   * everything typed afterwards — no chips, no date, no priority, and no
+   * signal that anything had been switched off.
+   *
+   * **The fixture is a four-word line ending in `tomorrow`, retyped a
+   * character at a time, and both of those are load-bearing.** The earlier
+   * fixture retyped a *three*-word line with `fill`, which meant this test
+   * could pass on a rule that only ever compared line lengths — it was green
+   * against a release keyed to `wordCount`, under which any four-word line
+   * ending in `tomorrow` silently kept the refusal. A test that cannot fail
+   * for the right reason is not pinning anything.
    */
   test("a refusal does not outlive the text it was made against", async ({
     todos,
@@ -193,13 +208,17 @@ test.describe("quick-add bar", () => {
     await todos.quickAddInput.press("Escape");
     await expect(dueChip).toHaveCount(0);
 
-    // Retyping is a fresh reading, not a dead parser.
-    await todos.quickAddInput.fill("Buy milk tomorrow");
+    // Select all and retype, the way a user replaces a line: the first
+    // keystroke leaves the reading, and that is what ends the refusal.
+    await todos.quickAddInput.press("ControlOrMeta+a");
+    await todos.quickAddInput.pressSequentially(RETYPED_LINE);
+
+    // A different line is a fresh reading, not a dead parser.
     await expect(dueChip).toBeVisible();
 
     await todos.quickAddInput.press("Enter");
-    await expect(todos.row(TODO_TITLE)).toBeVisible();
-    await expect(todos.row(TODO_TITLE)).toContainText("Tomorrow");
+    await expect(todos.row(RETYPED_TITLE)).toBeVisible();
+    await expect(todos.row(RETYPED_TITLE)).toContainText("Tomorrow");
 
     // …and it did not leak into the todo after that one either.
     await todos.quickAddInput.fill("Call the vet high");
@@ -277,6 +296,39 @@ test.describe("quick-add bar", () => {
 
     await expect(todos.row(LITERAL_TITLE)).toBeVisible();
     await expect(todos.row(LITERAL_TITLE).locator("time")).toHaveCount(0);
+  });
+
+  /**
+   * Senior F2. A word added outside the reading is exactly as invisible to the
+   * parse as the letter of reproduction A and the space of reproduction B —
+   * rule 1 never looks to the left of the tail — so it must not withdraw the
+   * refusal either. Keying the refusal to the line's *length* made this a
+   * revocation, which is DEF-22's own harm with a word in place of a letter.
+   */
+  test("a refusal survives a word inserted outside the reading", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    const dueChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Tomorrow"), "tomorrow"),
+    });
+
+    await todos.quickAddInput.fill(LITERAL_TITLE);
+    await dueChip.click();
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Home");
+    await todos.quickAddInput.pressSequentially("Urgent ");
+
+    await expect(todos.quickAddInput).toHaveValue(`Urgent ${LITERAL_TITLE}`);
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Enter");
+
+    const saved = `Urgent ${LITERAL_TITLE}`;
+
+    await expect(todos.row(saved)).toBeVisible();
+    await expect(todos.row(saved).locator("time")).toHaveCount(0);
   });
 
   /**
