@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Alert,
@@ -17,6 +17,7 @@ import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
 import { useTodoList } from "@/app/todos/hooks/useTodoList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getErrorMessage } from "@/lib/getErrorMessage";
+import { createHandoff } from "@/lib/handoff";
 import type { TodoItemData, TodoListFilters } from "@/lib/todo";
 import {
   applyCompletion,
@@ -157,6 +158,16 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   const undoToastKeys = useRef(new Map<string, string>());
 
   /**
+   * The outstanding `More options` handoff: what tells the quick-add bar
+   * whether the modal it opened saved or was backed out of (QA DEF-23).
+   *
+   * A ref rather than state because nothing renders from it, and because it
+   * has to be readable from a callback that may outlive the render it was made
+   * in. `Handoff` owns the answer-exactly-once invariant.
+   */
+  const moreOptionsHandoff = useRef(createHandoff<boolean>());
+
+  /**
    * Returns whether it dismissed anything, which is what makes it usable as a
    * re-entrancy guard: reading and clearing the key is atomic, so only the
    * first of two fast presses sees a key and runs the undo (review r-1).
@@ -202,12 +213,26 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    * carrying whatever it had already read. There is no toolbar button any
    * more — one bar, and one modal behind it for a note or a date the
    * vocabulary cannot say.
+   *
+   * **Resolves `false` when the modal closes without saving**, which is what
+   * lets the bar hold its text through a `Cancel`, an `Escape` and the close
+   * `×` (QA DEF-23). The bar used to be emptied on the press, so backing out
+   * of a dialog that committed nothing destroyed the line — the one lossy path
+   * in a feature whose contract is that it never loses a keystroke.
    */
   const openCreate = (draft: TodoFormValues) => {
     setCreateDraft(draft);
     setCreateSeq((seq) => seq + 1);
     setEditingTodo(null);
     formState.open();
+
+    /*
+      `false` for anything still outstanding: two presses in one frame would
+      otherwise strand the first opener on a promise nothing can resolve
+      (Senior F5). Not reachable through the dialog today, which is the reason
+      to state it here rather than rely on it.
+    */
+    return moreOptionsHandoff.current.ask(false);
   };
 
   const openEdit = (todo: TodoItemData) => {
@@ -277,6 +302,16 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     reloadWithSkeleton();
 
     const isEdit = previous !== null;
+
+    /*
+      Before the render that the modal's own close triggers, so the bar hears
+      "saved" rather than the "dismissed" the close would otherwise report:
+      `TodoFormModal` calls `closeForm()` and then `onSaved()` in one
+      synchronous block, and this settles the handoff inside it. An edit never
+      has one outstanding — the modal cannot be opened twice over — and if it
+      somehow did, `false` is the answer that keeps the user's text.
+    */
+    moreOptionsHandoff.current.answer(!isEdit);
 
     showUndoableSuccess(
       saved.id,
@@ -634,6 +669,34 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       />
     );
   };
+
+  /**
+   * The dialog closed. Anything still waiting on it was dismissed, not saved —
+   * `handleSaved` settles the save case synchronously, before this runs — so
+   * this is the single place that answers `Cancel`, `Escape` and the close `×`
+   * alike, without the bar having to know which one the user reached for
+   * (QA DEF-23). Inlined rather than calling `settleHandoff` so the effect owns
+   * its whole dependency list.
+   */
+  useEffect(() => {
+    if (formState.isOpen) return;
+
+    moreOptionsHandoff.current.answer(false);
+  }, [formState.isOpen]);
+
+  /*
+    Unmount is the third way the dialog can go away, and the only one with no
+    close to observe — navigating off `/todos` with it open would otherwise
+    leave the bar's `await` unreachable. Mount-lifetime, deliberately: a
+    cleanup keyed to `isOpen` would run on the *open* transition too, and
+    answer the handoff `openCreate` had just asked.
+  */
+  useEffect(
+    () => () => {
+      moreOptionsHandoff.current.answer(false);
+    },
+    [],
+  );
 
   const hasTodos = result.totalCount > 0 && loadError === null;
 

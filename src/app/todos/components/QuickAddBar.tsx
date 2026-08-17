@@ -25,7 +25,11 @@ export interface QuickAddBarProps {
    * `onSaved`, so both capture paths report through one place.
    */
   onCreated: (saved: TodoItemData) => void;
-  onMoreOptions: (draft: TodoFormValues) => void;
+  /**
+   * Opens the modal on `draft` and resolves `true` only if it saved. A
+   * dismissal resolves `false` and the bar keeps every character (QA DEF-23).
+   */
+  onMoreOptions: (draft: TodoFormValues) => Promise<boolean>;
 }
 
 /**
@@ -94,7 +98,8 @@ export const QuickAddBar = ({
       onValidSubmit={handleValidSubmit}
       onMoreOptions={(draft) => {
         setServerError(null);
-        onMoreOptions(draft);
+
+        return onMoreOptions(draft);
       }}
     />
   );

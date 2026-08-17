@@ -1,4 +1,6 @@
 import {
+  ADD_TODO_LABEL,
+  CANCEL_LABEL,
   CHIP_GROUP_LABEL,
   CHIP_HINT,
   CREATE_FAILURE,
@@ -43,6 +45,17 @@ import { expect, test } from "./support/fixtures";
 const TODO_TITLE = "Buy milk";
 const SECOND_TITLE = "Call the vet";
 const LITERAL_TITLE = "Call mum about tomorrow";
+
+/**
+ * F1's replacement line: four words ending in `tomorrow`, exactly like
+ * `LITERAL_TITLE`, so nothing about its *shape* can be what tells them apart.
+ */
+const RETYPED_LINE = "Buy fresh organic tomorrow";
+const RETYPED_TITLE = "Buy fresh organic";
+
+/** DEF-23's line, and the title the bar hands the modal after reading it. */
+const DRAFT_LINE = "Draft the quarterly report and circulate it tomorrow high";
+const DRAFT_TITLE = "Draft the quarterly report and circulate it";
 
 test.describe("quick-add bar", () => {
   test("focus, type, Enter — and focus stays in the bar for the next one", async ({
@@ -170,10 +183,18 @@ test.describe("quick-add bar", () => {
   }
 
   /**
-   * Review B-2. The release used to be a bare set of kinds that nothing ever
-   * cleared, so one `Esc` left the parser dead for everything typed
-   * afterwards — no chips, no date, no priority, and no signal that anything
-   * had been switched off.
+   * Review B-2, and QA/Senior F1. The release used to be a bare set of kinds
+   * that nothing ever cleared, so one `Esc` left the parser dead for
+   * everything typed afterwards — no chips, no date, no priority, and no
+   * signal that anything had been switched off.
+   *
+   * **The fixture is a four-word line ending in `tomorrow`, retyped a
+   * character at a time, and both of those are load-bearing.** The earlier
+   * fixture retyped a *three*-word line with `fill`, which meant this test
+   * could pass on a rule that only ever compared line lengths — it was green
+   * against a release keyed to `wordCount`, under which any four-word line
+   * ending in `tomorrow` silently kept the refusal. A test that cannot fail
+   * for the right reason is not pinning anything.
    */
   test("a refusal does not outlive the text it was made against", async ({
     todos,
@@ -187,13 +208,17 @@ test.describe("quick-add bar", () => {
     await todos.quickAddInput.press("Escape");
     await expect(dueChip).toHaveCount(0);
 
-    // Retyping is a fresh reading, not a dead parser.
-    await todos.quickAddInput.fill("Buy milk tomorrow");
+    // Select all and retype, the way a user replaces a line: the first
+    // keystroke leaves the reading, and that is what ends the refusal.
+    await todos.quickAddInput.press("ControlOrMeta+a");
+    await todos.quickAddInput.pressSequentially(RETYPED_LINE);
+
+    // A different line is a fresh reading, not a dead parser.
     await expect(dueChip).toBeVisible();
 
     await todos.quickAddInput.press("Enter");
-    await expect(todos.row(TODO_TITLE)).toBeVisible();
-    await expect(todos.row(TODO_TITLE)).toContainText("Tomorrow");
+    await expect(todos.row(RETYPED_TITLE)).toBeVisible();
+    await expect(todos.row(RETYPED_TITLE)).toContainText("Tomorrow");
 
     // …and it did not leak into the todo after that one either.
     await todos.quickAddInput.fill("Call the vet high");
@@ -202,6 +227,133 @@ test.describe("quick-add bar", () => {
         name: keepInTitleLabel(priorityChipLabel("High"), "high"),
       }),
     ).toBeVisible();
+  });
+
+  /**
+   * DEF-22. The refusal used to be keyed to the raw field value, so *any*
+   * difference revoked it — including a keystroke that changes no word the
+   * parser can see. The todo then saved short by a word, with a due date the
+   * user had explicitly refused, announced by a success toast.
+   *
+   * The trailing space is the sharper of the two: `parseQuickAdd` trims and
+   * splits on `/\s+/`, so this edit is invisible to the parser and cannot have
+   * changed its reading. It is also invisible to the user, which is why the
+   * feature's own doctrine ranks it worse than an unwanted chip.
+   */
+  test("a refusal survives a trailing space, which is not a word", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    const dueChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Tomorrow"), "tomorrow"),
+    });
+
+    await todos.quickAddInput.fill(LITERAL_TITLE);
+    await dueChip.click();
+    await expect(dueChip).toHaveCount(0);
+
+    // One space at the end. No word added, none changed, none removed.
+    await todos.quickAddInput.press("End");
+    await todos.quickAddInput.press(" ");
+
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Enter");
+
+    await expect(todos.row(LITERAL_TITLE)).toBeVisible();
+    // The refusal held: the word is in the title and the row carries no date
+    // at all — `TodoDueDate` renders a `<time>` or nothing.
+    await expect(todos.row(LITERAL_TITLE).locator("time")).toHaveCount(0);
+  });
+
+  /**
+   * DEF-22, reproduction A. A correction three words from the tail cannot
+   * change what rule 1 reads, so it cannot withdraw a refusal of that reading.
+   */
+  test("a refusal survives a typo fixed at the far end of the line", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    const dueChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Tomorrow"), "tomorrow"),
+    });
+
+    await todos.quickAddInput.fill("Cal mum about tomorrow");
+    await dueChip.click();
+    await expect(dueChip).toHaveCount(0);
+
+    // Caret after `Cal`, then the missing `l` — the far end of the line.
+    await todos.quickAddInput.press("Home");
+    await todos.quickAddInput.press("ArrowRight");
+    await todos.quickAddInput.press("ArrowRight");
+    await todos.quickAddInput.press("ArrowRight");
+    await todos.quickAddInput.press("l");
+
+    await expect(todos.quickAddInput).toHaveValue(LITERAL_TITLE);
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Enter");
+
+    await expect(todos.row(LITERAL_TITLE)).toBeVisible();
+    await expect(todos.row(LITERAL_TITLE).locator("time")).toHaveCount(0);
+  });
+
+  /**
+   * Senior F2. A word added outside the reading is exactly as invisible to the
+   * parse as the letter of reproduction A and the space of reproduction B —
+   * rule 1 never looks to the left of the tail — so it must not withdraw the
+   * refusal either. Keying the refusal to the line's *length* made this a
+   * revocation, which is DEF-22's own harm with a word in place of a letter.
+   */
+  test("a refusal survives a word inserted outside the reading", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    const dueChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Tomorrow"), "tomorrow"),
+    });
+
+    await todos.quickAddInput.fill(LITERAL_TITLE);
+    await dueChip.click();
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Home");
+    await todos.quickAddInput.pressSequentially("Urgent ");
+
+    await expect(todos.quickAddInput).toHaveValue(`Urgent ${LITERAL_TITLE}`);
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Enter");
+
+    const saved = `Urgent ${LITERAL_TITLE}`;
+
+    await expect(todos.row(saved)).toBeVisible();
+    await expect(todos.row(saved).locator("time")).toHaveCount(0);
+  });
+
+  /**
+   * The other half of DEF-22, and the reason the fix is a *tail* comparison
+   * rather than a dead parser: changing the tail is still a fresh reading.
+   */
+  test("a refusal lapses when the tail itself changes", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    const dueChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Tomorrow"), "tomorrow"),
+    });
+    const todayChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Today"), "today"),
+    });
+
+    await todos.quickAddInput.fill(LITERAL_TITLE);
+    await dueChip.click();
+    await expect(dueChip).toHaveCount(0);
+
+    // A different tail word is a different reading, offered and refusable.
+    await todos.quickAddInput.fill("Call mum about today");
+
+    await expect(todayChip).toBeVisible();
   });
 
   /**
@@ -234,6 +386,84 @@ test.describe("quick-add bar", () => {
     await expect(
       page.getByRole("textbox", { name: TITLE_FIELD_LABEL }),
     ).toHaveValue(TODO_TITLE);
+  });
+
+  /**
+   * DEF-23. `More options` used to empty the bar on the *press*, so a modal
+   * the user backed out of took every character with it — no todo, no Undo,
+   * nothing to recover. The bar keeps its text through a 500, a 502 and a
+   * field error; a user-initiated, reversible dismissal cannot be the one path
+   * that loses it (`docs/PRD.md` US-05).
+   *
+   * All three dismissals, because they are three different code paths in
+   * `TodoFormModal`: `Cancel` goes through `closeForm`, while `Escape` and the
+   * close `×` go through the overlay state directly.
+   */
+  for (const dismissal of ["Cancel", "Escape", "the close ×"] as const) {
+    test(`More options keeps the typed text when the modal is dismissed with ${dismissal}`, async ({
+      todos,
+      signedIn: page,
+    }) => {
+      const dialog = page.getByRole("dialog");
+
+      await todos.quickAddInput.fill(DRAFT_LINE);
+      await page
+        .getByRole("button", { name: MORE_OPTIONS_LABEL, exact: true })
+        .click();
+
+      await expect(
+        page.getByRole("heading", { name: CREATE_MODAL_HEADING }),
+      ).toBeVisible();
+      // The handoff itself still works: nothing has to be typed twice.
+      await expect(
+        page.getByRole("textbox", { name: TITLE_FIELD_LABEL }),
+      ).toHaveValue(DRAFT_TITLE);
+
+      if (dismissal === "Cancel") {
+        await dialog.getByRole("button", { name: CANCEL_LABEL, exact: true }).click();
+      } else if (dismissal === "Escape") {
+        await page.keyboard.press("Escape");
+      } else {
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      }
+
+      await expect(dialog).toHaveCount(0);
+
+      // Nothing was committed, so nothing should have been lost — and the bar
+      // is where the user is, which is what "ready to submit as it stands"
+      // means (§7.17). It is also the only outward sign that the handoff was
+      // *answered*: a dismissal that never answered would look identical here
+      // without it.
+      await expect(todos.quickAddInput).toBeFocused();
+      await expect(todos.quickAddInput).toHaveValue(DRAFT_LINE);
+      await expect(todos.row(DRAFT_TITLE)).toHaveCount(0);
+      await expectNoFalseSuccess(todos.toasts, addedToast(DRAFT_TITLE));
+
+      // And the bar is still the bar: the text is submittable as it stands.
+      await todos.quickAddInput.press("Enter");
+      await expect(todos.row(DRAFT_TITLE)).toBeVisible();
+    });
+  }
+
+  /** The other half of DEF-23: the bar clears on the save, not on the press. */
+  test("More options clears the bar once the modal actually saves", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    await todos.quickAddInput.fill(DRAFT_LINE);
+    await page
+      .getByRole("button", { name: MORE_OPTIONS_LABEL, exact: true })
+      .click();
+
+    await expect(
+      page.getByRole("heading", { name: CREATE_MODAL_HEADING }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: ADD_TODO_LABEL, exact: true }).click();
+
+    await expect(todos.row(DRAFT_TITLE)).toBeVisible();
+    // Saved once, and the bar is empty and ready for the next todo.
+    await expect(todos.quickAddInput).toHaveValue("");
   });
 
   test("a 500 on create leaves the typed text in the input", async ({

@@ -1,6 +1,13 @@
 import { describe, expect, test } from "vitest";
 
-import { parseQuickAdd, type QuickAddTokenKind } from "@/lib/quickAdd";
+import {
+  NO_RELEASE,
+  heldRelease,
+  parseQuickAdd,
+  releaseAfterEdit,
+  releaseAgainst,
+  type QuickAddTokenKind,
+} from "@/lib/quickAdd";
 
 /**
  * The quick-add parser (PM backlog #1).
@@ -553,5 +560,182 @@ describe("parseQuickAdd — the tokens, and keeping the text", () => {
       title: "buy milk",
       dueAt: "2026-08-18",
     });
+  });
+});
+
+/**
+ * How long a refusal lasts, which is QA DEF-22 and Senior F1/F2.
+ *
+ * This is the third defect in the family "a partial read leaves debris in the
+ * title", and the only one that was not in the parse: the refusal used to be
+ * keyed to the raw field value, so a keystroke the parser cannot even see —
+ * one trailing space — revoked it, and the todo saved short by a word with a
+ * due date the user had explicitly refused.
+ *
+ * The rule has two halves and both are pinned below, because each is a
+ * separate way to reproduce the defect. `heldRelease` says the refusal covers
+ * the reading and nothing else, so edits the parse cannot see cannot revoke it
+ * (F2). `releaseAfterEdit` says a refusal that has lapsed stays lapsed, so it
+ * cannot reappear on a line that merely ends the same way (F1) — a guard the
+ * first version had, in the shape of a word count, that held neither.
+ */
+describe("heldRelease — a refusal covers the reading, and only that", () => {
+  /** What pressing the `Due Tomorrow` chip on this line records. */
+  const refuseDue = (text: string) =>
+    releaseAgainst(text, ["due"], { now: NOW });
+
+  test("the refusal is recorded against the words the parse read", () => {
+    expect(refuseDue("Call mum about tomorrow")).toEqual({
+      tail: ["tomorrow"],
+      kinds: ["due"],
+    });
+  });
+
+  test("a trailing space is not an edit — it is not even a word", () => {
+    const release = refuseDue("Call mum about tomorrow");
+
+    // DEF-22 reproduction B, the sharpest case: `parseQuickAdd` trims and
+    // splits on `/\s+/`, so this keystroke changes nothing it can read.
+    expect(heldRelease(release, "Call mum about tomorrow ")).toEqual(["due"]);
+    expect(heldRelease(release, "  Call mum about tomorrow  ")).toEqual(["due"]);
+    expect(heldRelease(release, "Call mum  about   tomorrow")).toEqual(["due"]);
+  });
+
+  test("a typo fixed at the far end of the line leaves the reading alone", () => {
+    // DEF-22 reproduction A: the refusal is made on the misspelt line, and the
+    // correction is three words from the tail — rule 1 never looked there.
+    expect(heldRelease(refuseDue("Cal mum about tomorrow"), "Call mum about tomorrow")).toEqual(
+      ["due"],
+    );
+  });
+
+  /**
+   * Senior F2. A word is no more visible to the parse than a letter is when
+   * both sit outside the reading, so neither may withdraw the refusal. Keying
+   * the refusal to the line's *length* made this a revocation — DEF-22's own
+   * harm, with a word in place of a letter.
+   */
+  test("a word added or removed outside the reading is equally invisible", () => {
+    const release = refuseDue("Call mum about tomorrow");
+
+    expect(heldRelease(release, "Urgent Call mum about tomorrow")).toEqual(["due"]);
+    expect(heldRelease(release, "Call my mum about tomorrow")).toEqual(["due"]);
+    expect(heldRelease(release, "mum about tomorrow")).toEqual(["due"]);
+    expect(heldRelease(release, "Callmum about tomorrow")).toEqual(["due"]);
+  });
+
+  test("a different tail word is a different reading, and is offered again", () => {
+    const release = refuseDue("Call mum about tomorrow");
+
+    expect(heldRelease(release, "Call mum about today")).toEqual([]);
+    expect(heldRelease(release, "Call mum about tomorrow high")).toEqual([]);
+    expect(heldRelease(release, "Call mum about")).toEqual([]);
+    expect(heldRelease(release, "")).toEqual([]);
+  });
+
+  test("nothing refused is nothing held, whatever the text says", () => {
+    expect(heldRelease(NO_RELEASE, "Call mum about tomorrow")).toEqual([]);
+    expect(heldRelease(NO_RELEASE, "")).toEqual([]);
+  });
+
+  test("Esc refuses every kind at once, and all of them survive together", () => {
+    const release = releaseAgainst("buy milk tomorrow high", ["due", "priority"], {
+      now: NOW,
+    });
+
+    expect(release.tail).toEqual(["tomorrow", "high"]);
+    expect(heldRelease(release, "buy milk tomorrow high ")).toEqual([
+      "due",
+      "priority",
+    ]);
+    expect(heldRelease(release, "buy milk tomorrow low")).toEqual([]);
+  });
+
+  /**
+   * The reading is taken from the parse *under* the refusal, because that is
+   * what the user is now looking at: releasing the date steps over `tomorrow`
+   * and lets the scan reach `high` behind it (B-1), so the tail is both words.
+   *
+   * `Esc` on `tomorrow high` is the case that shows it. Rule 2 blocked the
+   * date, so only the priority had a chip — but Esc refuses every kind, and
+   * with that word stepped over the scan reaches the date behind it. Recording
+   * what the *unreleased* parse read would leave the first word outside the
+   * reading, and a later `tonight high` would then keep a refusal never made
+   * against it, silently: DEF-22 again by another route.
+   */
+  test("a reading the release itself widened is recorded in full", () => {
+    const release = releaseAgainst("tomorrow high", ["due", "priority"], {
+      now: NOW,
+    });
+
+    expect(release.tail).toEqual(["tomorrow", "high"]);
+    expect(heldRelease(release, "tomorrow high")).toEqual(["due", "priority"]);
+    expect(heldRelease(release, "tonight high")).toEqual([]);
+  });
+
+  test("the refusal is what the parse is then handed, end to end", () => {
+    const typed = "Call mum about tomorrow";
+    const release = refuseDue(typed);
+    // The trailing space that used to lose the word.
+    const edited = `${typed} `;
+
+    expect(
+      parseQuickAdd(edited, { now: NOW, release: heldRelease(release, edited) }),
+    ).toMatchObject({
+      title: "Call mum about tomorrow",
+      dueAt: "",
+      tokens: [],
+    });
+  });
+});
+
+/**
+ * Senior F1, and the half of the rule that a comparison of two texts cannot
+ * express on its own.
+ *
+ * `heldRelease` answers "does this text end in the refused words". Retyping a
+ * line ends in the refused words again the moment the user reaches the same
+ * last word, so on that question alone the refusal would come back: no chip,
+ * no date and no signal, on a line it was never made against. That is the
+ * silently disabled parser review B-2 was filed about, and it is worse than an
+ * unwanted chip by this feature's own doctrine.
+ *
+ * Applying this to every edit is what makes the refusal one-way. To retype a
+ * line you must pass through a state that is not the reading, and that state
+ * is what ends it.
+ */
+describe("releaseAfterEdit — a lapsed refusal does not come back", () => {
+  const release = releaseAgainst("Call mum about tomorrow", ["due"], { now: NOW });
+
+  test("an edit that leaves the reading alone keeps the refusal itself", () => {
+    expect(releaseAfterEdit(release, "Call mum about tomorrow ")).toBe(release);
+    expect(releaseAfterEdit(release, "Urgent Call mum about tomorrow")).toBe(release);
+  });
+
+  test("an edit that leaves the reading ends the refusal", () => {
+    expect(releaseAfterEdit(release, "Call mum about")).toBe(NO_RELEASE);
+    expect(releaseAfterEdit(release, "B")).toBe(NO_RELEASE);
+  });
+
+  /**
+   * The whole of F1, as the sequence a user actually performs: select all,
+   * then type. The first keystroke is what ends it, and nothing after that
+   * brings it back — not even the line the refusal was originally made on.
+   */
+  test("retyping a line ending in the same word starts a fresh reading", () => {
+    const typed = "Buy fresh organic tomorrow";
+    let current = release;
+
+    for (let length = 1; length <= typed.length; length += 1) {
+      current = releaseAfterEdit(current, typed.slice(0, length));
+    }
+
+    expect(current).toBe(NO_RELEASE);
+    expect(heldRelease(current, typed)).toEqual([]);
+    expect(heldRelease(current, "Call mum about tomorrow")).toEqual([]);
+  });
+
+  test("the same line typed from empty is never refused to begin with", () => {
+    expect(releaseAfterEdit(NO_RELEASE, "Call mum about tomorrow")).toBe(NO_RELEASE);
   });
 });

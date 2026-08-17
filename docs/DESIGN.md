@@ -1266,6 +1266,17 @@ whatever is already typed into it, and from every row's Edit button. Two
 capture paths, not three: the bar for a title, a day and a priority; the modal
 for a note or a date the vocabulary cannot say.
 
+**`More options` is a handoff, not a commit, and the bar is emptied by the
+save.** Opening the modal copies the reading into it and changes nothing else;
+if the user then dismisses that modal — `Cancel`, `Escape`, or the close `×`,
+all three the same — the bar still holds every character, chips and all, ready
+to submit as it stands. Only a modal that actually saves clears it. This is the
+same guarantee the bar already makes on a 500, a 502 and a field error, and it
+matters more here, not less: a server error is bad luck, while backing out of a
+dialog is a decision the user made about something that had not happened yet.
+Nothing was created, so there is no mutation and no Undo to recover with — the
+text is the only copy, and it is not the bar's to spend.
+
 **The chips are not decoration.** They are the whole mitigation for a parser
 that reads a word the user meant literally, so each one is a *control*: a
 button that puts its words back in the title. `Esc` does the same for every
@@ -1278,10 +1289,31 @@ hold for sighted users only.
 
 **Refusing one chip never costs the other.** Releasing the date leaves the
 priority read and its chip on screen; the released words go back into the
-title and the reading carries on past them. And a refusal belongs to the exact
-text it was made against — change one character and the reading starts fresh,
-visibly. An unwanted chip is on screen and costs one keystroke; a silently
-disabled parser is invisible, which is the worse of the two.
+title and the reading carries on past them.
+
+**A refusal belongs to the reading it was made against — not to the exact
+string.** Only trailing words are ever read, and whitespace is not a word, so
+an edit the parser cannot see must not be able to withdraw a refusal of what
+it read. Correcting a typo at the start of the line, inserting a word there,
+or typing one trailing space all leave the refusal standing. Changing a
+trailing word ends it, because that is a different reading: the chips come
+back, visibly, and are refusable again.
+
+**And a refusal that has ended does not return.** Retyping the line reaches
+the same last word eventually, and on the text alone that would look like the
+refusal all over again — chips gone, date silently applied, nothing on screen
+to say so. So the refusal ends at the first edit that leaves the reading, and
+retyping a line means passing through such an edit. This is what keeps a
+refusal from outliving the text it was made against, which matters more than
+the reverse: an unwanted chip is on screen and costs one keystroke, while a
+silently disabled parser is invisible.
+
+*Residual, stated because it is real:* a single edit that replaces the whole
+line without ever passing through anything else — a paste, a text drop,
+autofill, or a coalesced undo — keeps a refusal whose words the new line
+happens to end in. Two texts cannot be told apart by the path that produced
+them, and a replacement made in one edit has no path. Submitting clears the
+refusal outright, so it never reaches the next todo.
 
 **A capital letter switches the parser off for that word,** which is a
 stronger guarantee than any chip: nothing fires, so there is nothing to notice

@@ -12,7 +12,15 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { FormTextField } from "@/components/ui";
-import { parseQuickAdd, type QuickAddTokenKind } from "@/lib/quickAdd";
+import {
+  NO_RELEASE,
+  heldRelease,
+  parseQuickAdd,
+  releaseAfterEdit,
+  releaseAgainst,
+  type QuickAddRelease,
+  type QuickAddTokenKind,
+} from "@/lib/quickAdd";
 
 import {
   quickAddSchema,
@@ -35,29 +43,6 @@ const ESCAPE_KEY = "Escape";
 /** Every kind, for the one keystroke that releases all of them at once. */
 const ALL_TOKEN_KINDS: readonly QuickAddTokenKind[] = ["due", "priority"];
 
-/**
- * A refusal, and the exact text it was made against.
- *
- * **Keyed to the text, which is what stops it going stale** (review B-2). A
- * release was previously a bare set of kinds that nothing ever cleared, so one
- * `Esc` left the parser dead for everything typed afterwards — no chips, no
- * date, no priority and no signal that anything had been switched off — and
- * the same set leaked into the next todo during burst capture. Deriving the
- * active release from an exact string match means there is no stale state to
- * clear: change one character and the reading starts fresh, visibly, with the
- * chips back and refusable again.
- *
- * The trade is that an edit-and-retype re-offers a parse the user already
- * refused once. That is the right way round: an unwanted chip is on screen and
- * costs one keystroke, while a silently disabled parser is invisible.
- */
-interface QuickAddRelease {
-  text: string;
-  kinds: readonly QuickAddTokenKind[];
-}
-
-const NO_RELEASE: QuickAddRelease = { text: "", kinds: [] };
-
 export interface QuickAddFormProps {
   /** Focused by the empty state's call to action, and after every create. */
   inputRef: RefObject<HTMLInputElement | null>;
@@ -70,8 +55,19 @@ export interface QuickAddFormProps {
    * is what makes people stop trusting it (`docs/PRD.md` US-05).
    */
   onValidSubmit: (values: TodoFormValues) => Promise<boolean>;
-  /** Hands the current reading to the modal, so nothing is typed twice. */
-  onMoreOptions: (values: TodoFormValues) => void;
+  /**
+   * Hands the current reading to the modal, so nothing is typed twice, and
+   * resolves when that modal is done with: `true` if it saved, `false` if the
+   * user backed out of it.
+   *
+   * The same contract as `onValidSubmit`, for the same reason — **resolving
+   * `false` is what keeps every character on screen** (QA DEF-23). A handoff
+   * is not a commit, so `Cancel`, `Escape` and the close `×` must all cost
+   * nothing; the bar keeps its text through a 500, a 502 and a field error,
+   * and a reversible action the user chose cannot be the one path that loses
+   * it (`docs/PRD.md` US-05).
+   */
+  onMoreOptions: (values: TodoFormValues) => Promise<boolean>;
 }
 
 /**
@@ -110,8 +106,8 @@ export const QuickAddForm = ({
   });
 
   const text = useWatch({ control, name: "text" }) ?? "";
-  /** Only the refusal made against *this* text counts. See `QuickAddRelease`. */
-  const activeRelease = release.text === text ? release.kinds : [];
+  /** Only a refusal whose reading is still on screen counts. See below. */
+  const activeRelease = heldRelease(release, text);
   /*
     Read on every render rather than memoised against a captured `now`: "today"
     is a fact about the reader's clock, and a bar left open across midnight
@@ -146,12 +142,28 @@ export const QuickAddForm = ({
   });
 
   const releaseKinds = (kinds: readonly QuickAddTokenKind[]) => {
-    const current = getValues("text");
+    setRelease(releaseAgainst(getValues("text"), [...activeRelease, ...kinds]));
+  };
 
-    setRelease({
-      text: current,
-      kinds: [...new Set([...activeRelease, ...kinds])],
-    });
+  /**
+   * Every edit, and the one place a refusal ends.
+   *
+   * `releaseAfterEdit` is applied here rather than only derived at render
+   * because **a lapsed refusal must not come back** (Senior F1). Derivation
+   * alone answers "does the text end in the refused words *right now*", which
+   * a retyped line satisfies again the moment the user reaches the same last
+   * word — so the chips would vanish mid-sentence with no signal, which is the
+   * dead parser review B-2 was filed about. Dropping the state on the edit
+   * that leaves the reading makes it one-way: retyping a line means passing
+   * through a state that is not the reading, and that ends it.
+   *
+   * The derivation above stays, because it is what keeps this render
+   * self-consistent — the state update has not landed yet — and because
+   * `clearTo` is the other way a refusal ends.
+   */
+  const handleTextChange = (next: string, onChange: (value: string) => void) => {
+    onChange(next);
+    setRelease((current) => releaseAfterEdit(current, next));
   };
 
   const clearTo = (next: string) => {
@@ -199,6 +211,36 @@ export const QuickAddForm = ({
   };
 
   /**
+   * The handoff to the modal — and it clears the bar on the *save*, never on
+   * the press (QA DEF-23).
+   *
+   * Emptying it here used to be the last statement of this handler, which made
+   * `More options` the one control in the feature that could destroy typed
+   * text: the modal it opens is dismissible three ways, none of them commits
+   * anything, and there is no Undo for a mutation that never happened. Waiting
+   * for the answer costs nothing — a cancelled handoff leaves the bar exactly
+   * as the user left it, chips and all.
+   */
+  const handleMoreOptions = async () => {
+    const saved = await onMoreOptions(toFormValues());
+
+    if (!saved) {
+      /*
+        The bar is where the user is again, and §7.17 now says so: the text is
+        "ready to submit as it stands". HeroUI restores focus to the button
+        that opened the dialog, which is the right default for a control that
+        did something and the wrong one for a handoff that was called off —
+        it leaves the caret one Tab from the line it was in the middle of.
+      */
+      inputRef.current?.focus();
+
+      return;
+    }
+
+    clearTo("");
+  };
+
+  /**
    * `handleSubmit` is called here, inside the event handler, rather than at the
    * `onSubmit` prop. Called during render it would be handed a callback that
    * reaches for `inputRef.current`, which is a ref read during render — the
@@ -234,7 +276,9 @@ export const QuickAddForm = ({
                 isLabelHidden
                 placeholder={FIELD_PLACEHOLDER}
                 value={field.value ?? ""}
-                onChange={field.onChange}
+                onChange={(next) => {
+                  handleTextChange(next, field.onChange);
+                }}
                 onBlur={field.onBlur}
                 onKeyDown={handleKeyDown}
                 isInvalid={errorMessage !== undefined}
@@ -309,8 +353,7 @@ export const QuickAddForm = ({
           className="min-h-11 sm:ml-auto sm:min-h-8"
           isDisabled={isPending}
           onPress={() => {
-            onMoreOptions(toFormValues());
-            clearTo("");
+            void handleMoreOptions();
           }}
         >
           {MORE_OPTIONS_LABEL}
