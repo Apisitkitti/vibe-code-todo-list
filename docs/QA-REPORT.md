@@ -1702,3 +1702,323 @@ touches `parseQuickAdd`, and both should carry a test — the trailing-space
 revocation and the cancelled `More options` are each one assertion.
 
 DEF-15's re-ranking is a recommendation, not a condition.
+
+---
+
+# Re-gate — quick-add release blockers — 2026-08-17
+
+Gate: `develop` → `main` (auto-deploys to Vercel). Branch `develop` @ `c32a947`
+(`Merge branch 'fix/quick-add-release-blockers' into develop`), working tree
+clean. Node 24.14.0. Playwright drove its own `next dev` on **3117** against
+`todo_app_test`; Vitest ran against `todo_app_test`. The two `bun` processes
+listening on 3000 and 3100 are not mine and were left alone. Nothing was
+pointed at Neon.
+
+**Narrow re-gate**, not a second full gate. The parser sweep (§5 above), the
+regression sweep (§3) and the accessibility pass (§4) from the 2026-08-17 gate
+stand and were not repeated; this pass re-runs my own two blocking defects,
+probes for a third of the same family, and takes a smoke pass. Defect numbering
+continues from DEF-23, so the one new defect here is **DEF-24**.
+
+> Written as each result was established. Everything below was run, on the tree
+> named above.
+
+---
+
+## 0. Verdict, up front
+
+### **SHIP**
+
+**DEF-22 is closed.** All three of my reproductions — the typo fix at the far
+end of the line, the bare trailing space, and `Esc` followed by a trailing
+space — now save the full title with **no due date**, re-run verbatim in
+Chromium against a real account and a real database (§1).
+
+**DEF-23 is closed.** All three dismissals — `Cancel`, `Escape`, the close `×` —
+keep every character, keep an active chip refusal with them, and return focus
+to the quick-add input. A save through the modal clears the bar exactly once:
+one `POST`, one row, one toast (§3).
+
+**The residual behaves as `docs/DESIGN.md` §7.17 documents it**, and is not
+wider than the doc says. A pathless whole-line replacement keeps a refusal
+whose words the new line ends in; a submit clears it, and it does not reach a
+second todo (§2).
+
+**New: DEF-24 — Low — non-blocking.** `Esc` records the refusal against a
+reading wider than the one on screen, so on a line whose title is made
+entirely of parser vocabulary (`in 3 days high`, `next week high`,
+`tomorrow high`) a later edit to a *title* word revokes it and the refused word
+is eaten. Same family as DEF-22, at a small fraction of its reach: it needs a
+degenerate line, it needs `Esc` rather than the chip, and the chip is visibly
+back on screen when it happens. **I am not holding the release for it** (§4).
+
+The third failure the fix was asked to survive is not there. I looked for it
+two ways and found neither: an edit path that returns to the reading without
+leaving it, and a lapse firing when the reading never changed. The one-way rule
+holds — 0 resurrections in 4,000 randomised edit walks, and the one path that
+looked like a way back (erasing the prefix down to the tail word and retyping a
+new one) ends the refusal correctly, because deleting the space that separates
+two words merges them and leaves the reading (§1.4).
+
+---
+
+## 1. DEF-22 — **closed**
+
+Fixed in `b5f74a9` (`fix(quick-add): end a refusal at the edit that leaves the
+reading`) after `800a42c` — the raw-text keying I suggested — left
+reproduction A standing.
+
+The mechanism now: a refusal is `{ tail, kinds }` where `tail` is the words the
+parse read (`QuickAddResult.tail`), and `releaseAfterEdit` is applied to
+**every** edit, dropping the refusal the moment the text stops ending in those
+words. That is one-way, which is what stops a retyped line reviving it.
+
+### 1.1 The three reproductions, re-run verbatim — **all pass**
+
+Driven in Chromium (Playwright, desktop 1280×800) on fresh accounts against
+`todo_app_test`, asserting the saved row, not just the bar.
+
+| # | Steps | Result |
+|---|---|---|
+| A | Type `Cal mum about tomorrow`; press the `Due Tomorrow` chip; `Home`, `→→→`, type `l`; `Enter` | Saves **`Call mum about tomorrow`**, row carries **no `<time>`** — pass |
+| B | Type `Cal mum about tomorrow`; press the chip; `End`, one space; `Enter` | Saves **`Cal mum about tomorrow`**, no `<time>` — pass |
+| C | Type `Remember the meeting friday`; `Esc`; `End`, one space; `Enter` | Saves **`Remember the meeting friday`**, no `<time>` — pass |
+
+Reproduction C is the one the merged suite did not already cover — it pins
+`Esc` + trailing space, where `e2e/quick-add.spec.ts` pins chip + trailing
+space and `Esc` + retype. It passes, but nothing in the repository holds it
+there. **Worth one assertion in `e2e/quick-add.spec.ts`.**
+
+### 1.2 The same three at the state-machine level
+
+I transcribed the bar's state machine (`handleTextChange` → `releaseAfterEdit`,
+chip press → `releaseAgainst`, render → `heldRelease`, submit → `clearTo`) and
+drove `src/lib/quickAdd.ts` through it character by character, so each
+keystroke is a separate edit rather than one `fill`. A, B and C all produce
+`{ title: <the whole line>, dueAt: "", priority: "medium" }`.
+
+### 1.3 Hunt — a lapse firing when the reading never changed
+
+Exhaustive: every 2-word and 3-word line over a 12-word vocabulary alphabet
+plus 7 ordinary words, each chip pressed singly and together via `Esc`, then
+every word **outside the reading the chips named** replaced with each of four
+substitutes — **14,416 edits**. The refusal held on all but 89, and every one
+of those 89 falls in the single narrow class filed below as DEF-24. Outside
+that class, no edit the parser cannot see withdraws a refusal.
+
+### 1.4 Hunt — an edit path that returns to the reading without leaving it
+
+Not found, and the obvious candidate fails for a good reason. Because
+`stillReads` is a suffix test, a path that edits only the prefix never leaves
+the reading — so I tried to walk one all the way to a different todo: refuse
+`Due Tomorrow` on `Cal mum about tomorrow`, then erase the prefix one character
+at a time and type `Buy milk ` in front of the surviving word.
+
+The refusal **ends**, correctly, and the chip is back by the time the line
+reads `Buy milk tomorrow` (saved: title `Buy milk`, due Tomorrow). Deleting the
+space between two words merges them — `about tomorrow` becomes
+`abouttomorrow` — and that state is not the reading, so the one-way rule fires
+exactly as designed. There is no ordinary-typing route from one line to an
+unrelated line that never passes through such a state.
+
+Randomised walks agree: 4,000 trials, up to 12 word-level edits each, starting
+from a refusal — **0 resurrections**. Once a refusal has lapsed it never comes
+back without a fresh chip press.
+
+---
+
+## 2. The residual — **behaves as documented, and is bounded**
+
+`docs/DESIGN.md` §7.17 and the `QuickAddRelease` doc comment both state it: a
+single edit that replaces the line without passing through anything else keeps
+a refusal whose words the new line happens to end in.
+
+| Check | Result |
+|---|---|
+| One-edit whole-line replacement (`input` event, no intermediate states) ending in the same word keeps the refusal | **Yes** — as documented |
+| The refusal survives a *cancelled* `More options` handoff | **Yes** — intended; nothing was committed |
+| A submit clears it | **Yes** — `clearTo` sets `NO_RELEASE` |
+| It can reach a second todo | **No** — after submitting the pasted line, `Call the vet tomorrow` shows `Due Tomorrow` again |
+| The fast-typist path (`current.slice(submitted.length)`) leaves a stale refusal behind | **No** — `clearTo` runs on that branch too |
+
+Not wider than the doc says. The prefix-editing behaviour in §1.4 is the same
+guarantee stated from the other side — §7.17 explicitly says an edit outside
+the reading leaves the refusal standing — and it terminates on its own, so it
+is not a second residual.
+
+---
+
+## 3. DEF-23 — **closed**
+
+Fixed in `427fb4b` and `d6015a0`. The bar now awaits an answer from the modal
+(`src/lib/handoff.ts`), and only a save clears it.
+
+| Check | `Cancel` | `Escape` | close `×` |
+|---|---|---|---|
+| Bar keeps every character (57-char line) | pass | pass | pass |
+| An active chip refusal survives the handoff | pass | pass | pass |
+| Focus returns to the quick-add input | pass | pass | pass |
+| No todo created, no success toast | pass | pass | pass |
+| The line is still submittable as it stands | pass | pass | pass |
+
+The refusal check is the one the merged suite does not make: refuse
+`Due Tomorrow` on `Call mum about tomorrow`, press `More options` — the modal
+opens on the **full** title with no due date, so the refusal travelled — dismiss
+it, and the chip is still absent. `Enter` then saves `Call mum about tomorrow`
+with no `<time>`. All three dismissals.
+
+**A save clears the bar exactly once.** Typing
+`Draft the report tomorrow high`, `More options`, `Add todo`: **one**
+`POST /api/todos`, **one** row, **one** `Todo “Draft the report” added` toast,
+bar empty, and no stale refusal left behind — the next line gets its chip back.
+That is the invariant `d6015a0` and `createHandoff` were written for, and it
+holds.
+
+---
+
+## 4. DEF-24 — Low — **`Esc` records a refusal wider than the reading it refused**
+
+**Not blocking.** Same family as DEF-22, and the same harm, but reachable only
+on a line whose entire title is parser vocabulary.
+
+### Reproduction
+
+1. `/todos`, signed in. Type into the quick-add bar: `in 3 days high`.
+2. One chip appears: **`High priority`**. The title reads `in 3 days` — rule 2
+   refuses to lift the date because it would leave the title empty, so **no
+   date chip is offered and none is applied**.
+3. Press **`Esc`** to keep the text exactly as typed. The chip goes.
+4. Correct your own title, by keystroke, not by paste: `Home`, `→→→`,
+   `Shift+→`, type `4`. The line reads `in 4 days high`. **No word any chip
+   ever named has been touched.**
+
+**Expected:** the refusal holds — this is an edit to the title, outside the
+reading, and §7.17 says such an edit "cannot withdraw a refusal of what it
+read".
+
+**Actual:** the refusal lapses. `High priority` is back on screen, and `Enter`
+saves a todo titled **`in 4 days`** with priority **High** — the refused word
+eaten off the end of the title, exactly DEF-22's harm.
+
+Also reproduces on `next week high`, `tomorrow high`, `high friday`,
+`high in 3 days` and 20 other lines of the same shape.
+
+### Cause
+
+`handleKeyDown` releases `ALL_TOKEN_KINDS` — both kinds — regardless of which
+ones actually fired. `releaseAgainst` then re-parses with both released, and
+the released branch in `parseQuickAdd` steps over a matched run **without
+consulting `canLift`**. So the scan walks straight past the run that rule 2 had
+refused to lift, and the recorded `tail` reaches words that are still sitting
+in the title. `stillReads` then reads an edit to those title words as a change
+to the reading.
+
+Pressing the chip instead of `Esc` does not do this, because a chip only ever
+releases a kind that fired.
+
+### Bound — measured, not estimated
+
+41,356 lines of 2, 3 and 4 words over an 11-word vocabulary plus 3 ordinary
+words, each refused both ways:
+
+- **via a chip press: 0** lines record a tail wider than the chips claimed;
+- **via `Esc`: 24**, and every one of them has a title containing **no**
+  ordinary word — the whole line is vocabulary;
+- **0** affected lines have an ordinary word anywhere in the title.
+
+That bound is structural, not statistical: with any non-vocabulary word in the
+line, rule 2's budget always leaves a survivor, so the run is lifted, a chip is
+shown, and the recorded tail matches what the chip claimed.
+
+### Why it is not blocking
+
+- The line has to be built entirely from vocabulary — a todo literally titled
+  `in 3 days`, `next week` or `tomorrow`. DEF-22 fired on
+  `Call mum about tomorrow` with a typo, which is an ordinary Tuesday.
+- The refusal has to have been made with `Esc` rather than the chip.
+- When it fires, the chip is **on screen again** before the user presses Enter.
+  DEF-22's own doctrine ranks a visible unwanted chip well below a silently
+  disabled parser, and this is the visible one.
+- Nothing is lost that the user cannot see and re-type; there is a success
+  toast naming the saved title, and an Undo behind it.
+
+### Suggested fix
+
+Have `Esc` release the kinds that actually fired —
+`parsed.tokens.map(t => t.kind)` — rather than both unconditionally. That is
+the chip-press path, which the sweep above shows never records an over-wide
+tail. It changes one line, and it should carry the `in 3 days high` case as a
+test. The deeper cause — that a released run is stepped over without consulting
+`canLift`, so a release can make the scan read further left than the unreleased
+parse ever did — is worth a look at the same time, since it is the same shape
+as RB-1.
+
+---
+
+## 5. Smoke pass — **clean**
+
+One account, one session, Chromium at 1280×800, with the console and every
+response watched.
+
+| Step | Result |
+|---|---|
+| Create through the bar (×2, one with `tomorrow high`) | Rows land, toasts name them, chips read correctly |
+| Edit | `Buy milk` → `Buy oat milk`, `updated` toast |
+| Status toggle | Checkbox checks, `marked complete` toast |
+| Undo | Reverts, `marked not complete` toast |
+| One filter (`Active`) | URL carries `status=active`, completed row leaves, active row stays, `All` restores it |
+| One search (`vet`) | Matching row only; clearing restores the list |
+| Delete | Confirm dialog, row goes, `deleted` toast |
+| Sign out | Lands on `/sign-in` |
+| Sign back in | Lands on `/todos`, the todo and its completed state survived |
+
+**4xx/5xx: none. Console errors: none.** The only console output is HeroUI's
+`PressResponder was rendered without a pressable child` warning, which is a
+`warn` from the library's own toast internals and predates this branch.
+
+---
+
+## 6. Suites
+
+- **Vitest: 293 passed / 293, 12 files**, including the new
+  `tests/unit/handoff.test.ts` and the additions to `tests/unit/quickAdd.test.ts`
+  that the fix commits carry.
+- **Playwright: 102 passed / 102** across `chromium-desktop` and
+  `chromium-mobile`, no retries, no flakes. The four fix commits add 246 lines
+  to `e2e/quick-add.spec.ts`; all 23 of that spec's desktop cases pass.
+- The five checks I wrote for this re-gate (repro C, the refused chip through
+  all three dismissals, the exactly-once save, the residual bound, and the
+  DEF-24 case) were run as a scratch spec and removed afterwards; none of them
+  are in the repository. The first two are worth keeping — see §1.1 and §3.
+
+---
+
+## 7. What I did not test
+
+- The parser sweep, the regression sweep and the accessibility pass from the
+  gate above. They stand on that tree, and the four fix commits touch
+  `QuickAddForm`, `TodoListScreen`, `src/lib/handoff.ts` and the release
+  helpers in `src/lib/quickAdd.ts` — not `parseQuickAdd` itself.
+- Mobile width for the re-gate specifically. The full Playwright run covers
+  `chromium-mobile`, but my own five checks were desktop only.
+- Real assistive technology, again. DEF-24 puts a chip back on screen; whether
+  the live region announces that clearly to a screen-reader user mid-edit is
+  not something I can answer from the DOM.
+- DEF-14 and DEF-15 remain where they were. DEF-15 still carries the only
+  visible statement of the escape hatch at 4.43:1, and I still think it should
+  be re-ranked.
+
+---
+
+## 8. Ship / do not ship
+
+**SHIP.** Both blockers are closed on their own reproductions, the fix's stated
+rule survives every attack I could construct against it, the residual is
+exactly as wide as the doc admits, and the smoke pass is clean with no 4xx,
+no 5xx and no console errors.
+
+DEF-24 goes on the backlog, not in front of this release: it is one line to
+fix, it needs a todo titled `in 3 days` to reach, and it announces itself with
+a visible chip when it fires. It should not, however, sit there indefinitely —
+it is the fourth member of a family that has now cost this feature four fixes,
+and the family keeps coming back in the same place.
