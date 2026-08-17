@@ -151,13 +151,26 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   const formState = useOverlayState();
 
   /**
-   * The reload token as of this render, readable from an async callback that
-   * closed over an older one. A toggle compares it before and after its write
-   * to tell whether a reload replaced local state mid-flight — the case where
-   * its own optimistic arithmetic was thrown away and the counts need the
-   * server's answer instead.
+   * How many list loads have *landed* — incremented where the load effect
+   * replaces `result`, which is the single event that throws a toggle's
+   * optimistic arithmetic away.
+   *
+   * A toggle reads it before its write and again after, and asks the server
+   * when the two differ (`runToggle`). Counting landed loads rather than
+   * requested ones is deliberate and was the second attempt at this guard:
+   * `reloadToken` is bumped only by `requestReload()`, so a guard watching it
+   * saw a create, a delete and an Undo but **not a filter change**, which
+   * re-runs the load through the `status` / `priority` / `query` dependencies
+   * and never touches the token. A filter change is the easiest way for a user
+   * to land a reload inside a toggle's flight window and is the trigger the
+   * defect was reported against (`docs/REVIEW.md` MA-2, third bullet), so a
+   * token comparison closed every case except the reported one.
+   *
+   * A load that is superseded (`isCurrent === false`) or that fails does not
+   * count: neither replaces `result`, so neither is anything to reconcile
+   * against.
    */
-  const reloadTokenRef = useRef(reloadToken);
+  const landedLoadsRef = useRef(0);
 
   const router = useRouter();
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
@@ -419,7 +432,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       gone. Under "All" neither happens.
     */
     const leavesList = !todoMatchesStatusFilter(nextCompleted, status);
-    const tokenAtPress = reloadTokenRef.current;
+    const landedLoadsAtPress = landedLoadsRef.current;
 
     markPending(todo.id);
     setResult((current) =>
@@ -433,18 +446,23 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
         reloadSilently();
       } else {
         /*
-          A reload landing between the press and this response replaces local
+          A load landing between the press and this response replaces local
           state with a server count that predates the write — and the row it
-          would have been corrected against may be gone with it, so
-          `replaceTodo` no-ops and the counter sits one low.
+          would have been corrected against may be gone with it (the user
+          switched to `Completed`, say), so `replaceTodo` no-ops and the
+          counter sits one low.
 
           It used to self-heal because every toggle refetched. It no longer
           does, which is the point of m-7, so nothing would put the number
           right for as long as the user keeps toggling (QA S-C, review MA-2).
-          Comparing the reload token spends the extra request only on the
+          Comparing landed loads spends the extra request only on the
           interleaved case; an uninterrupted toggle is still one request.
+
+          Landed loads, not `reloadToken`: a filter change reloads without
+          bumping the token, and it is the likeliest way into this window.
+          `e2e/mid-flight-reload.spec.ts` pins both triggers.
         */
-        if (reloadTokenRef.current === tokenAtPress) {
+        if (landedLoadsRef.current === landedLoadsAtPress) {
           setResult((current) => replaceTodo(current, saved));
         } else {
           reloadSilently();
@@ -668,16 +686,16 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   };
 
   useEffect(() => {
-    reloadTokenRef.current = reloadToken;
-  }, [reloadToken]);
-
-  useEffect(() => {
     let isCurrent = true;
 
     void getTodoList({ status, priority, query })
       .then((nextResult) => {
         if (!isCurrent) return;
 
+        // Counted here, at the one line that discards a toggle's optimistic
+        // arithmetic, so every way of starting a load is covered by
+        // construction rather than by remembering to bump a token.
+        landedLoadsRef.current += 1;
         setResult(nextResult);
         setLoadError(null);
       })
