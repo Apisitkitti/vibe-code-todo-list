@@ -69,6 +69,8 @@ export interface TodosScreen {
   undoButton: Locator;
   confirmDialog: Locator;
   listSkeleton: Locator;
+  /** The `N of M done` line beside the page heading (§7.3). */
+  doneCounter: Locator;
   row: (title: string) => Locator;
   rowByText: (title: string) => Locator;
   checkbox: (title: string) => Locator;
@@ -180,6 +182,13 @@ export const createTodosScreen = (page: Page): TodosScreen => {
   const listSkeleton = page.getByLabel("Loading todos");
 
   /*
+    Scoped to `<main>` and matched whole, so it reads the rendered string
+    rather than any number that happens to be near it. It renders only while
+    the account has todos (`hasTodos`), which is itself part of the contract.
+  */
+  const doneCounter = page.locator("main").getByText(/^\d+ of \d+ done$/);
+
+  /*
     Scoped to `<main>`. The toast region is itself a list of `<li>`s carrying
     the todo title, so an unscoped `getByRole("listitem")` matches both the row
     and its own success toast and trips strict mode. `Toast.Provider` is
@@ -283,6 +292,7 @@ export const createTodosScreen = (page: Page): TodosScreen => {
     undoButton,
     confirmDialog,
     listSkeleton,
+    doneCounter,
     row: rowByText,
     rowByText,
     checkbox,
