@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   focusRowAfterRemoval,
+  focusUndoAction,
   MAX_WAIT_FRAMES,
   nextFocusIndex,
+  nextUndoToken,
+  UNDO_TOKEN_ATTRIBUTE,
+  undoTokenProps,
 } from "@/lib/rowFocus";
 
 /**
@@ -135,5 +139,144 @@ describe("focusRowAfterRemoval", () => {
     // Step 2's `focusIsUnclaimed` is what catches this case instead.
     expect(focused).toBe(false);
     expect(before.getActiveElement()).toBeNull();
+  });
+});
+
+/**
+ * Step 2's choice of toast — the whole of DEF-25.
+ *
+ * The end-to-end spec can show the right Undo taking focus. What it cannot
+ * show, because a browser only ever offers one arrangement of the stack at a
+ * time, is the property that matters: a toast which is *not* this one is
+ * refused **every frame it is offered**, no matter how frontmost it looks or
+ * how long it sits there. That is a negative about the lookup itself, so the
+ * lookup is driven directly here.
+ *
+ * The old implementation asked for `[data-frontmost="true"]`. Every case below
+ * is one it would have passed by focusing the wrong button on frame 0.
+ */
+describe("focusUndoAction", () => {
+  /**
+   * A stack where an older Undo is present from the first frame and this
+   * toggle's own arrives late — the shape DEF-25 lives in, with the frames
+   * before the success toast mounts held open.
+   */
+  const stack = (mineArrivesOnFrame: number) => {
+    let frames = 0;
+    let active: unknown = null;
+
+    const makeAction = (name: string) => {
+      const action = {
+        name,
+        focus: () => {
+          active = action;
+        },
+      };
+
+      return action;
+    };
+
+    /** `Todo “keepme” added` — an Undo that is a DELETE of another todo. */
+    const staleAction = makeAction("stale");
+    const myAction = makeAction("mine");
+
+    return {
+      staleAction,
+      myAction,
+      get frames() {
+        return frames;
+      },
+      getActiveElement: () => active,
+      /** Only ever answers with the button carrying the token asked for. */
+      findAction: (token: string) => {
+        if (token === "mine") return frames >= mineArrivesOnFrame ? myAction : null;
+        if (token === "stale") return staleAction;
+
+        return null;
+      },
+      waitFrame: async () => {
+        frames += 1;
+      },
+    };
+  };
+
+  it("waits for this toggle's own Undo rather than taking the one already there", async () => {
+    const MINE_MOUNTS_ON_FRAME = 12;
+    const world = stack(MINE_MOUNTS_ON_FRAME);
+
+    const focused = await focusUndoAction("mine", () => true, {
+      findAction: world.findAction,
+      getActiveElement: world.getActiveElement,
+      waitFrame: world.waitFrame,
+    });
+
+    expect(focused).toBe(true);
+    expect(world.frames).toBe(MINE_MOUNTS_ON_FRAME);
+    // The stale Undo — a `DELETE` of a todo the user never touched — was on
+    // offer for all twelve of those frames and was never taken.
+    expect(world.getActiveElement()).toBe(world.myAction);
+    expect(world.getActiveElement()).not.toBe(world.staleAction);
+  });
+
+  it("moves nothing when this toggle's Undo never arrives", async () => {
+    // A toast that never mounts leaves focus parked on the row step 1 chose.
+    // The previous behaviour was to settle for whatever else was on screen.
+    const world = stack(Number.POSITIVE_INFINITY);
+
+    const focused = await focusUndoAction("mine", () => true, {
+      findAction: world.findAction,
+      getActiveElement: world.getActiveElement,
+      waitFrame: world.waitFrame,
+    });
+
+    expect(focused).toBe(false);
+    expect(world.frames).toBe(MAX_WAIT_FRAMES);
+    expect(world.getActiveElement()).toBeNull();
+  });
+
+  it("declines on the frame the button appears, not the frame the wait began", async () => {
+    // The user tabbed away mid-flight. `shouldStillMove` is re-read late, so a
+    // guard that was true when the toggle started must not carry the move.
+    const world = stack(3);
+    let moved = true;
+
+    const focused = await focusUndoAction(
+      "mine",
+      () => {
+        moved = false;
+
+        return false;
+      },
+      {
+        findAction: world.findAction,
+        getActiveElement: world.getActiveElement,
+        waitFrame: world.waitFrame,
+      },
+    );
+
+    expect(focused).toBe(false);
+    expect(moved).toBe(false);
+    expect(world.getActiveElement()).toBeNull();
+  });
+});
+
+/**
+ * The token itself.
+ *
+ * Two Undos for the **same todo** can be in the DOM at once — a toggle
+ * dismisses that row's outstanding `added` toast and raises its own, and
+ * HeroUI defers the close through a view transition. So the identity cannot be
+ * the todo id, and this is what says so.
+ */
+describe("nextUndoToken", () => {
+  it("never repeats, so the toast being closed cannot answer for the one being raised", () => {
+    const tokens = [nextUndoToken(), nextUndoToken(), nextUndoToken()];
+
+    expect(new Set(tokens).size).toBe(tokens.length);
+  });
+
+  it("travels as the data attribute the action button is found by", () => {
+    expect(undoTokenProps("undo-7")).toEqual({ [UNDO_TOKEN_ATTRIBUTE]: "undo-7" });
+    expect(UNDO_TOKEN_ATTRIBUTE.startsWith("data-")).toBe(true);
   });
 });
