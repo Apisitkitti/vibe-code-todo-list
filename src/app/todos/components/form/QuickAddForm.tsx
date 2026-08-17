@@ -12,7 +12,14 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { FormTextField } from "@/components/ui";
-import { parseQuickAdd, type QuickAddTokenKind } from "@/lib/quickAdd";
+import {
+  NO_RELEASE,
+  heldRelease,
+  parseQuickAdd,
+  releaseAgainst,
+  type QuickAddRelease,
+  type QuickAddTokenKind,
+} from "@/lib/quickAdd";
 
 import {
   quickAddSchema,
@@ -34,29 +41,6 @@ const ESCAPE_KEY = "Escape";
 
 /** Every kind, for the one keystroke that releases all of them at once. */
 const ALL_TOKEN_KINDS: readonly QuickAddTokenKind[] = ["due", "priority"];
-
-/**
- * A refusal, and the exact text it was made against.
- *
- * **Keyed to the text, which is what stops it going stale** (review B-2). A
- * release was previously a bare set of kinds that nothing ever cleared, so one
- * `Esc` left the parser dead for everything typed afterwards — no chips, no
- * date, no priority and no signal that anything had been switched off — and
- * the same set leaked into the next todo during burst capture. Deriving the
- * active release from an exact string match means there is no stale state to
- * clear: change one character and the reading starts fresh, visibly, with the
- * chips back and refusable again.
- *
- * The trade is that an edit-and-retype re-offers a parse the user already
- * refused once. That is the right way round: an unwanted chip is on screen and
- * costs one keystroke, while a silently disabled parser is invisible.
- */
-interface QuickAddRelease {
-  text: string;
-  kinds: readonly QuickAddTokenKind[];
-}
-
-const NO_RELEASE: QuickAddRelease = { text: "", kinds: [] };
 
 export interface QuickAddFormProps {
   /** Focused by the empty state's call to action, and after every create. */
@@ -110,8 +94,8 @@ export const QuickAddForm = ({
   });
 
   const text = useWatch({ control, name: "text" }) ?? "";
-  /** Only the refusal made against *this* text counts. See `QuickAddRelease`. */
-  const activeRelease = release.text === text ? release.kinds : [];
+  /** Only a refusal whose tail is still on screen counts. `QuickAddRelease`. */
+  const activeRelease = heldRelease(release, text);
   /*
     Read on every render rather than memoised against a captured `now`: "today"
     is a fact about the reader's clock, and a bar left open across midnight
@@ -146,12 +130,7 @@ export const QuickAddForm = ({
   });
 
   const releaseKinds = (kinds: readonly QuickAddTokenKind[]) => {
-    const current = getValues("text");
-
-    setRelease({
-      text: current,
-      kinds: [...new Set([...activeRelease, ...kinds])],
-    });
+    setRelease(releaseAgainst(getValues("text"), [...activeRelease, ...kinds]));
   };
 
   const clearTo = (next: string) => {

@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest";
 
-import { parseQuickAdd, type QuickAddTokenKind } from "@/lib/quickAdd";
+import {
+  NO_RELEASE,
+  heldRelease,
+  parseQuickAdd,
+  releaseAgainst,
+  type QuickAddTokenKind,
+} from "@/lib/quickAdd";
 
 /**
  * The quick-add parser (PM backlog #1).
@@ -552,6 +558,140 @@ describe("parseQuickAdd — the tokens, and keeping the text", () => {
     expect(parse("buy milk tomorrow", ["priority"])).toMatchObject({
       title: "buy milk",
       dueAt: "2026-08-18",
+    });
+  });
+});
+
+/**
+ * How long a refusal lasts, which is QA DEF-22.
+ *
+ * This is the third defect in the family "a partial read leaves debris in the
+ * title", and the only one that was not in the parse: the refusal used to be
+ * keyed to the raw field value, so a keystroke the parser cannot even see —
+ * one trailing space — revoked it, and the todo saved short by a word with a
+ * due date the user had explicitly refused.
+ *
+ * Written to be mutation-sensitive, like the "must not fire" block above. The
+ * rule has two halves and a test can only hold it by asserting both: it must
+ * survive an edit that leaves the reading alone, and it must lapse when the
+ * reading changes. A guard that always held, or always lapsed, has to go red.
+ */
+describe("heldRelease — a refusal outlives what cannot have changed it", () => {
+  /** What pressing the `Due Tomorrow` chip on this line records. */
+  const refuseDue = (text: string) =>
+    releaseAgainst(text, ["due"], { now: NOW });
+
+  test("the refusal is recorded against the words the parse read", () => {
+    expect(refuseDue("Call mum about tomorrow")).toEqual({
+      tail: ["tomorrow"],
+      wordCount: 4,
+      kinds: ["due"],
+    });
+  });
+
+  test("a trailing space is not an edit — it is not even a word", () => {
+    const release = refuseDue("Call mum about tomorrow");
+
+    // DEF-22 reproduction B, the sharpest case: `parseQuickAdd` trims and
+    // splits on `/\s+/`, so this keystroke changes nothing it can read.
+    expect(heldRelease(release, "Call mum about tomorrow ")).toEqual(["due"]);
+    expect(heldRelease(release, "  Call mum about tomorrow  ")).toEqual(["due"]);
+    expect(heldRelease(release, "Call mum  about   tomorrow")).toEqual(["due"]);
+  });
+
+  test("a typo fixed at the far end of the line leaves the reading alone", () => {
+    // DEF-22 reproduction A: the refusal is made on the misspelt line, and the
+    // correction is three words from the tail — rule 1 never looked there.
+    expect(heldRelease(refuseDue("Cal mum about tomorrow"), "Call mum about tomorrow")).toEqual(
+      ["due"],
+    );
+  });
+
+  test("a different tail word is a different reading, and is offered again", () => {
+    const release = refuseDue("Call mum about tomorrow");
+
+    expect(heldRelease(release, "Call mum about today")).toEqual([]);
+    expect(heldRelease(release, "Call mum about tomorrow high")).toEqual([]);
+    expect(heldRelease(release, "Call mum about")).toEqual([]);
+  });
+
+  /**
+   * Review B-2, and the reason the reading is anchored to the line rather than
+   * merely matched at its end. Without the anchor a refusal of `tomorrow`
+   * would follow the user into every later line ending in `tomorrow` — no
+   * chip, no date, and no signal that anything had been switched off.
+   */
+  test("a refusal does not follow the user into a different line", () => {
+    const release = refuseDue("Call mum about tomorrow");
+
+    expect(heldRelease(release, "Buy milk tomorrow")).toEqual([]);
+    expect(heldRelease(release, "Ring the bank later tomorrow")).toEqual([]);
+    expect(heldRelease(release, "")).toEqual([]);
+  });
+
+  test("nothing refused is nothing held, whatever the text says", () => {
+    expect(heldRelease(NO_RELEASE, "Call mum about tomorrow")).toEqual([]);
+    expect(heldRelease(NO_RELEASE, "")).toEqual([]);
+  });
+
+  test("Esc refuses every kind at once, and all of them survive together", () => {
+    const release = releaseAgainst("buy milk tomorrow high", ["due", "priority"], {
+      now: NOW,
+    });
+
+    expect(release.tail).toEqual(["tomorrow", "high"]);
+    expect(heldRelease(release, "buy milk tomorrow high ")).toEqual([
+      "due",
+      "priority",
+    ]);
+    expect(heldRelease(release, "buy milk tomorrow low")).toEqual([]);
+  });
+
+  /**
+   * The reading is taken from the parse *under* the refusal, because that is
+   * what the user is now looking at: releasing the date steps over `tomorrow`
+   * and lets the scan reach `high` behind it (B-1), so the tail is both words.
+   */
+  test("the recorded reading includes what the release let the scan reach", () => {
+    expect(releaseAgainst("plan the week tomorrow high", ["due"], { now: NOW })).toEqual({
+      tail: ["tomorrow", "high"],
+      wordCount: 5,
+      kinds: ["due"],
+    });
+  });
+
+  /**
+   * And when the release widens it, the wider reading is what gets recorded.
+   *
+   * `Esc` refuses every kind, including ones rule 2 stopped from firing: on
+   * `tomorrow high` only the priority had a chip, but with that word stepped
+   * over the scan reaches the date behind it. Recording what the *unreleased*
+   * parse read would leave the first word outside the reading and therefore
+   * unanchored — and a later `tonight high` would then keep a refusal that was
+   * never made against it, silently, which is DEF-22 again by another route.
+   */
+  test("a reading the release itself widened is recorded in full", () => {
+    const release = releaseAgainst("tomorrow high", ["due", "priority"], {
+      now: NOW,
+    });
+
+    expect(release.tail).toEqual(["tomorrow", "high"]);
+    expect(heldRelease(release, "tomorrow high")).toEqual(["due", "priority"]);
+    expect(heldRelease(release, "tonight high")).toEqual([]);
+  });
+
+  test("the refusal is what the parse is then handed, end to end", () => {
+    const typed = "Call mum about tomorrow";
+    const release = refuseDue(typed);
+    // The trailing space that used to lose the word.
+    const edited = `${typed} `;
+
+    expect(
+      parseQuickAdd(edited, { now: NOW, release: heldRelease(release, edited) }),
+    ).toMatchObject({
+      title: "Call mum about tomorrow",
+      dueAt: "",
+      tokens: [],
     });
   });
 });

@@ -205,6 +205,100 @@ test.describe("quick-add bar", () => {
   });
 
   /**
+   * DEF-22. The refusal used to be keyed to the raw field value, so *any*
+   * difference revoked it — including a keystroke that changes no word the
+   * parser can see. The todo then saved short by a word, with a due date the
+   * user had explicitly refused, announced by a success toast.
+   *
+   * The trailing space is the sharper of the two: `parseQuickAdd` trims and
+   * splits on `/\s+/`, so this edit is invisible to the parser and cannot have
+   * changed its reading. It is also invisible to the user, which is why the
+   * feature's own doctrine ranks it worse than an unwanted chip.
+   */
+  test("a refusal survives a trailing space, which is not a word", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    const dueChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Tomorrow"), "tomorrow"),
+    });
+
+    await todos.quickAddInput.fill(LITERAL_TITLE);
+    await dueChip.click();
+    await expect(dueChip).toHaveCount(0);
+
+    // One space at the end. No word added, none changed, none removed.
+    await todos.quickAddInput.press("End");
+    await todos.quickAddInput.press(" ");
+
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Enter");
+
+    await expect(todos.row(LITERAL_TITLE)).toBeVisible();
+    // The refusal held: the word is in the title and the row carries no date
+    // at all — `TodoDueDate` renders a `<time>` or nothing.
+    await expect(todos.row(LITERAL_TITLE).locator("time")).toHaveCount(0);
+  });
+
+  /**
+   * DEF-22, reproduction A. A correction three words from the tail cannot
+   * change what rule 1 reads, so it cannot withdraw a refusal of that reading.
+   */
+  test("a refusal survives a typo fixed at the far end of the line", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    const dueChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Tomorrow"), "tomorrow"),
+    });
+
+    await todos.quickAddInput.fill("Cal mum about tomorrow");
+    await dueChip.click();
+    await expect(dueChip).toHaveCount(0);
+
+    // Caret after `Cal`, then the missing `l` — the far end of the line.
+    await todos.quickAddInput.press("Home");
+    await todos.quickAddInput.press("ArrowRight");
+    await todos.quickAddInput.press("ArrowRight");
+    await todos.quickAddInput.press("ArrowRight");
+    await todos.quickAddInput.press("l");
+
+    await expect(todos.quickAddInput).toHaveValue(LITERAL_TITLE);
+    await expect(dueChip).toHaveCount(0);
+
+    await todos.quickAddInput.press("Enter");
+
+    await expect(todos.row(LITERAL_TITLE)).toBeVisible();
+    await expect(todos.row(LITERAL_TITLE).locator("time")).toHaveCount(0);
+  });
+
+  /**
+   * The other half of DEF-22, and the reason the fix is a *tail* comparison
+   * rather than a dead parser: changing the tail is still a fresh reading.
+   */
+  test("a refusal lapses when the tail itself changes", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    const dueChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Tomorrow"), "tomorrow"),
+    });
+    const todayChip = page.getByRole("button", {
+      name: keepInTitleLabel(dueChipLabel("Today"), "today"),
+    });
+
+    await todos.quickAddInput.fill(LITERAL_TITLE);
+    await dueChip.click();
+    await expect(dueChip).toHaveCount(0);
+
+    // A different tail word is a different reading, offered and refusable.
+    await todos.quickAddInput.fill("Call mum about today");
+
+    await expect(todayChip).toBeVisible();
+  });
+
+  /**
    * Review MA-1. A capital is how the user says the word is part of a name,
    * and it is a stronger guarantee than the chips: nothing fires, so there is
    * nothing to notice and nothing to undo.

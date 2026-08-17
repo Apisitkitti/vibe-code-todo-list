@@ -1278,10 +1278,19 @@ hold for sighted users only.
 
 **Refusing one chip never costs the other.** Releasing the date leaves the
 priority read and its chip on screen; the released words go back into the
-title and the reading carries on past them. And a refusal belongs to the exact
-text it was made against — change one character and the reading starts fresh,
-visibly. An unwanted chip is on screen and costs one keystroke; a silently
-disabled parser is invisible, which is the worse of the two.
+title and the reading carries on past them.
+
+**A refusal belongs to the reading it was made against — not to the exact
+string.** It lasts exactly as long as that reading: change a trailing word,
+add a word, remove one, or replace the line, and the parse starts fresh and
+visibly, chips back and refusable again. An unwanted chip is on screen and
+costs one keystroke; a silently disabled parser is invisible, which is the
+worse of the two. But the reverse is worse still, and it is what "exact
+string" bought: correcting a typo at the *start* of the line, or typing one
+trailing space, put back a reading the user had refused and saved the todo
+short by a word under a success toast. Only trailing words are ever read, and
+whitespace is not a word — so an edit the parser cannot see must not be able
+to withdraw a refusal of what it read.
 
 **A capital letter switches the parser off for that word,** which is a
 stronger guarantee than any chip: nothing fires, so there is nothing to notice

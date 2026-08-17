@@ -112,6 +112,15 @@ export interface QuickAddResult {
   priority: TodoPriority;
   /** Left to right, in the order the words appear. Empty when nothing fired. */
   tokens: QuickAddToken[];
+  /**
+   * The trailing words the scan actually read — lifted *and* stepped over —
+   * normalised the way the parser normalises, and empty when nothing was read.
+   *
+   * This is rule 1 stated as a value: everything to the left of it is title
+   * the parser never looked at. It is what a refusal is keyed to, so that an
+   * edit the reading cannot see cannot revoke that refusal (`QuickAddRelease`).
+   */
+  tail: string[];
 }
 
 export interface QuickAddOptions {
@@ -339,5 +348,114 @@ export const parseQuickAdd = (
     dueAt,
     priority,
     tokens,
+    // Where the scan stopped: rule 1's boundary, as words.
+    tail: words.slice(cursor),
   };
+};
+
+/**
+ * A refusal, and the reading it was made against.
+ *
+ * **Keyed to the reading — the words the parse read, and where they sit —
+ * rather than to the raw field value** (review B-2, QA DEF-22).
+ *
+ * A release was first a bare set of kinds that nothing ever cleared, so one
+ * `Esc` left the parser dead for everything typed afterwards — no chips, no
+ * date, no priority and no signal that anything had been switched off — and the
+ * same set leaked into the next todo during burst capture. Keying it to the text
+ * fixed that, by making the refusal lapse the moment the text changed. But it
+ * keyed to the *raw string*, and a raw string changes for reasons the parser
+ * cannot see: fixing a typo three words to the left, or typing one trailing
+ * space, revoked a refusal the user never withdrew, and the todo then saved
+ * short by a word with a due date they had explicitly refused, under a success
+ * toast (DEF-22, the third of this family).
+ *
+ * So the rule is neither "the exact text" nor "forever":
+ *
+ * > **A refusal survives every edit that leaves the reading it was made against
+ * > untouched, and lapses the moment that reading changes.**
+ *
+ * A reading is `tail` — rule 1's trailing run, the only words the parser ever
+ * looks at — held in place by `wordCount`, the length of the line it was read
+ * out of. So:
+ *
+ *  - A typo fixed to the left of the tail, a trailing space, a doubled space:
+ *    the tail is the same words in the same place, and none of those edits is
+ *    even visible to a parser that trims and splits on `/\s+/` before it reads
+ *    anything. **The refusal holds.**
+ *  - A different tail word, a word added or removed, the line replaced: this is
+ *    a different reading of a different line. **The refusal lapses**, the chips
+ *    come back, and they are refusable again.
+ *
+ * That second half is B-2's trade, kept deliberately and with its reasoning
+ * intact: an unwanted chip is on screen and costs one keystroke, while a
+ * silently disabled parser is invisible. `wordCount` is what keeps it — without
+ * it a refusal of `tomorrow` would silently follow the user into every later
+ * line ending in `tomorrow`, which is the stale parser B-2 was filed about.
+ * What B-2 never argued for, and what DEF-22 was, is a refusal revoked by an
+ * edit that changes no word the parse can reach.
+ */
+export interface QuickAddRelease {
+  /** The reading refused, as `QuickAddResult.tail` had it. */
+  tail: readonly string[];
+  /** Words in the whole line, which is what anchors `tail` to its place in it. */
+  wordCount: number;
+  kinds: readonly QuickAddTokenKind[];
+}
+
+export const NO_RELEASE: QuickAddRelease = {
+  tail: [],
+  wordCount: 0,
+  kinds: [],
+};
+
+/** The parser's own normalisation, and the only unit any of this compares in. */
+const toWords = (text: string): string[] => {
+  const trimmed = text.trim();
+
+  return trimmed === "" ? [] : trimmed.split(/\s+/);
+};
+
+/**
+ * Records a refusal of `kinds` against what `text` currently reads as.
+ *
+ * The tail is taken from the parse *under* the refusal, because that is the
+ * reading the user is now looking at: a released run is stepped over rather
+ * than skipped, so refusing one kind can let the scan reach further left (B-1).
+ */
+export const releaseAgainst = (
+  text: string,
+  kinds: readonly QuickAddTokenKind[],
+  options: QuickAddOptions = {},
+): QuickAddRelease => ({
+  tail: parseQuickAdd(text, { ...options, release: kinds }).tail,
+  wordCount: toWords(text).length,
+  kinds: [...new Set(kinds)],
+});
+
+/**
+ * The kinds still refused for `text` — empty once the reading has changed.
+ *
+ * Compared as word sequences, never as strings, which is the whole of DEF-22:
+ * whitespace is not a word, so an edit made only of whitespace cannot withdraw
+ * anything.
+ */
+export const heldRelease = (
+  release: QuickAddRelease,
+  text: string,
+): readonly QuickAddTokenKind[] => {
+  const { tail, wordCount, kinds } = release;
+
+  if (kinds.length === 0 || tail.length === 0) return [];
+
+  const words = toWords(text);
+
+  // Same line length, so the tail is still sitting where it was read from.
+  if (words.length !== wordCount) return [];
+
+  const offset = words.length - tail.length;
+
+  return tail.every((word, index) => word === words[offset + index])
+    ? kinds
+    : [];
 };
