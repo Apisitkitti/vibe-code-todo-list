@@ -148,18 +148,36 @@ Assignments:
   floor.** A contrast failure is not a palette preference, and it cannot be
   composed around — every consumer of the token is affected, so correcting it
   anywhere but the token means correcting it in a dozen places and missing the
-  thirteenth. Such an override must (a) change only the failing channel,
-  keeping HeroUI's hue and chroma, (b) name the defect, the measured
-  before/after and the surfaces it was measured on, in a comment, and (c) be
-  scoped so it cannot reach the theme that was already passing.
-  `--muted` is the one instance today (DEF-15); see `src/app/globals.css`.
+  thirteenth. Such an override must:
 
-  Point (c) is not boilerplate. HeroUI scopes its dark palette to
-  `.dark, [data-theme="dark"]`, which has the **same specificity** as a bare
-  `:root` — so an unguarded `:root { --muted: … }` in `globals.css` comes later
-  in the cascade and silently overwrites the dark value as well. Measured, that
-  mutation drops dark's muted text from 7.72:1 to 3.62:1. Guard with
-  `:root:not(.dark):not([data-theme="dark"])`, and test both themes.
+  - **(a)** change only the failing channel, keeping HeroUI's hue and chroma;
+  - **(b)** name the defect, the measured before/after, and the surfaces it was
+    measured on, in a comment beside the value;
+  - **(c)** be scoped to exactly the themes that were failing — guarded when
+    one theme already passed, unguarded when neither did — and in **either**
+    case the themes it does *not* correct must be measured too, and stated, so
+    "left alone" is a finding rather than an assumption.
+
+  Two instances today, one of each shape (`src/app/globals.css`):
+
+  | Token | Defect | Themes failing | Scope |
+  |---|---|---|---|
+  | `--muted` | DEF-15 | light only (4.43:1; dark 7.72:1) | `:root:not(.dark):not([data-theme="dark"])` |
+  | `--accent` | DEF-14 | both (3.59:1 in each) | bare `:root` |
+
+  **Why the scopes differ, and why (c) is not boilerplate.** HeroUI scopes its
+  dark palette to `.dark, [data-theme="dark"]`, which has the **same
+  specificity** as a bare `:root` — so an unguarded `:root { --muted: … }`
+  comes later in the cascade and silently overwrites the dark value as well.
+  Measured, that mutation drops dark's muted text from 7.72:1 to 3.62:1.
+  `--accent` needs no guard for the mirror-image reason: HeroUI's dark block
+  never defines it, both themes read the one value, and both measured 3.59:1 —
+  so guarding it to light would have fixed half the defect and left no trace of
+  the other half.
+
+  A token that fails in both themes is the case a "protect the passing theme"
+  rule does not describe at all, which is why (c) is written as *scope to what
+  is failing* rather than as *always guard*. Test both themes either way.
 
 ---
 
