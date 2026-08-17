@@ -189,39 +189,75 @@ export const readFocusedRow = (): RowFocusAnchor | null => {
   return { index, rowCount: checkboxes.length };
 };
 
+/** The little of a row checkbox the wait loop actually needs. */
+export interface FocusTarget {
+  focus: () => void;
+}
+
+/**
+ * What `focusIsUnclaimed` reads the world through.
+ *
+ * Injectable for the same reason the two loops below are: the property under
+ * test is which *element* the guard accepts, and a `node` test environment has
+ * no `document` to arrange one in.
+ */
+export interface UnclaimedFocusDeps {
+  getActiveElement: () => unknown;
+  getBody: () => unknown;
+}
+
+const browserUnclaimedDeps: UnclaimedFocusDeps = {
+  getActiveElement: () => document.activeElement,
+  getBody: () => document.body,
+};
+
 /**
  * Whether the toast step is still allowed to take focus.
  *
  * Two states qualify, and the second is the one that is easy to leave out:
  *
- * - Focus is on a row — where step 1 put it, and the user has not moved since.
+ * - Focus is **exactly where step 1 put it** — `rescued` is the element
+ *   `focusRowAfterRemoval` focused, and it is still the active one.
  * - Focus is on `<body>`, i.e. **nowhere**. That is what an emptied list
  *   leaves: toggling the only row in an active list gives step 1 no row to
- *   land on, so it returns `false` with focus still on the floor. Requiring a
- *   row here would make the rescue decline in the one state where nothing else
- *   can catch focus at all — the user who has just finished their last todo,
- *   and for whom US-07 makes the toast the only route back.
+ *   land on, so it returns `null` with focus still on the floor. Requiring an
+ *   element here would make the rescue decline in the one state where nothing
+ *   else can catch focus at all — the user who has just finished their last
+ *   todo, and for whom US-07 makes the toast the only route back.
  *
  * Anything else means the user has taken focus somewhere themselves, and it is
  * not ours to move.
+ *
+ * **`rescued` is an identity, not a shape (QA DEF-28).** This used to ask
+ * whether the active element was *any* row checkbox, which is a description
+ * satisfied by every row on screen — so a user who tabbed from the rescued row
+ * to a neighbouring one, during a write slow enough to leave time for it, was
+ * indistinguishable from a user who had not moved at all, and had focus taken
+ * off the row they had deliberately chosen. QA reproduced it 3 of 3 on a
+ * 2500ms status write: the next `Space` went to the toast's `Undo` and reverted
+ * a completion instead of making the one they were standing on.
+ *
+ * The guard was already correct for focus that leaves the list altogether —
+ * `undo-focus.spec.ts` pins the quick-add case — which is exactly why the suite
+ * stayed green through it. Comparing against the one element step 1 focused is
+ * the same shape as the DEF-25 fix one level up: identity, not position, and
+ * not a category that happens to contain the right answer.
  */
-export const focusIsUnclaimed = (): boolean => {
-  const active = document.activeElement;
+export const focusIsUnclaimed = (
+  rescued: unknown,
+  deps: UnclaimedFocusDeps = browserUnclaimedDeps,
+): boolean => {
+  const active = deps.getActiveElement();
 
-  if (active === null || active === document.body) return true;
+  if (active === null || active === deps.getBody()) return true;
 
-  return rowCheckboxes().includes(active as HTMLElement);
+  return active === rescued;
 };
 
 const nextFrame = (): Promise<void> =>
   new Promise((resolve) => {
     requestAnimationFrame(() => resolve());
   });
-
-/** The little of a row checkbox the wait loop actually needs. */
-interface FocusTarget {
-  focus: () => void;
-}
 
 /**
  * What `focusRowAfterRemoval` reads the world through.
@@ -270,30 +306,37 @@ const browserDeps: RowFocusDeps = {
  * pinned in `tests/unit/rowFocus.test.ts`, because the thing it insures
  * against — a commit that lands a frame later than the caller assumed — is a
  * scheduling detail no caller should have to re-verify after every upgrade.
+ *
+ * **Returns the element it focused**, or `null` for every way of not having
+ * focused one — the list emptied, the removal never landed, or the row refused
+ * the focus. That element is the anchor `focusIsUnclaimed` compares against, so
+ * step 2 can tell "still where I left it" from "some other row" (QA DEF-28). A
+ * boolean could only say that focus went *somewhere*, which is the ambiguity
+ * the defect lived in.
  */
 export const focusRowAfterRemoval = async (
   anchor: RowFocusAnchor,
   deps: RowFocusDeps = browserDeps,
-): Promise<boolean> => {
+): Promise<FocusTarget | null> => {
   for (let frame = 0; frame < MAX_WAIT_FRAMES; frame += 1) {
     const rows = deps.readRows();
 
     if (rows.length < anchor.rowCount) {
       const index = nextFocusIndex(anchor.index, rows.length);
 
-      if (index === null) return false;
+      if (index === null) return null;
 
       const target = rows[index];
 
       target?.focus();
 
-      return deps.getActiveElement() === target;
+      return deps.getActiveElement() === target ? (target ?? null) : null;
     }
 
     await deps.waitFrame();
   }
 
-  return false;
+  return null;
 };
 
 /**

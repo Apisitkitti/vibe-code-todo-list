@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  focusIsUnclaimed,
   focusRowAfterRemoval,
   focusUndoAction,
   MAX_WAIT_FRAMES,
@@ -95,7 +96,9 @@ describe("focusRowAfterRemoval", () => {
       },
     );
 
-    expect(focused).toBe(true);
+    // The element itself, not merely "yes": it is the anchor step 2's guard
+    // compares against (QA DEF-28).
+    expect(focused).toBe(survivors[0]);
     expect(frames).toBe(REMOVAL_LANDS_ON_FRAME);
     // The row that slid up, not the one that was about to be unmounted.
     expect(before.getActiveElement()).toBe(survivors[0]);
@@ -119,7 +122,7 @@ describe("focusRowAfterRemoval", () => {
       },
     );
 
-    expect(focused).toBe(false);
+    expect(focused).toBeNull();
     expect(frames).toBe(MAX_WAIT_FRAMES);
     expect(stuck.getActiveElement()).toBeNull();
   });
@@ -136,9 +139,66 @@ describe("focusRowAfterRemoval", () => {
       },
     );
 
-    // Step 2's `focusIsUnclaimed` is what catches this case instead.
-    expect(focused).toBe(false);
+    // Step 2's `focusIsUnclaimed` is what catches this case instead, on the
+    // `<body>` branch — which is why `null` here must not make it decline.
+    expect(focused).toBeNull();
     expect(before.getActiveElement()).toBeNull();
+  });
+});
+
+/**
+ * The guard on step 2 — QA DEF-28.
+ *
+ * It used to ask whether the active element was *a* row checkbox. That is a
+ * shape, and every row on screen has it, so a user who tabbed from the rescued
+ * row to a neighbouring one during a slow write read as a user who had not
+ * moved: focus was taken off the row they had deliberately chosen and put on
+ * the toast's `Undo`, where their next `Space` reverted a completion instead.
+ *
+ * The end-to-end half is in `e2e/undo-focus.spec.ts`. What is pinned here is
+ * the discrimination itself, which a browser cannot make obvious: the
+ * neighbouring row and the rescued row are the same kind of element, and only
+ * driving the guard directly shows that it separates them by identity.
+ *
+ * `<body>` is a separate, load-bearing branch and not an oversight: an emptied
+ * list gives step 1 nowhere to land, and requiring an element would make the
+ * rescue decline in the one state where nothing else can catch focus at all.
+ */
+describe("focusIsUnclaimed", () => {
+  /** Stand-ins: identity is the only property the guard reads. */
+  const body = { name: "body" };
+  const rescuedRow = { name: "rescued row" };
+  const neighbouringRow = { name: "neighbouring row" };
+  const quickAddInput = { name: "quick-add input" };
+
+  const world = (active: unknown) => ({
+    getActiveElement: () => active,
+    getBody: () => body,
+  });
+
+  it("admits the row step 1 focused, which the user has not moved off", () => {
+    expect(focusIsUnclaimed(rescuedRow, world(rescuedRow))).toBe(true);
+  });
+
+  it("declines a neighbouring row the user tabbed to during the write", () => {
+    // The whole of DEF-28. Same kind of element, same list, different choice —
+    // and the choice is the user's, so the rescue is not entitled to it.
+    expect(focusIsUnclaimed(rescuedRow, world(neighbouringRow))).toBe(false);
+  });
+
+  it("admits `<body>`, because an emptied list has nowhere else to be", () => {
+    // Step 1 returns `null` here, so there is no rescued element to match.
+    expect(focusIsUnclaimed(null, world(body))).toBe(true);
+    expect(focusIsUnclaimed(null, world(null))).toBe(true);
+  });
+
+  it("declines focus the user took outside the list", () => {
+    expect(focusIsUnclaimed(rescuedRow, world(quickAddInput))).toBe(false);
+  });
+
+  it("declines everything once step 1 failed with focus somewhere real", () => {
+    // A rescue that never landed cannot claim a row it did not choose.
+    expect(focusIsUnclaimed(null, world(neighbouringRow))).toBe(false);
   });
 });
 

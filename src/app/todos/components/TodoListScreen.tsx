@@ -582,19 +582,24 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
         somewhere useful from the first frame whatever step 2 does next
         (`src/lib/rowFocus.ts`).
       */
-      await focusRowAfterRemoval(focusAnchor);
+      const rescuedRow = await focusRowAfterRemoval(focusAnchor);
+
       await running;
 
       /*
         Step 2, onto the Undo this toggle raised and no other. Guarded on focus
-        being unclaimed — still on a row where step 1 left it, or on `<body>`
+        being unclaimed — still on the exact row step 1 focused, or on `<body>`
         because the list emptied and step 1 had nowhere to land — so a user who
-        has already tabbed somewhere themselves is not dragged into the toast.
+        has already moved themselves is not dragged into the toast. `rescuedRow`
+        is why that can be said of a *neighbouring* row too: a slow write leaves
+        time to tab one row across, and against "any row checkbox" that was
+        indistinguishable from not having moved (QA DEF-28).
+
         Skipped entirely when the write failed, where the row comes back, no
         token is minted and there is no Undo to reach.
       */
       if (undoToken !== null) {
-        await focusUndoAction(undoToken, focusIsUnclaimed);
+        await focusUndoAction(undoToken, () => focusIsUnclaimed(rescuedRow));
       }
 
       return;

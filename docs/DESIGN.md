@@ -1101,9 +1101,21 @@ Do not introduce them without updating this document.
 
    **An emptied list still gets the rescue.** Toggling the only row leaves step
    1 with nowhere to land, so the guard on step 2 admits focus on `<body>` as
-   well as focus on a row. Requiring a row would make the rescue decline in the
-   one state where nothing else can catch focus. Implementation and the
-   frame-timing trap are in `src/lib/rowFocus.ts`.
+   well as focus on the row step 1 chose. Requiring an element would make the
+   rescue decline in the one state where nothing else can catch focus.
+   Implementation and the frame-timing trap are in `src/lib/rowFocus.ts`.
+
+   **The guard names the row, not the kind of thing a row is
+   (`docs/QA-REPORT.md` DEF-28).** It asked whether the active element was *a*
+   row checkbox, which every row on screen satisfies — so a user who tabbed
+   from the rescued row to the row beside it, during a write slow enough to
+   leave time for it, read as a user who had not moved and had focus taken off
+   the row they had chosen. Their next `Space` then reverted the completion
+   they had just made instead of making the one they were standing on. It
+   compares against the element step 1 actually focused, which is the same
+   correction DEF-25 forced one level up: identity, not a category that happens
+   to contain the right answer. Focus that leaves the list was always declined
+   correctly, which is why the suite was green through it.
 9. **Motion.** The only animations are HeroUI's own (skeleton shimmer, dialog
    entry, toast slide). Add `motion-reduce:transition-none` to the row action
    opacity transition.

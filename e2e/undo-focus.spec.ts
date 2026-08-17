@@ -592,3 +592,140 @@ test.describe("NFR-04 — the rescue stands down once the user has moved", () =>
     await expect(todos.quickAddInput).toHaveValue(TYPED);
   });
 });
+
+/**
+ * QA DEF-28 — the guard has to name *which* row, not the kind of thing a row is.
+ *
+ * The describe above is the case the guard always got right: focus that leaves
+ * the list entirely. `focusIsUnclaimed` used to answer "is the active element
+ * one of the row checkboxes", which is true of every row on screen — so the
+ * user who tabs from the rescued row to the row *next to it* was
+ * indistinguishable from the user who has not moved at all, and had focus
+ * yanked onto the toast when the write finally landed. QA reproduced it 3 of 3
+ * against a 2500ms status write.
+ *
+ * The consequence is not cosmetic and it is why this is a regression test
+ * rather than a nicety: the user walks to `victim` meaning to complete it,
+ * focus is taken to `target`'s `Undo`, and the `Space` they meant for `victim`
+ * un-completes `target`. Neither change they wanted reaches the database.
+ *
+ * It needs a slow write — at ordinary speed the toast arrives before there is
+ * time to move — so the response is held open until the move is unambiguous,
+ * the same device the quick-add test uses.
+ */
+test.describe("DEF-28 — the rescue stands down for a neighbouring row too", () => {
+  /** The `aria-label` of whatever has focus. A row checkbox names its todo. */
+  const activeAriaLabel = async (page: Page): Promise<string | null> =>
+    page.evaluate(
+      () => document.activeElement?.getAttribute("aria-label") ?? null,
+    );
+
+  const isRowCheckboxLabel = (label: string | null): label is string =>
+    label !== null && label.startsWith('Mark "');
+
+  /**
+   * Walks forward with real `Tab` presses until a **different** row's checkbox
+   * has focus, and returns how that row names itself.
+   *
+   * The number of stops between two checkboxes is the row's own edit and delete
+   * buttons, which is a layout fact this test has no business pinning — the
+   * `undo-focus` tab tables in `docs/DESIGN.md` §6.8 are where that lives. What
+   * matters here is only that the user has arrived somewhere they chose.
+   */
+  const tabToNeighbouringRow = async (
+    page: Page,
+    from: string,
+  ): Promise<string> => {
+    const MAX_PRESSES = 8;
+    const seen: (string | null)[] = [];
+
+    for (let press = 0; press < MAX_PRESSES; press += 1) {
+      await page.keyboard.press("Tab");
+
+      const label = await activeAriaLabel(page);
+
+      seen.push(label);
+
+      if (isRowCheckboxLabel(label) && label !== from) return label;
+    }
+
+    throw new Error(
+      `Tab left the list before reaching another row; saw ${JSON.stringify(seen)}`,
+    );
+  };
+
+  /**
+   * A row in the **middle** of the list, which `TOGGLED_TITLE` is not.
+   *
+   * The list is newest-first, so the seed's first todo is its last row: step 1
+   * would land focus on the new last row, and the next `Tab` leaves the list
+   * into the toast region — which is the case the describe above already
+   * covers. Toggling a middle row is what puts a *neighbouring row* one Tab
+   * walk away, and that is the whole distinction DEF-28 turns on.
+   */
+  const MIDDLE_TITLE = "filler row 4";
+
+  test("a toast arriving does not steal focus from the row the user tabbed to", async ({
+    signedIn,
+    todos,
+  }) => {
+    await seedList(todos, signedIn);
+
+    await chooseActiveFilter(signedIn);
+    await expect(signedIn.locator("main").getByText(MIDDLE_TITLE)).toBeVisible();
+
+    /*
+      Held so the toast cannot arrive until the user has demonstrably chosen a
+      different row. Without it this test would be racing the round trip, which
+      is the 1-in-3 QA saw at ordinary speed and not something to assert on.
+    */
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await signedIn.route("**/api/todos/*/status", async (route) => {
+      await held;
+      await route.continue();
+    });
+
+    await focusRowFromKeyboard(signedIn, MIDDLE_TITLE);
+    await signedIn.keyboard.press("Space");
+
+    // The row is gone optimistically and step 1 has landed focus on the row
+    // that took its place. That is the anchor the guard is entitled to.
+    await expect(signedIn.locator("main").getByText(MIDDLE_TITLE)).toHaveCount(0);
+    await expect
+      .poll(() => activeAriaLabel(signedIn))
+      .toMatch(/^Mark ".+" as complete$/);
+
+    const rescued = await activeAriaLabel(signedIn);
+
+    expect(isRowCheckboxLabel(rescued)).toBe(true);
+
+    // The user chooses a different row, deliberately, while the write is still
+    // in flight. This is `victim` in QA's repro.
+    const chosen = await tabToNeighbouringRow(signedIn, rescued as string);
+
+    expect(chosen).not.toBe(rescued);
+
+    release();
+
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(MIDDLE_TITLE) }),
+    ).toBeVisible();
+
+    /*
+      Step 2 fires on the frame the action button appears, so once the toast is
+      on screen the steal has either happened or is one frame away. A bounded
+      wait is the honest way to assert a negative — a web-first assertion for
+      "focus did not move" would pass on the frame before it did.
+    */
+    await signedIn.waitForTimeout(700);
+
+    expect(await activeSlot(signedIn)).not.toBe("toast-action-button");
+    expect(await focusedToastTitle(signedIn)).toBeNull();
+    // Still on the row they chose, so their next `Space` toggles that row.
+    expect(await activeAriaLabel(signedIn)).toBe(chosen);
+  });
+});
