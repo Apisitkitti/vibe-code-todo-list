@@ -290,7 +290,13 @@ export const QuickAddForm = ({
                 <span aria-hidden="true">×</span>
               </Button>
             ))}
-            <Typography type="body-sm" color="muted">
+            {/*
+              `aria-hidden`, because the live region above already carries
+              this sentence and announces it at the moment it becomes
+              relevant. Leaving both exposed reads the same hint twice to
+              anyone browsing the page.
+            */}
+            <Typography type="body-sm" color="muted" aria-hidden="true">
               {CHIP_HINT}
             </Typography>
           </div>

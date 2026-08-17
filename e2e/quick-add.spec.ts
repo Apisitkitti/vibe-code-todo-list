@@ -108,7 +108,9 @@ test.describe("quick-add bar", () => {
     // Trailing, so rule 2 cannot save it — this is exactly the case the chips
     // exist for, and it is visible before Enter is ever pressed.
     await expect(dueChip).toBeVisible();
-    await expect(page.getByText(CHIP_HINT)).toBeVisible();
+    // `exact`, so this is the visible hint and not the live region, which
+    // carries the same sentence inside a longer announcement.
+    await expect(page.getByText(CHIP_HINT, { exact: true })).toBeVisible();
 
     await todos.quickAddInput.press("Escape");
 
