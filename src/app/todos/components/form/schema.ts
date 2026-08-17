@@ -97,6 +97,22 @@ export const TODO_FIELD_NAMES = [
 export const isTodoFieldName = (value: string): value is keyof TodoFormValues =>
   (TODO_FIELD_NAMES as readonly string[]).includes(value);
 
+/**
+ * The quick-add bar's own shape: one line of raw text.
+ *
+ * It validates only what it can validate *about the raw string* — that
+ * something was typed. Everything else is a claim about the todo the text
+ * parses into, not about the text, so the bar re-parses its result through
+ * `todoFormSchema` above before it calls the API. That is deliberate: the
+ * title's rules live in one schema, the one the route handler re-parses with,
+ * and the bar borrows them rather than restating them at a second length.
+ */
+export const quickAddSchema = z.object({
+  text: z.string("Enter a title.").trim().min(1, "Enter a title."),
+});
+
+export type QuickAddValues = z.infer<typeof quickAddSchema>;
+
 export const DEFAULT_TODO_FORM_VALUES: TodoFormValues = {
   title: "",
   note: "",

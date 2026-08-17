@@ -119,6 +119,24 @@ As a signed-in user, I want to add a todo with a title and optional details, so 
 - Given the todo was created successfully, When the list updates, Then the create form is reset to its defaults (empty title, empty note, priority `medium`, no due date).
 - Given the create request fails (server or network error), When the failure is returned, Then my typed values remain in the form and I see an error message telling me the todo was not saved.
 
+**Acceptance criteria — the quick-add bar**
+
+*Amended for backlog #1. The bar is now the primary capture path; the modal above is reached from the bar's `More options` and from every row's Edit button. Both write through the same endpoint with the same validation — the bar adds a client-side reading of the typed text and nothing else.*
+
+- Given I am on `/todos`, When the page loads, Then a single-line quick-add input is present above the filter bar, and it is present whether the list is empty, loading, or filtered to nothing.
+- Given the quick-add input has focus and I type a title and press Enter, When the request succeeds, Then the todo is created exactly as the criteria above describe, the input is cleared, and **focus remains in the input** so the next todo can be typed without touching the pointer.
+- Given the create request fails, When the failure is returned, Then the text I typed remains in the input, focus remains in the input, and the failure is reported. Nothing I typed is ever lost to a failed request.
+- Given I type trailing **lowercase** words naming a day (`today`, `tonight`, `tomorrow`, a weekday name, `next week`, `in N days`, or `YYYY-MM-DD`) or a priority (`low`, `medium`, `high`), When the text is read, Then those words are lifted out of the title into `dueAt` and `priority`, are shown as chips beneath the input **before** anything is saved, and are announced through a live region so the reading is available without sight.
+- Given I capitalise such a word, When the text is read, Then nothing fires and the word stays in the title — `Casual Friday` and `Black Friday` are titles, not due dates.
+- Given the text is a single word, When it is read, Then it is always the title, whatever it says — `tomorrow` alone creates a todo called "tomorrow".
+- Given a word of the vocabulary is not trailing, When the text is read, Then it stays in the title — reading stops at the first word that is not vocabulary.
+- Given a chip is showing, When I activate it, Then its words return to the title **and every other reading is left exactly as it was** — refusing the date never silently reverts the priority.
+- Given a chip is showing, When I press `Esc`, Then every chip's words return to the title and the todo is created with the text exactly as typed.
+- Given I have refused a reading, When I change the text at all, Then the reading starts fresh and any chips reappear — a refusal never outlives the text it was made against, and never carries into the next todo.
+- Given I press `More options`, When the modal opens, Then it is pre-filled with the title, due date and priority currently read from the bar, so nothing typed has to be typed twice.
+- Given a filter or search is active and the created todo does not match it, When the create succeeds, Then the todo is **not** inserted into the list and no filter is cleared on my behalf (US-10), and the success toast says it is hidden by my filters so the absence is never mistaken for a failure. The toast only makes that claim when it is certain; where it cannot be, it says nothing rather than something false.
+- Given I create through the bar, When the list refetches, Then the rows already on screen stay on screen — the list is never blanked to a loading state to report a create the toast has already reported.
+
 ### US-06 — List todos
 
 As a signed-in user, I want to see all of my todos in one list, so that I know what is outstanding.
@@ -246,7 +264,7 @@ As a new signed-in user with no todos, I want a clear empty state, so that I kno
 **Acceptance criteria**
 
 - Given I have zero todos, When I open `/todos`, Then I see an empty state with a short heading, one line of guidance, and a call to action to add my first todo — and no filter chrome implying missing data.
-- Given the empty state is shown, When I activate its call to action, Then the create-todo form opens/focuses the Title field.
+- Given the empty state is shown, When I activate its call to action, Then focus moves to the quick-add input (US-05) rather than opening the modal, and the action is labelled for what it does. *Amended for backlog #1: the empty state signposts the one capture path rather than adding a second.*
 - Given I create my first todo, When the list updates, Then the empty state is replaced by the list containing that todo.
 - Given I delete my only remaining todo, When the list updates, Then the empty state reappears.
 - Given I have zero todos, When the empty state renders, Then it is visually distinct from the "no todos match these filters" message in US-10.

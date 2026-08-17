@@ -984,3 +984,376 @@ gate as explicit scope.
 
 *Report written incrementally during the pass; every result above was observed,
 and the places where I inferred rather than observed are marked as such.*
+
+---
+---
+
+# Accessibility audit — 2026-08-17
+
+**Not a release gate.** This is the bounded re-test I asked for as a condition
+of the last ship: the five contrast and tap-target defects that had gone two
+gates without measurement, plus NFR-04's Undo criterion, plus the surfaces
+added in the last two releases that nobody had ever measured. **No story walk,
+no isolation run, no suite run** — those were done at the gate above and
+nothing since has touched them.
+
+## A0. What was actually measured, and on which tree
+
+This matters more than usual, so it goes first.
+
+The checkout was **not on `develop`**. It was on `feature/quick-add`, and it
+moved **three times underneath me** during the audit:
+
+| Observed | HEAD | State |
+|---|---|---|
+| audit start | `5c2cd9d` | identical to `develop` |
+| during harness build | `5255f36` | develop + 2 commits, quick-add bar present |
+| after phase 1–4 | `f6c44fb` | branch **force-reset**; quick-add gone from the tree entirely, replaced by a `useTodoList` extraction |
+| at write-up | `f6c44fb` | quick-add **re-staged** in the index (`git status` shows the developer's staged work again); measurements were already complete |
+
+`develop` itself never moved — it is still `5c2cd9d`. I did not switch
+branches, commit, or touch anything but this file; the movement is the
+developer's, and the working tree was clean at every observation.
+
+**Why the numbers below are still `develop`'s numbers.** Every file carrying a
+surface I measured is **byte-identical to `develop`** — verified with
+`git diff develop HEAD -- <file>` returning zero lines, at both the quick-add
+HEAD and the reset HEAD:
+
+`TodoRow.tsx`, `TodoDueDate.tsx`, `TodoGroupedList.tsx`, `TodoFilters.tsx`,
+`TodosHeader.tsx`, `PriorityChip.tsx`, `globals.css`, `layout.tsx`,
+`sign-up/page.tsx`.
+
+The only audited file that ever differed was `TodoListScreen.tsx`, which
+carries the toast — so §A5 records exactly how that affects the NFR-04 result.
+
+**And I re-ran everything after the reset.** Phases 1–3 were executed twice,
+once on each tree. **Every contrast and tap-target figure reproduced to the
+last decimal place.** Where a figure below could only have come from the
+quick-add tree it is marked as such and corroborated from a develop-identical
+surface.
+
+## A1. Method
+
+Two independent measurements of every colour result, because one of them is a
+model and models are how I produced a wrong number last time by treating a
+12%-alpha layer as opaque.
+
+1. **Analytic.** `getComputedStyle`, the full ancestor stack composited root
+   downwards. Colours resolved by painting them into a 1×1 canvas and reading
+   the pixel back, so `color-mix()`, `lab()` and `oklab()` become real sRGB
+   rather than strings I parse by hand. Alpha composited per layer; `opacity`
+   handled as a **group** multiplier, not as a per-layer alpha.
+2. **Empirical.** Real screenshots at `deviceScaleFactor: 1` (so 1 CSS px = 1
+   image px), decoded to raw RGB. Background = modal pixel of the element's
+   box; foreground = the pixel furthest in luminance from it, which with the
+   app's grayscale `antialiased` rendering is a fully-covered glyph stem, not
+   an AA blend.
+
+**The two agreed to 2 d.p. on every shared target.** That is the cross-check.
+
+**Three hand-checks**, done on paper against the harness:
+
+- Muted `rgb(113,113,122)` at 60% over white → `169.8,169.8,175.2`; relative
+  luminance `0.9278 × 0.40098 + 0.0722 × 0.42981 = 0.4031`;
+  `1.05 / 0.4531 = ` **2.32**. Harness: 2.3178. ✅
+- Foreground `rgb(24,24,27)` at 60% over white → `116.4,116.4,118.2`;
+  L = 0.1764; `1.05 / 0.2264 = ` **4.64**. Harness: 4.6385. ✅
+- Screenshot ground truth for the same pending row: glyph core `[169,169,175]`
+  on `[255,255,255]` → **2.34** (integer-rounded pixels vs the model's
+  unrounded 2.32). ✅
+
+**Sanity check on the opacity model:** the row action buttons are `lg:opacity-0`
+at desktop, and the harness reports their painted colour as *exactly* the
+backdrop and their ratio as 1.00 — which is what a correct group-opacity
+implementation must do at `opacity: 0`. At mobile, where they are opaque, the
+same buttons report 17.72. The model behaves correctly at both ends.
+
+**Thresholds used** — from `docs/PRD.md`, not invented here:
+
+| Judged against | Source |
+|---|---|
+| **4.5:1** body text | NFR-06; WCAG 2.2 SC 1.4.3. Nothing measured qualifies as large text (needs ≥24px, or ≥18.66px bold) |
+| **3:1** control boundary | WCAG 2.2 SC 1.4.11, the standard the checkbox fix itself cites |
+| **44×44** tap target | NFR-05, "Primary tap targets are at least 44x44px" |
+| **24×24** tap target | WCAG 2.2 SC 2.5.8 (AA) — the floor below the project's own stricter bar |
+
+Environment: Node 24, `todo_app_dev`, my own `next dev` on port 3489, which I
+started myself. **No broad `pkill`; no process I did not start was signalled.**
+Fixture accounts `qa-a11y-*@qagate.test` created through the app's own sign-up,
+left in place so every measurement can be re-walked.
+
+## A2. The five untested defects — current status
+
+| Defect | Verdict | Measured | Threshold |
+|---|---|---|---|
+| **DEF-01** checkbox tap target | **Fixed** | 44×44 mobile / 36×36 desktop, all 5 hit points land | 44×44 (NFR-05) |
+| **DEF-08** checkbox contrast | **Fixed — and unmoved** | 5.14:1 dark / 3.40:1 light | 3:1 |
+| **DEF-14** primary button label | **Still broken** | **3.59:1** both themes | 4.5:1 |
+| **DEF-15** muted count | **Still broken** | **4.43:1** light (7.72:1 dark) | 4.5:1 |
+| **DEF-16** search clear button | **Still broken** | **20×20** at every width | 44×44 / 24×24 |
+
+### DEF-01 — **Fixed.** The row rewrite did not shrink the target
+
+The hit host is the `<label data-slot="checkbox-content">`, and its floor is
+`min-h-11 min-w-11 sm:min-h-9 sm:min-w-9` — **44×44 below 640px, 36×36 above**.
+
+`elementFromPoint` at the centre and all four corners returns an element inside
+that label at **both** widths and in both themes — 20 probes, 20 hits, every
+one of which drives the checkbox.
+
+**Why the markup churn was harmless, specifically:** the 44px floor lives on
+`Checkbox.Content`, not on the row. The border, the `gap-1.5` spacing that
+replaced `divide-y`, and `py-3` → `py-3.5` all change the row's box; none of
+them can shrink a child with its own min-size. `py-3.5` (14px) against a 44px
+child is not even the binding constraint on row height.
+
+**The 36×36 desktop figure is not a regression** — it is the deliberate `sm:`
+step-down for pointer input, it clears SC 2.5.8's 24×24, and NFR-05's 44×44 is
+written about phones. Recording it so nobody re-opens it as a defect later.
+
+### DEF-08 — **Fixed, and the composite did not move**
+
+`color-mix(in srgb, var(--foreground) 50%, transparent)`, 1px, resolving to
+`color(srgb 0.094 0.094 0.106 / 0.5)` light and `… 0.988 … / 0.5` dark.
+
+**5.14:1 dark, 3.40:1 light** — *identical to the numbers this defect was
+closed with.* The concern in the brief was that the row's new border and
+background relationship would move the composite. **It does not**, and the
+reason is checkable: at rest the `<li>` paints **no background** — it carries a
+border only — so the checkbox's backdrop is the Card surface both before and
+after the change.
+
+I also measured the **hovered** row specifically, because `docs/DESIGN.md`
+flags light-mode headroom as thin (3.25:1) once `divide-y` went. **Hovered:
+still 3.40:1 light / 5.14:1 dark.** `hover:bg-surface-hover` lands on the
+`<li>`, but the control's own field background is opaque, so the hover colour
+never reaches the surface the border is judged against.
+
+**Row border vs Card** (the `divide-y` replacement): **1.71:1 light / 1.79:1
+dark** — matching the developer's in-code claim of 1.71 / 1.78 to the decimal.
+A decorative separator, not a control boundary, so SC 1.4.11's 3:1 does not
+bind it. Recorded as verified-as-described, not as a defect.
+
+### DEF-14 — **Still broken. 3.59:1, unchanged, in both themes**
+
+`rgb(4,133,247)` with a white label at 14px/500. **3.59:1 light and dark**
+against 4.5:1. 14px at weight 500 is not large text, so 4.5 is the right bar.
+
+The "one token, every primary button" claim in the original defect **is
+correct, and I confirmed it across three different buttons on three different
+routes**:
+
+| Button | Route | Ratio |
+|---|---|---|
+| `New todo` | `/todos` (develop's own) | 3.59:1 |
+| `Create account` | `/sign-up` (file byte-identical to develop) | 3.59:1 |
+| `Add` | quick-add bar, while that tree existed | 3.59:1 |
+
+The third is from the now-deleted tree and is included only because it
+corroborates the token claim; the first two are develop's and stand on their
+own.
+
+### DEF-15 — **Still broken at 4.43:1 — but the diagnosis is now precise**
+
+`0 of 4 done`, muted `lab(47.87 …)` = `rgb(113,113,122)`, 14px/400, on page
+background `rgb(245,245,245)` → **4.43:1** (analytic and screenshot agree
+exactly). Dark: **7.72:1**, passes.
+
+**The token is not the problem — the surface is.** The identical muted token
+measures **4.83:1** wherever it sits on the Card (section headings, due-date
+text, §A4). It fails only against the page background *outside* the Card. It is
+0.07 short, on one surface.
+
+Same token, same surface, same failure: the **`Account menu` button label**
+(12px muted) — also **4.43:1** light. It travels with the count.
+
+### DEF-16 — **Still broken. 20×20, and it is the one control below the WCAG floor**
+
+`[data-slot="search-field-clear-button"]`, **20×20 at 375px and at 1280px**,
+measured with the field non-empty and the button confirmed visible (`padding:
+4px`, no min-size).
+
+It fails NFR-05's 44×44, and — alone among everything I measured — it also
+fails **WCAG 2.2 SC 2.5.8's 24×24 minimum**. Every other control in the app
+clears that floor: rows' edit/delete are 36×36 desktop / 44×44 mobile, filter
+toggles and the priority select are 44 at mobile.
+
+**Secondary, same control:** its accessible name is **"Close"**, not "Clear
+search" — HeroUI's default leaking through. "Close" describes dismissing
+something, which is not what it does.
+
+## A3. NFR-04 — the Undo toast by keyboard. **Verified, and it fails on any realistic list**
+
+Previously "unverified". It is now measured, at both widths, end to end.
+
+**First: my harness can deliver activation keys this time.** This has bitten me
+before with empty `key`/`code`/`keyCode`, so I proved it before drawing any
+conclusion. Recorded from a live `keydown` listener:
+
+```
+{ key: "Tab",   code: "Tab",   keyCode: 9,  which: 9,  isTrusted: true }
+{ key: "Enter", code: "Enter", keyCode: 13, which: 13, isTrusted: true }
+{ key: " ",     code: "Space", keyCode: 32, which: 32, isTrusted: true }
+```
+
+Fully populated and trusted. **No "could not verify" is being hidden behind a
+tooling excuse here.**
+
+### What happens
+
+Under `?status=active`, a keyboard toggle completes the row and the row leaves
+the filter — the US-07 ruling, so the toast is the only route back.
+
+1. **Focus is dropped on the floor.** The focused checkbox is destroyed with
+   its row, and `document.activeElement` becomes **`<body>`**. Measured at both
+   widths. There is no focus management on removal.
+2. **The toast is the last thing in the document.** `Toast.Provider` is a
+   portal in `<body>` after `<main>`, so Tab must cross **every remaining row**
+   to reach Undo — and each row is **3 tab stops** (checkbox, edit, delete).
+3. **The toast lives 12.0s.** Measured 12,015–12,029ms across runs;
+   `UNDO_WINDOW_MS = 12_000`, deliberately raised from HeroUI's 4s default.
+4. **The timer pauses once Undo has focus** — still present after 16s with the
+   button focused. So *reaching* it is the entire problem.
+
+### The result depends on how many todos you have
+
+| Account | Width | Tabs to Undo | Outcome |
+|---|---|---|---|
+| 3 todos | desktop | 9 | **Reached.** Enter fired the `PATCH`, row restored ✅ |
+| 3 todos | mobile | 6 | **Reached.** Enter fired the `PATCH`, row restored ✅ |
+| **19 todos, first row toggled** | desktop @ 300ms/tab | 39 tabs, 12.36s | **Toast expired mid-walk. Never reached** ❌ |
+| **19 todos, first row toggled** | desktop @ 500ms/tab | 23 tabs, 12.21s | **Toast expired mid-walk. Never reached** ❌ |
+
+The 3-todo pass is real but it is a *small-account* pass. The traversal cost is
+`3 × (rows below the toggled row) + 3`, against a fixed 12s budget, at a pace
+the user does not control. **At 19 todos it is not reachable at any human
+typing speed.** 300ms per keypress is brisk; 500ms is ordinary; both lose.
+
+**F6 works, partially.** react-aria's jump-to-toast-region hotkey moves focus
+to `[data-slot="toast-region"]` (`aria-label: "2 notifications."`) in one
+press, bypassing the row walk entirely — then needs **one further Tab** to land
+on Undo, since it lands on the region and not the button. So there *is* a route
+that beats the timer. It is undocumented, unhinted in the UI, and unknown to
+essentially every user.
+
+**Verdict: Still broken.** The PRD requires the toast to be "reachable by
+keyboard from where focus landed after the row was removed". Where focus lands
+is `<body>`, and from there the route is length-dependent and usually expires.
+The criterion passes only on a near-empty account.
+
+**Branch caveat, stated plainly.** `TodoListScreen.tsx` is the one audited file
+that differed from `develop`. But every mechanism above lives in code that is
+byte-identical to develop: the DOM order (`TodoGroupedList`, `TodoRow`), the
+portal position (`layout.tsx`), the 12s constant, and the absence of focus
+management. Quick-add's only effect was to add two tab stops **before** the
+list — which is not between the toggled row and the toast — and the figures
+above were reproduced after the branch was reset, with quick-add gone. **This
+result is develop's.**
+
+## A4. New surfaces from the last two releases
+
+Never measured before. Analytic and screenshot agreed exactly on all of these.
+
+| Surface | Light | Dark | Threshold | Verdict |
+|---|---|---|---|---|
+| Section headings (`Overdue`/`Today`/`Upcoming`/`No date`), 14px/600 muted | **4.83:1** | **6.75:1** | 4.5:1 | **Pass** |
+| Due-date row text, normal | **4.83:1** | **6.75:1** | 4.5:1 | **Pass** |
+| Due-date row text, **overdue** (`text-warning-soft-foreground`) | **5.72:1** | **11.74:1** | 4.5:1 | **Pass** |
+| Row title at rest | 17.72:1 | 17.27:1 | 4.5:1 | **Pass** |
+| **`opacity-60` pending row — completing** | **2.32:1** | **3.25:1** | 4.5:1 | **Fail** |
+| `opacity-60` pending row — un-completing | 4.64:1 | 6.85:1 | 4.5:1 | Pass (light is thin) |
+
+**The overdue treatment is not colour-alone** — it ships a `⚠` glyph plus an
+`sr-only` "Overdue — " prefix alongside the colour change, which is what
+NFR-04's "status is never conveyed by color alone" asks for. Confirmed in the
+DOM, not assumed.
+
+### The `opacity-60` signal defeats itself
+
+This is the one worth acting on, and it is the case the brief predicted:
+"if it drops below a legible threshold the signal is not being sent."
+
+Completing a row is the **common** direction, and it is the bad one. The
+optimistic flip applies `text-muted line-through` *before* the request settles,
+and the row is simultaneously dimmed to `opacity-60`. The two stack:
+
+```
+muted rgb(113,113,122) → 60% over white → rgb(170,170,175) → 2.32:1
+```
+
+**2.32:1 is below even the 3:1 large-text floor**, on 16px text, for the
+duration of the round trip. The row is not "dimmed but readable"; while the
+user is waiting to find out what happened, the thing they are waiting on is
+the least readable thing on the screen. Screenshot ground truth: **2.34:1**.
+
+The other direction (un-completing, where the title stays foreground) is
+**4.64:1** — it passes, with 0.14 of headroom.
+
+## A5. Summary table
+
+| Item | Verdict | Number | Threshold |
+|---|---|---|---|
+| DEF-01 tap target | **Fixed** | 44×44 mobile, 20/20 hit probes | 44×44 |
+| DEF-08 checkbox contrast | **Fixed** | 3.40 light / 5.14 dark (also on hover) | 3:1 |
+| DEF-14 primary button | **Still broken** | 3.59 both themes, 3 buttons | 4.5:1 |
+| DEF-15 muted count | **Still broken** | 4.43 light | 4.5:1 |
+| DEF-16 search clear | **Still broken** | 20×20 all widths | 44×44 / 24×24 |
+| NFR-04 Undo by keyboard | **Still broken** | focus → `<body>`; unreached at 19 todos | reachable |
+| Section headings | **Pass** | 4.83 / 6.75 | 4.5:1 |
+| Due date + overdue | **Pass** | 4.83–11.74 | 4.5:1 |
+| `opacity-60` pending row | **Fail** | 2.32 light | 4.5:1 |
+
+**Nothing regressed.** The two changes that prompted this audit — the row
+rewrite and the section headings — are both clean. What is broken was already
+broken, and has been through three gates.
+
+## A6. What I would fix first
+
+Ranked by what a user actually hits, not by the size of the gap.
+
+1. **NFR-04 — move focus when a toggle removes a row.** The only item here that
+   costs a user their data rather than their comfort. US-07 makes the toast the
+   sole route back; focus lands on `<body>`; the route out is 3 tab stops per
+   remaining row against a 12s clock, and it does not survive a 19-item list at
+   any human pace. Focusing the toast (or the next row) on removal fixes it
+   outright and is a few lines. **Everything else on this list is legibility;
+   this one is recoverability.**
+
+2. **DEF-16 — the 20×20 search clear.** The only control in the app below WCAG
+   2.2's 24×24 floor, and it is on the touch surface where it is smallest
+   relative to a finger. A missed tap here puts text back in the search box and
+   silently changes what list the user is looking at. One sizing class, and fix
+   the "Close" label while it is open.
+
+3. **The `opacity-60` pending row at 2.32:1.** Hit on *every single completion*
+   — the most frequent interaction in the product — and it is unreadable during
+   exactly the window the user is watching it. Raise the opacity to ~0.75, or
+   dim only the action buttons and leave the text alone. The dimming is meant
+   to say "working on it", not "you may not read this".
+
+4. **DEF-14 — primary button at 3.59:1.** Every primary button in every theme,
+   which sounds worse than it is: these are large, high-salience, and nobody
+   fails to *find* the blue button. It is a real AA failure and a one-token
+   fix, but it costs comprehension, not task completion. Darken the blue —
+   `rgb(4,133,247)` needs roughly a 20% luminance reduction to clear 4.5:1
+   against white.
+
+5. **DEF-15 — the muted count at 4.43:1.** Last deliberately. It is 0.07 short,
+   on one surface, in one theme, on decorative information that the list itself
+   already conveys. The precise fix is now known — the same token clears 4.83:1
+   on the Card, so either darken muted slightly or put the header on the Card
+   surface. Worth doing; not worth doing before the four above.
+
+**On the two conditions carried out of the last gate:** condition 1 (re-test or
+formally accept the five defects) is now discharged — two are genuinely fixed
+and three are confirmed still broken with current numbers. Condition 2
+(NFR-04's Undo criterion) is discharged as a **failure**, not a pass. Neither
+was accepted silently.
+
+---
+
+*Every number above was measured twice by independent methods and three of them
+were re-derived by hand; all figures were reproduced on both trees the checkout
+occupied during the audit. Where the tree moved under me, §A0 says so rather
+than quietly reporting whichever run looked cleaner.*

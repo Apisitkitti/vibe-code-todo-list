@@ -337,18 +337,41 @@ has no `.Root`, `.Title` etc. It is a single element that renders RAC's
 </div>
 ```
 
-**Add-todo affordance.** A full-width primary button that opens the create
-modal (§4.5). On mobile it is a normal stacked button; it is **not** a floating
-action button — an FAB would overlap the last row and needs safe-area handling
-we don't want.
+**Add-todo affordance — the quick-add bar.** *Amended for backlog #1; this
+replaces the `New todo` button that used to sit here.* A persistent
+single-line `TextField`/`Input` with a primary `Add` submit beside it, sitting
+above the filter bar. Enter creates; the input clears and **keeps focus**, so
+several todos can be entered in a row without touching the pointer. It is
+always rendered — including while the list is empty, loading or filtered to
+nothing — because a capture bar that comes and goes is not a capture bar.
 
 ```tsx
-<Button variant="primary" fullWidth onPress={createModal.open}>New todo</Button>
+<Form id="quick-add-form" className="flex flex-col gap-2">
+  <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+    <div className="flex-1"><FormTextField … /></div>
+    <Button type="submit" variant="primary" className="min-h-11 w-full sm:w-auto">Add</Button>
+  </div>
+  {/* parsed-token chips + `More options`, §7.17 */}
+</Form>
 ```
 
-On `sm:` and up it collapses to `sm:w-auto sm:self-start` (use
-`className="sm:w-auto sm:self-start"` and drop `fullWidth` at that breakpoint by
-simply not setting `fullWidth` and using `className="w-full sm:w-auto"` instead).
+Trailing **lowercase** words naming a day or a priority are lifted out of the
+title and shown as `Chip`-styled buttons beneath the input before anything is
+saved, and announced through a visually-hidden `role="status"` live region
+beside them. Pressing one — or `Esc`, which does all of them at once — puts
+its words back in the title. There is **no `New todo` button**: the modal
+(§4.5) is reached from `More options`, which carries the typed text into it,
+and from every row's Edit button.
+
+A create through the bar **does not blank the list to a skeleton**. Nothing
+closed over the list, the toast is already on screen saying what happened, and
+under a filter that hides the new row the flash would return an identical
+list — during burst capture it would fire on every Enter. The refetch still
+happens, quietly, and the row arrives in its §2 place when the data lands. The
+modal keeps its skeleton, because a dialog closing over an unchanged list is
+the gap that argument was made about (§4.8, review m-8).
+
+The chips are the reason this parse is allowed to exist at all. See §7.17.
 
 **Filter bar.** Two controls in one row.
 
@@ -1230,6 +1253,83 @@ polish:
 | Section heading: due later | `Upcoming` |
 | Section heading: no due date | `No date` |
 | Section heading: completed | `Completed` |
+
+### 7.17 Quick-add bar
+
+Added for backlog #1 (`docs/PM-PROPOSAL.md` §2): a persistent single-line
+input at the top of `/todos` that creates a todo on Enter. It **replaces** the
+toolbar `New todo` button of §7.3 as the primary capture path, and the empty
+state's call to action now focuses it rather than opening the modal (§7.7).
+
+The modal is not retired — it is reached from `More options`, which carries
+whatever is already typed into it, and from every row's Edit button. Two
+capture paths, not three: the bar for a title, a day and a priority; the modal
+for a note or a date the vocabulary cannot say.
+
+**The chips are not decoration.** They are the whole mitigation for a parser
+that reads a word the user meant literally, so each one is a *control*: a
+button that puts its words back in the title. `Esc` does the same for every
+chip at once, from the keyboard, without leaving the input. A parse the user
+cannot see and cannot refuse is the thing this feature must never ship — which
+is why the reading is also **announced through a polite live region**, not
+merely drawn. The chips are buttons a screen-reader user only meets by tabbing
+to them, so without the announcement the guarantee in this paragraph would
+hold for sighted users only.
+
+**Refusing one chip never costs the other.** Releasing the date leaves the
+priority read and its chip on screen; the released words go back into the
+title and the reading carries on past them. And a refusal belongs to the exact
+text it was made against — change one character and the reading starts fresh,
+visibly. An unwanted chip is on screen and costs one keystroke; a silently
+disabled parser is invisible, which is the worse of the two.
+
+**A capital letter switches the parser off for that word,** which is a
+stronger guarantee than any chip: nothing fires, so there is nothing to notice
+and nothing to undo. `friday` is a day, `Friday` is part of a name — which is
+what keeps `Casual Friday`, `Black Friday`, `Cyber Monday`, `Palm Sunday` and
+`Ash Wednesday` whole.
+
+| Slot | String |
+|---|---|
+| Field label (visually hidden) | `Add a todo` |
+| Field placeholder | `Add a todo — try "pay rent friday high"` |
+| Submit button | `Add` |
+| Submit button (pending) | `Adding…` |
+| More options button | `More options` |
+| Parsed-chip group `aria-label` | `Read from your text` |
+| Parsed chip: due date | `Due {Today\|Tomorrow\|Mar 4\|Mar 4, 2027}` |
+| Parsed chip: priority | `{High\|Medium\|Low} priority` |
+| Parsed chip `aria-label` | `{chip label} — keep "{words}" in the title` |
+| Parsed-chip hint | `Press Esc to keep your text exactly as typed.` |
+| Live-region announcement | `Read from your text: {chip labels, comma separated}. Press Esc to keep your text exactly as typed.` |
+| Live-region announcement (nothing read) | *(render nothing)* |
+| Empty title error (field) | `Enter a title.` |
+| Title too long error (field) | `Keep the title under 200 characters.` |
+| Failure toast | `Couldn't add the todo. Try again.` |
+
+The due-date chip reuses §7.4's day wording rather than inventing a second
+vocabulary for the same day, exactly as §7.16's `Today` heading does.
+
+**When the new todo does not match the current filter or search.** It is not
+inserted, and no filter is cleared on the user's behalf — a filtered list must
+always match what a reload of the same URL would show (`docs/PRD.md` US-10).
+The receipt says so instead, and keeps its Undo:
+
+| Slot | String |
+|---|---|
+| Create success toast (visible) | `Todo “{title}” added` |
+| Create success toast (hidden by filters) | `Todo “{title}” added — hidden by your filters` |
+
+### 7.18 Empty-state call to action
+
+The `No todos` empty state's action no longer opens the modal; it moves focus
+to the quick-add bar. Its label changes with it, because `New todo` described
+a modal that is no longer what the button does. This row supersedes the
+`No todos` action in §7.7.
+
+| Slot | String |
+|---|---|
+| Empty state action (no todos) | `Add a todo` |
 
 `Today` is deliberately the same word the row's own due-date label uses (§7.4).
 A row reading `Today` inside a section headed `Today` is a repetition, not a

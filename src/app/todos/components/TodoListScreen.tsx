@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import {
   Alert,
@@ -14,22 +14,20 @@ import {
 import { useRouter } from "next/navigation";
 
 import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
+import { useTodoList } from "@/app/todos/hooks/useTodoList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getErrorMessage } from "@/lib/getErrorMessage";
-import type { TodoItemData, TodoListFilters, TodoListResult } from "@/lib/todo";
+import type { TodoItemData, TodoListFilters } from "@/lib/todo";
 import {
   applyCompletion,
   replaceTodo,
+  todoMatchesFilters,
   todoMatchesStatusFilter,
 } from "@/lib/todoListState";
-import {
-  deleteTodo,
-  getTodoList,
-  toggleTodo,
-  updateTodo,
-} from "@/service/todo.service";
+import { deleteTodo, toggleTodo, updateTodo } from "@/service/todo.service";
 
 import type { TodoFormValues } from "./form";
+import { QuickAddBar } from "./QuickAddBar";
 import { TodoEmptyState } from "./TodoEmptyState";
 import { TodoFilters } from "./TodoFilters";
 import { TodoFormModal } from "./TodoFormModal";
@@ -54,8 +52,12 @@ const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
  */
 const UNDO_WINDOW_MS = 12_000;
 
-/** Rendered twice: the toolbar button and the brand-new-account empty state. */
-const NEW_TODO_LABEL = "New todo";
+/**
+ * The empty state's call to action (`docs/DESIGN.md` §7.18). It no longer
+ * opens the modal — it moves focus to the quick-add bar, which is the one
+ * capture path, so the label describes that rather than a dialog.
+ */
+const ADD_TODO_LABEL = "Add a todo";
 
 /**
  * Failure fallbacks from the copy deck (`docs/DESIGN.md` §7.9, §7.13, §7.15),
@@ -64,12 +66,6 @@ const NEW_TODO_LABEL = "New todo";
  */
 const TOGGLE_FAILURE_MESSAGE = "Couldn’t update the todo. Try again.";
 const UNDO_FAILURE_MESSAGE = "Couldn’t undo that. Try again.";
-
-const EMPTY_RESULT: TodoListResult = {
-  todos: [],
-  totalCount: 0,
-  completedCount: 0,
-};
 
 /** What a toggle and its Undo do differently; everything else is shared. */
 interface ToggleOutcome {
@@ -103,89 +99,45 @@ export interface TodoListScreenProps {
  * reconciles with the row the write returned (`runToggle`).
  */
 export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
-  const [result, setResult] = useState<TodoListResult>(EMPTY_RESULT);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const {
+    result,
+    setResult,
+    isLoading,
+    loadError,
+    pendingTodoIds,
+    markPending,
+    clearPending,
+    removeTodoLocally,
+    reloadWithSkeleton,
+    reloadSilently,
+    retry,
+    readLandedLoads,
+  } = useTodoList(filters);
   const [editingTodo, setEditingTodo] = useState<TodoItemData | null>(null);
   const [pendingDelete, setPendingDelete] = useState<TodoItemData | null>(null);
-  /**
-   * A set, not one slot. Two quick toggles used to clear each other's pending
-   * state — the second finishing wrote `null` and unlocked the first row while
-   * its request was still in flight (review m-4).
-   *
-   * **What "pending" means changed when the toggle became optimistic, and the
-   * set is why it still means something.** It no longer means "we are waiting
-   * to find out what happened" — the row already shows the new state, ticked
-   * and struck through, and has moved into `Completed`. It now means *this is
-   * your change and it is not confirmed yet*, which is a different claim and
-   * still worth making: the flip on screen is a promise the server has not
-   * kept, and `opacity-60` is the only thing distinguishing it from a fact.
-   *
-   * It also stays load-bearing as a lock. `pointer-events-none` plus
-   * `isDisabled` is what stops a second press — mouse or held Space — from
-   * racing a PATCH that is still in flight and letting the two land out of
-   * order (m-4, QA DEF-12). Optimism makes that *more* likely, not less: the
-   * box now moves instantly, so a user who wants it back presses again
-   * immediately rather than waiting for the first press to visibly resolve.
-   * That is the whole of the argument for keeping the treatment, and it is
-   * enough on its own.
-   *
-   * `docs/DESIGN.md` §8.3.2 suggests dropping the dimming from a toggle once
-   * it is optimistic. Not taken here, because it was written about perceived
-   * latency and was not reasoning about races — and because a locked but
-   * *undimmed* row is the worst of the three: it ignores you without saying
-   * why. Note the lock and the dim are separable (`isDisabled` +
-   * `pointer-events-none` is the guard, `opacity-60` only the signal), so
-   * dropping the opacity alone remains open; that is a designer's call, filed
-   * as review MI-6 against the §4.8 / §8.3.2 contradiction. The dim is in any
-   * case half of what it was, a toggle now being one round trip, not two.
-   */
-  const [pendingTodoIds, setPendingTodoIds] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
   const [isDeleting, setIsDeleting] = useState(false);
-  // Bumped after every mutation to re-run the load below — one fetch path for
-  // the initial render, a filter change, a retry and a refresh alike.
-  const [reloadToken, setReloadToken] = useState(0);
-  const [lastFilterKey, setLastFilterKey] = useState<string | null>(null);
+  /**
+   * What `More options` had already read from the quick-add bar. Held here
+   * rather than in the bar because the modal is the list's, and bumping
+   * `createSeq` with it is what remounts the form onto a new draft — two
+   * consecutive creates otherwise share one `key` and the second would open
+   * on the first one's values.
+   */
+  const [createDraft, setCreateDraft] = useState<TodoFormValues | null>(null);
+  const [createSeq, setCreateSeq] = useState(0);
   const formState = useOverlayState();
 
   /**
-   * How many list loads have *landed* — incremented where the load effect
-   * replaces `result`, which is the single event that throws a toggle's
-   * optimistic arithmetic away.
-   *
-   * A toggle reads it before its write and again after, and asks the server
-   * when the two differ (`runToggle`). Counting landed loads rather than
-   * requested ones is deliberate and was the second attempt at this guard:
-   * `reloadToken` is bumped only by `requestReload()`, so a guard watching it
-   * saw a create, a delete and an Undo but **not a filter change**, which
-   * re-runs the load through the `status` / `priority` / `query` dependencies
-   * and never touches the token. A filter change is the easiest way for a user
-   * to land a reload inside a toggle's flight window and is the trigger the
-   * defect was reported against (`docs/REVIEW.md` MA-2, third bullet), so a
-   * token comparison closed every case except the reported one.
-   *
-   * A load that is superseded (`isCurrent === false`) or that fails does not
-   * count: neither replaces `result`, so neither is anything to reconcile
-   * against.
+   * The quick-add input. Held here because one thing outside the bar moves
+   * focus to it: the empty state's call to action, and nothing else — which is
+   * the point. Focus after a submit is the bar's own business and never leaves
+   * it (`docs/PRD.md` US-05).
    */
-  const landedLoadsRef = useRef(0);
+  const quickAddInputRef = useRef<HTMLInputElement>(null);
 
   const router = useRouter();
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
   const { status, priority, query } = filters;
-  const filterKey = `${status}|${priority}|${query}`;
-
-  // Filters arrive as props from the URL, so the refetch they trigger starts
-  // in the effect below — too late to raise the flag without a render showing
-  // stale rows first. Adjusted during render instead, the same way
-  // `TodoFilters` follows the URL. An effect here trips
-  // `react-hooks/set-state-in-effect`.
-  if (lastFilterKey !== filterKey) {
-    setLastFilterKey(filterKey);
-    setIsLoading(true);
-  }
 
   /**
    * One owner for every Undo toast, keyed by todo id.
@@ -245,68 +197,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     undoToastKeys.current.set(todoId, key);
   };
 
-  const markPending = (todoId: string) => {
-    setPendingTodoIds((ids) => new Set(ids).add(todoId));
-  };
-
-  const clearPending = (todoId: string) => {
-    setPendingTodoIds((ids) => {
-      const next = new Set(ids);
-
-      next.delete(todoId);
-
-      return next;
-    });
-  };
-
-  /** Keeps the counts beside the heading honest until the refetch reconciles. */
-  const removeTodoLocally = (todoId: string, wasCompleted: boolean) => {
-    setResult((current) => ({
-      todos: current.todos.filter((todo) => todo.id !== todoId),
-      totalCount: Math.max(0, current.totalCount - 1),
-      completedCount: wasCompleted
-        ? Math.max(0, current.completedCount - 1)
-        : current.completedCount,
-    }));
-  };
-
-  const requestReload = () => {
-    setReloadToken((token) => token + 1);
-  };
-
   /**
-   * For changes with no single row to point at: a create or an edit can move
-   * the row, or drop it out of the current filter entirely. Without this the
-   * modal closed on the write and left the old list on screen until the
-   * refetch landed, which read as the app ignoring you — the same gap a
-   * filter change had (review m-8).
+   * The modal's only remaining create entry point: `More options` on the bar,
+   * carrying whatever it had already read. There is no toolbar button any
+   * more — one bar, and one modal behind it for a note or a date the
+   * vocabulary cannot say.
    */
-  const reloadWithSkeleton = () => {
-    setIsLoading(true);
-    requestReload();
-  };
-
-  /**
-   * For a delete and for the Undo of a save. The user knows exactly which row
-   * they acted on and that row already shows its own pending state, so
-   * blanking the whole list to report it is disproportionate — and it throws
-   * away their scroll position.
-   *
-   * A toggle no longer comes here at all. It has the authoritative row in
-   * hand and splices it (`runToggle`), which is the second round trip m-7 was
-   * about; this reload is for the writes that genuinely cannot say what the
-   * list should now look like.
-   */
-  const reloadSilently = () => {
-    requestReload();
-  };
-
-  const retry = () => {
-    setLoadError(null);
-    reloadWithSkeleton();
-  };
-
-  const openCreate = () => {
+  const openCreate = (draft: TodoFormValues) => {
+    setCreateDraft(draft);
+    setCreateSeq((seq) => seq + 1);
     setEditingTodo(null);
     formState.open();
   };
@@ -314,6 +213,10 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   const openEdit = (todo: TodoItemData) => {
     setEditingTodo(todo);
     formState.open();
+  };
+
+  const focusQuickAdd = () => {
+    quickAddInputRef.current?.focus();
   };
 
   const clearFilters = () => {
@@ -325,6 +228,51 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    * later write dismiss an earlier Undo — the modal cannot see the toast it
    * raised two edits ago (review M-2).
    */
+  /**
+   * The receipt for a create, and the one sentence that stops a filtered list
+   * from looking like a failure.
+   *
+   * A create can land outside the list the user is looking at, and the row
+   * then simply never appears. Inserting it anyway is not an option — a
+   * filtered list must match what a reload of the same URL would show at every
+   * moment (`docs/PRD.md` US-10, the rule the toggle already follows) — and
+   * clearing the filter on their behalf would throw away something they asked
+   * for. So the receipt says it, and keeps its Undo.
+   *
+   * `todoMatchesFilters` only ever claims "hidden" when it is certain, and
+   * that asymmetry is deliberate: being wrong in this direction costs a
+   * missing sentence, being wrong in the other costs a sentence that is a lie.
+   */
+  const createdMessage = (saved: TodoItemData) =>
+    todoMatchesFilters(saved, filters)
+      ? `Todo “${saved.title}” added`
+      : `Todo “${saved.title}” added — hidden by your filters`;
+
+  /**
+   * The bar's create. **No skeleton** (review MA-3): nothing closed over the
+   * list, the toast is already on screen saying what happened, and blanking
+   * every row to report a change to one of them is the disproportion the
+   * delete path settled. It is worse than disproportionate under a filter that
+   * hides the new row, where the list flashes and comes back identical — and
+   * worse again during burst capture, where it would flash on every Enter.
+   *
+   * The refetch still happens; it is just quiet. The row arrives in its §2
+   * place when the data lands, which is the same guarantee the skeleton gave.
+   */
+  const handleQuickAdded = (saved: TodoItemData) => {
+    reloadSilently();
+
+    showUndoableSuccess(saved.id, createdMessage(saved), () => {
+      void undoSave(saved, null);
+    });
+  };
+
+  /**
+   * The modal's save. This one keeps the skeleton, and the difference is not
+   * an inconsistency: the modal closing over an unchanged list is the gap m-8
+   * was reported against, and there is a real moment where the dialog has gone
+   * and nothing on screen has moved yet. The bar has no such moment.
+   */
   const handleSaved = (saved: TodoItemData, previous: TodoFormValues | null) => {
     reloadWithSkeleton();
 
@@ -332,7 +280,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
 
     showUndoableSuccess(
       saved.id,
-      isEdit ? `Todo “${saved.title}” updated` : `Todo “${saved.title}” added`,
+      isEdit ? `Todo “${saved.title}” updated` : createdMessage(saved),
       () => {
         void undoSave(saved, previous);
       },
@@ -432,7 +380,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       gone. Under "All" neither happens.
     */
     const leavesList = !todoMatchesStatusFilter(nextCompleted, status);
-    const landedLoadsAtPress = landedLoadsRef.current;
+    const landedLoadsAtPress = readLandedLoads();
 
     markPending(todo.id);
     setResult((current) =>
@@ -462,7 +410,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
           bumping the token, and it is the likeliest way into this window.
           `e2e/mid-flight-reload.spec.ts` pins both triggers.
         */
-        if (landedLoadsRef.current === landedLoadsAtPress) {
+        if (readLandedLoads() === landedLoadsAtPress) {
           setResult((current) => replaceTodo(current, saved));
         } else {
           reloadSilently();
@@ -588,8 +536,10 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       return {
         heading: "Nothing here yet",
         body: "Add your first todo and it will show up here.",
-        actionLabel: NEW_TODO_LABEL,
-        onAction: openCreate,
+        actionLabel: ADD_TODO_LABEL,
+        // Signposts the bar rather than opening a second way to do the same
+        // thing (`docs/DESIGN.md` §7.18).
+        onAction: focusQuickAdd,
       };
     }
 
@@ -685,37 +635,6 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     );
   };
 
-  useEffect(() => {
-    let isCurrent = true;
-
-    void getTodoList({ status, priority, query })
-      .then((nextResult) => {
-        if (!isCurrent) return;
-
-        // Counted here, at the one line that discards a toggle's optimistic
-        // arithmetic, so every way of starting a load is covered by
-        // construction rather than by remembering to bump a token.
-        landedLoadsRef.current += 1;
-        setResult(nextResult);
-        setLoadError(null);
-      })
-      .catch((error: unknown) => {
-        if (!isCurrent) return;
-
-        setLoadError(
-          getErrorMessage(error, "Something went wrong on our end."),
-        );
-      })
-      .finally(() => {
-        if (isCurrent) setIsLoading(false);
-      });
-
-    // A response that arrives after the filters moved on must not win.
-    return () => {
-      isCurrent = false;
-    };
-  }, [status, priority, query, reloadToken]);
-
   const hasTodos = result.totalCount > 0 && loadError === null;
 
   return (
@@ -730,21 +649,16 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       </div>
 
       {/*
-        On a brand-new account the empty state carries its own "New todo"
-        action, so this button would be the second copy of the same call to
-        action on one screen. It comes back as soon as there is a todo — a
-        filter that matches nothing still needs it, because that empty state
-        offers "Clear filters" instead.
+        Never gated on `hasTodos`, unlike the filter bar below it and unlike
+        the "New todo" button it replaced. A capture bar that appears only once
+        you have something to capture is not a capture bar, and this is also
+        the control the empty state's call to action focuses.
       */}
-      {hasTodos ? (
-        <Button
-          variant="primary"
-          className="min-h-11 w-full sm:w-auto sm:self-start"
-          onPress={openCreate}
-        >
-          {NEW_TODO_LABEL}
-        </Button>
-      ) : null}
+      <QuickAddBar
+        inputRef={quickAddInputRef}
+        onCreated={handleQuickAdded}
+        onMoreOptions={openCreate}
+      />
 
       {hasTodos ? <TodoFilters filters={filters} /> : null}
 
@@ -753,10 +667,12 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       </Card>
 
       <TodoFormModal
-        // Remounts the form so it starts from the right record's values.
-        key={editingTodo?.id ?? "create"}
+        // Remounts the form so it starts from the right record's values — and,
+        // on a create, from the right draft.
+        key={editingTodo?.id ?? `create-${createSeq}`}
         state={formState}
         todo={editingTodo}
+        draft={createDraft}
         onSaved={handleSaved}
       />
 
