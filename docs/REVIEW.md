@@ -3698,3 +3698,435 @@ the only part of this app whose correctness I can now demonstrate by breaking it
 and watching the right tests fail. That is the standard I asked for. It is met.
 
 > **Approve**, with the three conditions at the top.
+
+---
+
+# Senior review — `feature/quick-add` → `develop`
+
+Two commits, `25b5b16` and `5255f36`. Eighteen files, +1611/−56. The shape of
+this branch is right and I want to say so before the findings: the parser is a
+pure module with its own suite, the risk is argued in the header rather than
+hidden, the chips exist because the author correctly identified that rules 1–3
+cannot cover a trailing word meant literally, and the deliberate-failure story
+in the report is real — I reproduced it and it is accurate.
+
+The findings below are almost all in one place, and it is the place that
+matters: **the chips are the feature's only mitigation, and the chips are
+broken in two ways.** Everything else on this branch would be an approve.
+
+## Verdict, up front
+
+> **Request changes.** B-1 and B-2 hold the merge. Both are in the escape
+> hatch, both are silent, and both are ~5-line fixes.
+
+## What I ran
+
+Node 24, `TZ=Pacific/Kiritimati`, `TEST_DATABASE_URL` pointed at
+`todo_app_test`.
+
+| | Result |
+|---|---|
+| `vitest run` | **259 passed** / 10 files |
+| `playwright test` (both projects) | **76 passed** / 2.1m, no flake |
+| `tsc --noEmit` | clean |
+| `eslint` | clean |
+
+Plus 32 deliberate mutations of `src/lib/quickAdd.ts` (§3), an input sweep of
+~70 phrases through `parseQuickAdd` (§1), three reviewer-written Playwright
+specs that reproduce B-1/B-2/the double-Enter race (§2), and a direct
+`ILIKE` check against the test database (m-2).
+
+Everything ran in a detached worktree with its own `node_modules`. I did not
+check out a branch in `/Users/ikaooat/Practice/todo-app`, did not start a
+server in it, did not go near port 3489, and did not open `docs/QA-REPORT.md`.
+`git diff` in the checkout is empty apart from this file.
+
+---
+
+## Blocker
+
+**B-1 — Pressing a chip silently discards the *other* reading, whenever the
+kept token is not the last word.**
+
+`parseQuickAdd`'s `ignore` switches off a *kind*, and rule 1 then stops the
+scan at the now-unconsumed word — so everything to its left is unreachable:
+
+```
+"Call mum about tomorrow high"  ignore=[]      → title "Call mum about"  due 08-18  pri high
+"Call mum about tomorrow high"  ignore=["due"] → title "Call mum about tomorrow"    pri high   ✅
+"Call mum about high tomorrow"  ignore=[]      → title "Call mum about"  due 08-18  pri high
+"Call mum about high tomorrow"  ignore=["due"] → title "Call mum about high tomorrow" pri medium ❌
+```
+
+The user pressed one chip to keep one word literal. They also lost the `high`
+they deliberately typed, the chip that would have told them so is gone, and the
+todo saves as medium. Same shape with the three-word phrase:
+`"Chase the invoice high in 3 days"` + keep-the-date loses the priority too.
+
+`e2e/quick-add.spec.ts:126` asserts exactly the property that fails here —
+*"pressing a chip puts its words back and leaves the other reading alone"* —
+and passes only because its fixture puts the priority last. Swap the two words
+in that test's input and it fails against the running app; I ran it.
+
+This is not a cosmetic mis-parse. It is the mitigation failing in the one
+interaction the whole feature's safety argument rests on, and it fails
+silently. `docs/DESIGN.md` §7.17 and `docs/PRD.md` US-05 both promise the
+opposite.
+
+The fix is to make `ignore` per-*token* rather than per-*kind*, or to let a
+consumed-then-restored run be skipped over rather than ending the scan. Either
+way the e2e assertion should be rewritten with the priority in the middle,
+because the current word order cannot fail.
+
+**B-2 — `Esc` (or any chip press) disables the parser for everything typed
+afterwards, until a successful submit.**
+
+`keptKinds` in `QuickAddForm.tsx` is reset only in `clear()`, which runs on a
+successful create or on `More options`. Nothing resets it when the text
+changes. So:
+
+1. Type `Call mum about tomorrow` → the due chip appears.
+2. Press `Esc` → refused, correctly.
+3. Select all, type `Pay rent friday high` → **no chips, no date, no
+   priority.** The bar is now a plain text input and nothing says so.
+
+Reproduced in the browser. There is a second route to the same state: on a
+successful create where the user has already started typing the next todo,
+`submit()` deliberately skips `clear()` to protect those keystrokes — and
+therefore also carries the previous entry's `keptKinds` into the next todo.
+Burst capture is the headline flow, so this one is not exotic.
+
+`Esc` is also all-or-nothing: it sets both kinds even when only one chip is
+showing, which makes the sticky state broader than the refusal the user made.
+
+Fix: reset `keptKinds` when the text changes to something that is not a
+superset of the text the kinds were kept for — or, simplest and consistent with
+the B-1 fix, key the kept set to the token's words rather than its kind.
+
+---
+
+## Major
+
+**MA-1 — Rule 3 does not say what the code does, and the gap is the feature's
+main false-positive class.**
+
+The module header, `docs/DESIGN.md` §7.17 and the PM defence all say *"whole
+**lowercase** words only"* — `Highlight` is not `high`. The whole-word half is
+true and well tested. The lowercase half is **false**: `matchDue` and
+`matchPriority` both `.toLowerCase()` before comparing, and
+`tests/unit/quickAdd.test.ts:47` pins that behaviour deliberately
+(`"Buy milk Tomorrow HIGH"`). So the code is intentional and the documentation
+is wrong — but the documentation is what the risk argument was accepted on.
+
+What case-insensitivity actually costs:
+
+```
+"Casual Friday"        → title "Casual"      due Fri 21 Aug
+"Black Friday"         → title "Black"       due Fri 21 Aug
+"Cyber Monday"         → title "Cyber"       due Mon 24 Aug
+"Palm Sunday"          → title "Palm"        due Sun 23 Aug
+"Ash Wednesday"        → title "Ash"         due Wed 19 Aug
+"Plan for Black Friday"→ title "Plan for Black"
+```
+
+These are not the `Call mum about tomorrow` case the author reasoned about. In
+that case the title survives and one word moves. Here a Title-Case weekday is
+*half of a proper noun*, the remaining title is meaningless, and the class is
+large and common. Rule 2 cannot help (two words), and with B-1 unfixed the chip
+cannot either when a priority precedes it.
+
+I am not asking for the vocabulary to be cut on my say-so. I am asking for a
+decision, made explicitly: either weekday names match only in lower case (which
+is what every document currently claims), or Title Case keeps matching and
+§7.17 and the module header stop claiming otherwise. Right now the code and the
+docs disagree, and the docs are the version the feature was approved on.
+
+**MA-2 — "Mirrors `GET /api/todos` clause for clause" is asserted, never
+verified, and backlog #4 will falsify it silently.**
+
+I checked `todoMatchesFilters` against `src/app/api/todos/route.ts` line by
+line and today it is correct: status → `completed`, priority → equality, query
+→ case-insensitive substring of `title`, combined with AND, and `filters.query`
+is trimmed at source in `src/app/todos/page.tsx:32` exactly as the route trims
+it. So the claim holds *as of this commit*.
+
+The problem is that nothing holds it there. Every test in the new
+`describe("todoMatchesFilters")` block is a restatement of the same three
+clauses in the same file that implements them — a change to the server's `where`
+breaks the app and breaks no test. `docs/PM-PROPOSAL.md` §183, backlog #4, is
+*search notes as well as titles*, and it is queued. The day it lands, a modal
+create carrying a note that matches the search will be saved, will appear in the
+list, and will be announced as "hidden by your filters".
+
+There is already a harness that closes this: `tests/api/` calls the real `GET`
+against a real Postgres. Fifteen lines — seed a mixed set, walk the filter
+combinations, assert `body.todos.map(id)` equals
+`all.filter((t) => todoMatchesFilters(t, filters)).map(id)` — turns the comment
+into a verifier. That is the one test I would genuinely like written on this
+branch.
+
+**MA-3 — Every create blanks the entire list to a skeleton, including creates
+that change nothing on screen.**
+
+`handleSaved` calls `reloadWithSkeleton()` unconditionally, so `renderList()`
+returns `<TodoListSkeleton />` on every Enter. In the burst-capture flow this
+branch exists for — and which is the PM's success measure #4 — the list flashes
+white once per todo. Worse, it flashes for the `hidden by your filters` case,
+where the reload provably cannot change a single row.
+
+This branch's own delete path already made this argument and won it: *"the user
+knows exactly which row they acted on… blanking the whole list to report it is
+disproportionate — and it throws away their scroll position"* (`reloadSilently`,
+`TodoListScreen.tsx`). A create from the bar has the same property, and the
+authoritative row is in hand. `reloadSilently()` when `isHidden`, at minimum;
+I would argue for it on every quick-add create.
+
+**MA-4 — The mutation exercise found the one real gap and stopped one step
+short. Five more survivors, all in the "must not fire" half.**
+
+The report's story reproduces exactly. I mutated both rule-2 guards
+independently:
+
+| Mutation | Result |
+|---|---|
+| rule-2 guard removed, **priority** branch (`>= 1` → `>= 0`) | **survived**, 31/31 green |
+| loop bound `while (remaining > 1)` → `> 0` | **survived**, 31/31 green |
+| rule-2 guard removed, **due** branch | killed (by `5255f36`) |
+| both guards removed | killed (by `5255f36`) |
+
+So the diagnosis was right and the fix is the right one. The first two survive
+because they are equivalent mutants — `remaining > 1` already implies
+`remaining - 1 >= 1`, so the single-word guard is enforced twice and neither
+copy is individually reachable. The multi-word phrase was the only live case,
+and `5255f36` closes it.
+
+Running the same technique across the rest of the file finds five survivors
+that are **not** equivalent mutants:
+
+| Mutation | Survived because |
+|---|---|
+| weekday matched by **prefix** (`fridays` → `friday`) | rule 3's whole-word case is tested for `highlights` and `tomorrows` — never for a weekday |
+| `day`/`days` matched by prefix (`in 3 daylight`) | same, never tested |
+| the `in` anchor dropped (`book 5 days` → due) | `"count the days"` passes vacuously — `the` is not a digit. **No test has a bare `<n> days`** |
+| `today` also matches `now` | nothing pins the vocabulary as *closed*; any near-synonym can be added unnoticed |
+| explicit date also accepts `YYYY-M-D` | only the impossible date `2026-02-31` is tested, never a valid date in the wrong shape |
+
+Twenty-two other mutations were killed, several by many tests — the suite is
+genuinely good. But the header claims *"roughly half of this file asserts that a
+word stayed in the title"*, and that half is where all five holes are, which is
+the same failure mode the author already diagnosed once. Five test cases close
+it: `"cancel the fridays"`, `"in 3 daylight"`, `"order 5 days"`, `"finish it
+now"`, `"standup 2026-8-17"` — each asserting `dueAt === ""`.
+
+**MA-5 — The parse is invisible to a screen reader.**
+
+§7.17: *"A parse the user cannot see and cannot refuse is the thing this feature
+must never ship."* The chips render into a `role="group"` with no `aria-live`,
+so a non-sighted user types `pay rent friday high`, hears nothing, and presses
+Enter on a todo whose title has silently lost two words. The refusal is
+reachable (`Esc` is announced by the hint, if they reach it); the *reading* is
+not announced at all. A polite live region on the chip group, announcing the
+current reading, is the fix and it is small.
+
+**MA-6 — `useTodoList`, fifth pass, and the standing ruling has now been broken
+twice.**
+
+The ruling in §6 of the `feature/optimistic-toggle` review was explicit and
+marked not negotiable: *"`useTodoList` is the next branch to touch
+`TodoListScreen.tsx`, and it lands as a pure move… No further behaviour change
+to that file merges before it."* The file was 659 lines then. `fix/toggle-count-drift`
+took it to 778 without the hook and without a review entry; this branch takes it
+to 832.
+
+I am not going to hold a good feature hostage to a refactor, and if this branch
+were otherwise clean I would waive it a sixth time and the rule would be dead.
+It is not otherwise clean — B-1 and B-2 reopen it regardless. So: **the hook
+lands first, as its own branch, a pure move with an empty behavioural diff, and
+`feature/quick-add` rebases onto it.** That is the cheapest this will ever be
+and it is the last time I will say it.
+
+---
+
+## Minor
+
+**m-1 — `ignore` is per kind, not per token.** Distinct from B-1: dismissing a
+due chip also disables the due vocabulary for any *other* date word in the same
+entry. Falls out of the same fix.
+
+**m-2 — The client predicate and Postgres disagree on Unicode case folding.**
+Verified against `todo_app_test` (`en_US.UTF-8`): `'İstanbul çay' ILIKE
+'%istanbul%'` is **true** in Postgres; `"İstanbul çay".toLowerCase().includes("istanbul")`
+is **false** in JS, because `toLowerCase` produces `i` + a combining dot. A todo
+titled `İstanbul çay` created under the search `istanbul` appears in the list
+*and* is announced as "hidden by your filters". Narrow, but it is a
+user-visible sentence that is simply wrong, and it is the kind of thing MA-2's
+cross-check would catch for free.
+
+**m-3 — Focus *is* lost, on the pointer path.** The comment says the input is
+never disabled so focus is never lost — true for Enter. But the `Add` button
+takes `isDisabled={isPending}`, so a user who clicks it loses focus to `<body>`
+for the duration of the write, and focus is only restored on success (the
+`inputRef.current?.focus()` sits after the `if (!created) return`). Refocus on
+the failure path too, or don't disable the button.
+
+**m-4 — `Esc` during an in-flight write refuses a parse that has already been
+sent.** `submit()` captures `checked.data` before the `await`, so the todo saves
+parsed while the chips disappear as if it had not. Undo covers the damage; the
+behaviour deserves a sentence rather than a fix.
+
+**m-5 — A second Enter during a write is swallowed with no feedback.** The
+duplicate-create race itself is **correctly guarded** — I held a POST open for
+1.5s, pressed Enter twice, and got exactly one row and one POST. But
+`handleValidSubmit`'s `if (isPending) return false` is silent; the only signal
+is the button's `Adding…`, which a keyboard user is not looking at.
+
+**m-6 — The field error survives editing.** `setError("text", …)` and
+`serverError` clear on the next submit, not on the next keystroke, so
+"Keep the title under 200 characters." stays under the input while the user
+shortens it. Consistent with the modal, so not new — but the bar is where it
+will be seen.
+
+---
+
+## Nit
+
+**n-1 — Dead guard.** `if (match && remaining - match.length >= 1)` in the
+*priority* branch can never be false: the loop condition `remaining > 1`
+already guarantees it, and `matchPriority` is always length 1. Removing it
+leaves 31/31 green (see MA-4). It is harmless and arguably documents intent,
+but it is also half of why the first two mutations looked green for the wrong
+reason.
+
+**n-2 — `/^\d{1,3}$/` is redundant** with `MAX_RELATIVE_DAYS`: widening it to
+`\d+` changes no observable behaviour, because 4-digit N is rejected by the
+ceiling anyway.
+
+**n-3 — `in 007 days` parses as 7 days; `in 0 days` parses as today.** Both
+harmless, neither documented, neither tested.
+
+**n-4 — `9999-12-31` is accepted** as an explicit due date.
+
+**n-5 — Trailing punctuation silently switches the feature off.** `buy milk
+tomorrow.` gets no chip and no date, which is rule 3 working as designed — but
+the placeholder teaches the syntax and nothing teaches the exception, and the
+absence of a chip is the same signal as "nothing to read here".
+
+---
+
+## §1 — The parser, swept
+
+Roughly seventy phrases through `parseQuickAdd` at a fixed Monday. The
+timezone reasoning survives intact, which was the thing most likely to be
+quietly wrong: the parser builds its day from `dayjs(now).startOf("day")` —
+the user's *local* calendar day — formats it to `YYYY-MM-DD`, `parseDueDate`
+turns that into UTC midnight, and `dueDayOffset` compares UTC-day to local-day
+exactly as its header says. Under `TZ=Pacific/Kiritimati` (UTC+14, the worst
+case for this app) `tomorrow` typed at local noon stores `2026-08-18T00:00:00Z`
+and renders as `Tomorrow`, and `today` renders as `Today`. The chip label and
+the row label are computed by the same function from the same string. No drift.
+
+Boundaries behaved as documented: `in 400 days` and `in 999 days` keep the whole
+phrase rather than half-matching; `2026-02-31` and `2026-13-01` stay words;
+`2026-8-17` is not a date; `in three days` is not vocabulary; Thai, German and
+Spanish text is untouched except where an English vocabulary word happens to
+trail it (`Llamar a mamá high`), which is the documented behaviour.
+
+The genuinely lossy inputs I found, beyond MA-1's Title-Case class:
+`Aim high` → `Aim`, `Get high` → `Get`, `Meeting on monday` → `Meeting on`,
+`See you next week friday` → `See you next week`. All are the acknowledged
+"trailing word meant literally" case, all show a chip, and all are exactly what
+the chips are for — which is why B-1 and B-2 are blockers rather than majors.
+
+## §2 — Focus and the keyboard journey
+
+Reproduced in Chromium against the real app:
+
+| | |
+|---|---|
+| Two Enters inside a held-open POST | **one** POST, **one** row — guarded correctly |
+| 500 arriving after the user typed more | text preserved, `clear()` correctly skipped |
+| `Esc` after refusing, then retyping | **B-2** — parser dead, no chips |
+| Chip press with the priority mid-string | **B-1** — priority silently dropped |
+| Click `Add` (pointer) | focus drops to `<body>` for the write (m-3) |
+
+## §3 — Mutation testing, reproduced and extended
+
+32 mutations, one at a time, each run against `tests/unit/quickAdd.test.ts`
+only, source restored between every run and verified restored at the end.
+Results in MA-4. Nothing was written to the branch.
+
+## §4 — Reachability of the create paths
+
+Every create path survives the retirement of the toolbar button, at both
+viewports:
+
+- The bar is rendered unconditionally, above the filter bar, and is the first
+  interactive control in the list region — so a keyboard user reaches it before
+  anything else, and a scrolled-out bar is reached by `focus()`'s own scroll.
+- The empty state's CTA focuses it (`e2e/quick-add.spec.ts:47`), and that empty
+  state only renders when the list is short enough for the bar to be on screen.
+- `More options` reaches the modal, present on every account including a new
+  one, at `min-h-11` on mobile.
+- Row Edit is unchanged.
+
+`chromium-mobile` runs the whole quick-add spec (only `pointer.spec.ts` is
+excluded), so mobile is genuinely covered rather than assumed. No finding here.
+
+## §5 — The `createdVia` decline
+
+**Overruled**, with the scope the author is right about kept.
+
+The argument offered is that a column with no reader costs a runbook step in a
+repo with no migration history. Half of that is correct and I wrote the other
+half myself: §1.4 of this document says `prisma/` has no migration history and
+that this gets more expensive with every undocumented `db push`. That is a real
+cost and I am not pretending it is zero.
+
+But this column is not a column with no reader. Its reader is written down —
+`docs/PM-PROPOSAL.md` measure #5, `updatedAt - createdAt < interval '120
+seconds'`, split by create path — and it is the **counter**-measure: the one
+number that would pull this feature back. Given what §1 above found about the
+parser's Title-Case behaviour, the mis-parse rate is not a nice-to-have metric;
+it is the thing that tells us whether MA-1 is a real-world problem or a
+reviewer's edge case. Without it the feature ships unfalsifiable, and there is
+no other way to tell a quick-add create from a modal one after the fact.
+
+So: not a merge blocker, and not dropped. `createdVia String?` lands with the
+rollout and before the measurement window opens — and since it has to happen
+anyway, it is the natural forcing case for fixing §1.4, which makes it the
+cheapest migration this repo will ever introduce rather than the fourth
+undocumented push.
+
+## §6 — Conventions
+
+`docs/CONVENTIONS.md` → Mutation UX already reads *"Create a todo | No | Undo
+removes it"*, so the exception the PM flagged as a gate is not needed — the rule
+was rewritten before this branch. Creating on Enter with an Undo toast is
+compliant as written, and the branch is right not to have amended it.
+
+`FormTextField`'s `isLabelHidden` is the correct reading of §6.2: the `Label`
+still exists, it is `sr-only`, and the accessible name is a real label rather
+than an `aria-label`. The e2e fixture finds the input by that name, which is
+the proof.
+
+The `[browser] A PressResponder was rendered without a pressable child` warning
+in the Playwright log is **pre-existing** — I confirmed it on `develop`. Not
+this branch's.
+
+---
+
+## Summary
+
+| Severity | Findings |
+|---|---|
+| Blocker | B-1 chip press discards the other reading · B-2 `Esc` sticks and kills the parser |
+| Major | MA-1 rule 3 is not what the code does · MA-2 the mirror is unverified · MA-3 every create blanks the list · MA-4 five surviving mutants · MA-5 the parse is silent to a screen reader · MA-6 `useTodoList`, fifth pass |
+| Minor | m-1 … m-6 |
+| Nit | n-1 … n-5 |
+
+The parser is better than I expected and the timezone work is right. But the
+branch's own argument is that rules 1–3 leave a residue and the chips are what
+make that residue safe, and the chips do not currently work in either
+direction. Fix B-1 and B-2, take a decision on MA-1, and this is an approve.
+
+> **Request changes.**
