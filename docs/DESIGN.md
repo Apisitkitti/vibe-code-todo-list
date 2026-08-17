@@ -1309,9 +1309,10 @@ the reverse: an unwanted chip is on screen and costs one keystroke, while a
 silently disabled parser is invisible.
 
 *Residual, stated because it is real:* a single edit that replaces the whole
-line without ever passing through anything else — a paste — keeps a refusal
-whose words the new line happens to end in. Two texts cannot be told apart by
-the path that produced them, and a paste has no path. Submitting clears the
+line without ever passing through anything else — a paste, a text drop,
+autofill, or a coalesced undo — keeps a refusal whose words the new line
+happens to end in. Two texts cannot be told apart by the path that produced
+them, and a replacement made in one edit has no path. Submitting clears the
 refusal outright, so it never reaches the next todo.
 
 **A capital letter switches the parser off for that word,** which is a

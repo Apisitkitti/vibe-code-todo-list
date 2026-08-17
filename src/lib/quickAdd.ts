@@ -374,9 +374,10 @@ export const parseQuickAdd = (
  *
  * **The residual, stated rather than papered over:** a single edit that
  * replaces the line without ever passing through a state that leaves the
- * reading — a paste, in practice — keeps the refusal. No comparison of two
- * texts can tell that from an edit to the left of the tail, because the two
- * results are the same text; only the path differs, and a paste has no path. A
+ * reading — a paste, a text drop, autofill, or a coalesced undo — keeps the
+ * refusal. No comparison of two texts can tell that from an edit to the left
+ * of the tail, because the two results are the same text; only the path
+ * differs, and a replacement in one edit has no path. A
  * submit clears the refusal outright (`clearTo`), so it cannot reach the next
  * todo.
  */
