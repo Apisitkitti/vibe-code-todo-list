@@ -988,6 +988,28 @@ Do not introduce them without updating this document.
    hover-revealed row actions use `group-focus-within:opacity-100` so they become
    visible when tabbed to — hiding them with `hidden` or `display:none` is a bug.
    Escape closes both dialogs; Enter submits the todo form and confirms deletion.
+
+   **When a mutation destroys the control that had focus, focus is moved —
+   first back into the list, then onto the toast's action.** This is a
+   deliberate exception to "never move focus without the user asking", taken
+   because the alternative measured worse: a keyboard toggle under a status
+   filter removes the row (US-07), focus fell to `<body>`, and the Undo that is
+   the *only* route back sat behind every remaining row at three tab stops
+   each, against a 12s timeout. QA measured it unreachable at 19 todos at any
+   human pace (`docs/QA-REPORT.md` §A3). Moving focus costs a keyboard user one
+   surprise; not moving it costs them the todo.
+
+   The order is not incidental. Landing on the neighbouring row first is what
+   gives react-aria's toast region an element to restore focus *to* when the
+   toast expires — it records where focus arrived from, so entering the region
+   straight from `<body>` would drop focus a second time on expiry.
+
+   **Keyboard only.** react-aria does not focus a control on pointer press, and
+   a mouse user who has a row focused from earlier must not have Undo armed
+   under a Space press they meant for that row. Gate on modality
+   (`useFocusVisible`), not on whether focus happens to be in the list.
+   Implementation and the frame-timing trap are in `src/lib/rowFocus.ts`;
+   pinned by `e2e/undo-focus.spec.ts`.
 9. **Motion.** The only animations are HeroUI's own (skeleton shimmer, dialog
    entry, toast slide). Add `motion-reduce:transition-none` to the row action
    opacity transition.
