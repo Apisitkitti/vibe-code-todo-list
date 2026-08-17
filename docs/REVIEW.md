@@ -4130,3 +4130,291 @@ make that residue safe, and the chips do not currently work in either
 direction. Fix B-1 and B-2, take a decision on MA-1, and this is an approve.
 
 > **Request changes.**
+
+---
+
+# Re-review — `feature/quick-add` → `develop` (rebased: `f6c44fb` … `dee0e1f`)
+
+Re-fetched after the force-push; reviewed `f6c44fb` in isolation and the rest as
+the branch diff. I did not re-review what passed the first time.
+
+## Verdict, up front
+
+> **Request changes — RB-1, and RMA-1 in the same push.**
+
+Both blockers and five of the six majors close cleanly, and the extraction is
+the pure move it claims to be. One residual survives B-1: releasing a chip can
+still take a word out of the title, in the exact shape the loop does not cover.
+That plus one surviving mutant is a counter and two test cases. Everything else
+here is confirmation.
+
+## What I ran
+
+- `git show f6c44fb` in isolation, and a line-for-line set difference between
+  what left `TodoListScreen.tsx` and what arrived in `useTodoList.ts`.
+- Vitest, `TZ=Pacific/Kiritimati`: **271 passed**. Playwright: **86 passed**.
+- `tsc --noEmit` and `eslint`: clean.
+- Fourteen mutations of `src/lib/quickAdd.ts`, run against
+  `tests/unit/quickAdd.test.ts`.
+- `undo-semantics.spec.ts` at desktop width: 34 whole-file runs on the branch,
+  14 on `develop`, plus 16 runs of the single test in isolation.
+
+## §1 — Commit 1 is a pure move. Confirmed mechanically.
+
+I checked this as a set difference rather than by reading, because reading is
+how a one-word change survives. Every line removed from `TodoListScreen.tsx`
+appears verbatim in `useTodoList.ts`. The residue is exactly nine lines, and all
+nine are import bookkeeping plus the two `landedLoadsRef.current` reads that
+became `readLandedLoads()`. Nothing else.
+
+Specifically, against the five things I asked about:
+
+- **State order** — `result`, `isLoading`, `loadError`, `pendingTodoIds`,
+  `reloadToken`, `lastFilterKey`, in that order, unchanged. `editingTodo`,
+  `pendingDelete` and `isDeleting` stayed in the screen. The hook is called
+  first, so every one of its hooks still precedes the screen's own; order is
+  stable per component, which is all React requires.
+- **The render-time filter flag** — identical, including the comment explaining
+  why it is not an effect. It now runs before `useRouter()` and
+  `useMediaQuery()` rather than after. A render-phase `setState` does not
+  short-circuit the rest of the render pass, so the hooks below still run in the
+  same order in the same pass. No semantic change.
+- **Effect dependencies** — `[status, priority, query, reloadToken]`, unchanged.
+- **The `isCurrent` guard** — unchanged, cleanup included, and
+  `landedLoadsRef.current += 1` is still on the one line that replaces `result`.
+- **What stayed behind** — the toasts and their Undo, the confirm dialog, the
+  modal, and the optimistic toggle. That is the right cut: the hook owns *what
+  is on screen*, the screen owns *what a mutation means*. Moving `runToggle`
+  would have made this a behaviour change wearing a refactor's clothes, and it
+  correctly did not.
+
+`readLandedLoads()` is the only new surface, and it is a read-only accessor over
+the same ref. 778 → 615 at the commit, 694 at the tip beside a 248-line hook —
+as stated.
+
+This is the diff I asked for five times and it is the diff I asked for. Thank
+you.
+
+## Blocker
+
+### RB-1 — B-1 is not fully closed. Releasing a chip can still eat a word, and the shape is the one the new loop does not cover.
+
+The step-over is right and the cases in the test file all hold. But `canLift`
+counts a stepped-over run as *still in the title*, which is true — and that is
+what frees up rule 2's budget for a lift the unreleased parse had refused. A
+release can therefore make the parser take **more**, never fewer, words.
+
+Reproduced against the branch (`now` = Mon 17 Aug 2026):
+
+```
+parse("high tomorrow")           → title "high",     due 2026-08-18, priority medium
+                                   chips: [Due Tomorrow]
+parse("high tomorrow", ["due"])  → title "tomorrow", due "",         priority high
+                                   chips: [High priority]
+```
+
+That second line is a chip press away. The user types `high tomorrow`, sees
+*Due Tomorrow*, presses it — the chip whose accessible name is *"keep 'tomorrow'
+in the title"* — and the todo they get is titled **`tomorrow`**. The word `high`
+left the title, and a priority they never asked for arrived. It is symmetric:
+
+```
+parse("friday high")               → title "friday", priority high  chips: [High priority]
+parse("friday high", ["priority"]) → title "high",   due 2026-08-21 chips: [Due Friday]
+```
+
+Also reproduces on `low next week`, `medium in 3 days`, `today high`,
+`monday low` — any input where **every** word is vocabulary, which is precisely
+where rule 2 was the only thing holding the parser back. Any input with one
+non-vocabulary word left over is safe; I checked.
+
+`Esc` still recovers everything, and the new chip's own aria-label does say
+which word is gone, so this is not the fully silent version of B-1. But three
+places assert the opposite guarantee and all three are currently false:
+
+- `quickAdd.ts`: *"Releasing a word puts it back without changing anything
+  else"*
+- `DESIGN.md` §7.17: *"Refusing one chip never costs the other."*
+- `tests/unit/quickAdd.test.ts`: *"releasing one kind never costs the other, in
+  either word order"* — which passes only because its fixture has `Call mum
+  about` in front of the vocabulary.
+
+The invariant you want is that a release is **monotone**: it may only ever
+subtract from the unreleased reading. Cheapest fix is to make rule 2's budget
+count stepped-over words as spent, since in the unreleased parse they were:
+
+```ts
+let steppedOver = 0;                      // incremented in both release branches
+const canLift = (length: number) =>
+  words.length - lifted.size - steppedOver - length >= 1;
+```
+
+`high tomorrow` + release due then gives `2 - 0 - 1 - 1 = 0` → refused, title
+stays `high tomorrow`, no chips — which is the correct answer. I checked this
+against the existing release tests by hand and it changes none of them
+(`Call mum about high tomorrow` → `5 - 0 - 1 - 1 = 3`, still lifts).
+
+Add the two-word case to the "either word order" test, since that is the fixture
+shape that would have caught it.
+
+## Major
+
+### RMA-1 — MA-4: four of the five mutants are dead. The fifth is alive, and it is the one about the vocabulary being closed.
+
+I re-ran all five plus nine more. Killed: weekday prefix, `day`/`days` prefix,
+the dropped `in` anchor, the loosened date shape (kills two tests), and — extra
+— priority prefix, the weekday "strictly ahead" rule, `next week` off-by-one,
+non-strict date parse, and both step-over mutants. The suite is genuinely good.
+
+Surviving:
+
+| Mutation | Result |
+|---|---|
+| `last === "today" \|\| last === "tonight" \|\| last === "now"` | **survived, 39/39 green** |
+| `days <= MAX_RELATIVE_DAYS` → `days < …` | survived (boundary; see n-1) |
+
+The first is the mutant MA-4 named, and the test written for it —
+*"rule 4: the vocabulary is closed"* — does not kill it. It asserts `urgent`,
+`someday`, `asap`, `eod`, `critical`, `fortnight`; none of those is a word a
+plausible mutation of the existing branches would add. MA-4 gave the case
+verbatim: **`"finish it now"`**, asserting `dueAt === ""`. Add it. Vacuous passes
+are the failure mode in this half of the file and this is one.
+
+## Minor
+
+### RMI-1 — MA-1's trade is the right one, and the user is never told.
+
+Lowercase-only is correct, and for the reason given: a capital is the user's own
+signal that the word is a name, and honouring it is a *stronger* guarantee than
+a chip because nothing fires and there is nothing to undo. `Black Friday`
+surviving intact is worth more than `Buy milk Tomorrow High` parsing.
+
+But it is silent in the other direction, as you said. A user who capitalises
+gets no parse, no chip and no explanation, and the only hint anywhere in the UI
+is the lowercase example in the placeholder. That is a thin signal for a rule
+the docs describe in a paragraph. Not a merge blocker — the failure mode is "you
+typed a todo and got the todo you typed" — but the copy deck should carry it.
+The placeholder is the wrong place (it disappears on first keystroke); a line in
+the empty state or a one-time hint beside the bar is the right one. PM/design
+call, not mine.
+
+### RMI-2 — the burst-capture slice has no test, and its `else` branch drops keystrokes.
+
+The second bug in B-2 — the whole submitted string being kept and glued onto the
+next todo — is genuinely fixed; `current.slice(submitted.length)` is right and I
+can see why. But `QuickAddForm.tsx:195` is reached only when a write is in
+flight while the user types, and nothing in the suite drives that window. The
+`e2e` "burst capture" case types the second todo *after* the first has landed,
+which never enters the branch.
+
+The `: ""` fallback also discards everything the user typed when
+`startsWith(submitted)` is false — a user who corrected the *front* of the
+string mid-flight loses the line. That is the exact failure US-05 is written
+against. Narrow, but it is the one branch here with no coverage and the one that
+throws work away.
+
+### RMI-3 — stale comment.
+
+`TodoListScreen.tsx:364`: *"A create still refetches (`reloadWithSkeleton`)"*.
+True of the modal, no longer true of the bar after MA-3. One word.
+
+## Nit
+
+- **n-1** — `days <= 365` vs `< 365` is untested at the boundary. `in 365 days`
+  either is or is not a date and nothing says which. One assertion.
+- **n-2** — `aria-hidden` on the visible hint (`dee0e1f`) is the right call for
+  the duplication, but a live region is ephemeral: a screen-reader user who
+  tabs past the announcement can no longer find the hint by browsing. The chips'
+  own aria-labels carry the recovery, so this is survivable. Noting it only
+  because the fix traded one a11y property for another and the commit body
+  mentions only the one it gained.
+
+## The flake — confirmed, and it is `develop`'s
+
+`undo-semantics.spec.ts:215` fails on `develop`. Measured, all at desktop width,
+`retries: 0`:
+
+| Target | Whole-file runs | Failures |
+|---|---|---|
+| `develop` | 14 | **3** (~21%) |
+| `feature/quick-add` | 34 | 2 (~6%) |
+| `feature/quick-add`, test alone, `--repeat-each=16` | 16 | 0 |
+| full 86-test suite | 1 | 0 |
+
+So the reported "roughly 1 in 4" is right on `develop` and this branch does not
+make it worse. It never fails in isolation — it needs the two tests ahead of it
+in the file, which is why it looks like a product race and is not one.
+
+**It is the precondition that fails, not the assertion under test:**
+
+```
+> 225 |     expect(await todos.undoButton.count()).toBe(1);
+      Expected: 1
+      Received: 0        (test failed in 1.0s — not expiry)
+```
+
+The create-Undo toast has not *rendered* yet. `createTodo` returns on
+`expect(rowByText(title)).toBeVisible()`, and HeroUI raises every toast inside
+`document.startViewTransition`; the row can land before the toast's transition
+starts. Line 225 is a point-in-time `count()` with nothing to wait on.
+
+The file's own reasoning for point-in-time reads is correct and I am not asking
+for it to be dropped — a retrying `toHaveCount(0)` at lines 241 and 249 would be
+satisfied by the four-second expiry and would pass against a broken app. That
+argument applies to *absence*. Line 225 asserts **presence**, where retrying is
+not vacuous, it is required. The two other point-in-time reads in this file are
+each preceded by a web-first `toBeVisible()` on the toast title; this one is not.
+That asymmetry is the whole bug.
+
+Fix, in the file's own idiom:
+
+```ts
+await expect(todos.toastTitles.filter({ hasText: addedToast(TODO_TITLE) }))
+  .toBeVisible();
+expect(await todos.undoButton.count()).toBe(1);
+```
+
+**Ruling: its own ticket, against `develop`. It does not block this merge** —
+it predates the branch, the branch does not touch that spec, and holding a
+feature for a defect it did not introduce is not how this works.
+
+It does block CI, in the sense that matters: a suite that goes red one run in
+five under `retries: 0` teaches people that red means "run it again", and the
+next time it means something they will re-run that too. `retries: 0` is the
+right setting and this is the bill for it. It is one line and it is diagnosed
+above, so I would rather it went in on `develop` this week than sat in a backlog
+— but it is not this branch's to carry.
+
+## What I am not re-reviewing
+
+`91dd41b` is QA's audit, committed unedited — correct handling, and their file
+is theirs. MA-2, MA-3, MA-5 and MA-6 close; MA-2's one-directional property is
+the right property, on which see below. B-2 closes: the text-keyed release has
+no stale state to clear by construction, the e2e pins both the staleness and the
+leak into the next todo, and I could not make a refusal outlive its text.
+
+On MA-2 specifically, since it was a judgement call: **folding further than the
+server is the right direction and the asserted property is the right property.**
+`fold` can now call a row *visible* that Postgres would not return, and the cost
+of that is a plain toast where an explanatory one was possible. It can no longer
+call a row *hidden* that is sitting on screen, and the cost of *that* was the
+app saying something false about what the user can see. Asserting the converse
+would forbid the safe direction and buy nothing. The `note: "about milk"` seed
+is a good touch — it is the canary that goes red the day backlog #4 adds `note`
+to the `OR`, which is the drift no unit test in `src/lib` could ever catch.
+
+## Summary
+
+| Severity | Findings |
+|---|---|
+| Blocker | RB-1 releasing a chip can still take a word out of the title |
+| Major | RMA-1 the `now` mutant from MA-4 is still alive |
+| Minor | RMI-1 the case rule is unexplained to the user · RMI-2 the burst slice is untested and drops keystrokes on one branch · RMI-3 stale comment |
+| Nit | n-1 `in 365 days` boundary · n-2 the hint is now live-region-only |
+| Not this branch | `undo-semantics.spec.ts:215` flakes on `develop` at ~21%; own ticket, fix is one line |
+
+The extraction is clean, B-2 is closed, and the parser is in much better shape
+than it was. RB-1 is the same defect class as B-1 in the one input shape the new
+loop does not cover, and the fix is a counter and a test. One more push.
+
+> **Request changes.**

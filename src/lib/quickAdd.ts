@@ -49,8 +49,10 @@ dayjs.extend(customParseFormat);
  *  4. **The vocabulary is small, closed and exact.** Whole words, so
  *     `Highlight` is not `high`, `mondays` is not `monday`, `tomorrow!` is not
  *     `tomorrow`, `in three days` is not `in 3 days`, `count the 3 days` has
- *     no `in` to anchor it, and `2026-2-5` is not a date. Refusing to be
- *     clever is the feature; a near-miss that fires is the defect.
+ *     no `in` to anchor it, `next friday` is not `next week`, and `2026-2-5`
+ *     is not a date. Refusing to be clever is the feature; a near-miss that
+ *     fires is the defect — and a phrase that half-matches is the worst of
+ *     them, because it strands the half it did not read in the title.
  *
  * **Releasing a word puts it back without changing anything else** (review
  * B-1). A released kind is still *matched* — it has to be, or the scan would
@@ -60,6 +62,10 @@ dayjs.extend(customParseFormat);
  * carries on past them. `Call mum about high tomorrow`, releasing the date,
  * gives the title `Call mum about tomorrow` with priority `high` — the date
  * back, the priority untouched.
+ *
+ * The other half of that guarantee is that a release can never make the parser
+ * take *more* than it took before: words handed back to the title are not
+ * budget for rule 2 (`canLift`, review RB-1).
  *
  * The output is deliberately the existing contract: `dueAt` is the
  * `YYYY-MM-DD` wire format `todoFormSchema` and `parseDueDate` already own, so
@@ -178,6 +184,16 @@ const matchDue = (words: readonly string[], now: Date): DueMatch | null => {
     return { length: 2, dueAt: toDayString(today.add(DAYS_IN_WEEK, "day")) };
   }
 
+  /*
+    `next week` is the only phrase beginning `next`. Anything else — the very
+    plausible `next friday`, and `next month`, `next year` — is not
+    vocabulary, and matching only its last word would leave `next` stranded in
+    the title: `ship the deck next friday` would become a todo called "ship
+    the deck next". Refusing here keeps the whole phrase literal, which is
+    what rule 4 promises, and it can only ever keep more words than it takes.
+  */
+  if (previous === "next") return null;
+
   // `tonight` is today: the app stores a day, not an hour, and pretending
   // otherwise would be a promise the schema cannot keep.
   if (last === "today" || last === "tonight") {
@@ -231,13 +247,28 @@ export const parseQuickAdd = (
   let hasPriority = false;
   /** How far right-to-left the scan has walked. */
   let cursor = words.length;
+  /** Words a release put back. They are the user's, and cannot be spent. */
+  let steppedOver = 0;
 
   /**
    * Rule 2, as one predicate: a run may only be lifted if at least one word is
-   * left over. Released runs never ask, because they lift nothing.
+   * left over that the parser has not already been told to keep its hands off.
+   *
+   * **`steppedOver` is subtracted, and leaving it out was review RB-1.** A
+   * released run stays in the title, so counting it as a survivor freed the
+   * budget for a lift the unreleased parse had refused — and a release could
+   * then make the parser take *more* words than before, which is the exact
+   * opposite of what pressing the chip asks for. `high tomorrow` reads as
+   * title `high` due tomorrow; pressing "keep tomorrow in the title" used to
+   * give a todo titled `tomorrow` with priority High, having eaten the word
+   * the user never touched.
+   *
+   * The rule that fixes it states the intent directly: **words handed back to
+   * the title are not budget.** Rule 2 then means what it always said — at
+   * least one word survives that the user did not have to rescue.
    */
   const canLift = (length: number) =>
-    words.length - lifted.size - length >= 1;
+    words.length - lifted.size - steppedOver - length >= 1;
 
   const lift = (length: number) => {
     for (let index = cursor - length; index < cursor; index += 1) {
@@ -259,6 +290,7 @@ export const parseQuickAdd = (
           // Matched, and deliberately stepped over: the scan has to get past
           // it to reach whatever is further left (B-1).
           hasPriority = true;
+          steppedOver += match.length;
           matched = match.length;
         } else if (canLift(match.length)) {
           tokens.unshift({
@@ -280,6 +312,7 @@ export const parseQuickAdd = (
       if (match) {
         if (released.has("due")) {
           hasDue = true;
+          steppedOver += match.length;
           matched = match.length;
         } else if (canLift(match.length)) {
           tokens.unshift({

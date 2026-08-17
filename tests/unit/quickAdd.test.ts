@@ -247,16 +247,71 @@ describe("parseQuickAdd — where it must NOT fire", () => {
     expect(parse("plan the week").dueAt).toBe("");
   });
 
-  test("rule 4: the vocabulary is closed", () => {
-    // Kills a mutant that treats any trailing word as a date or a priority.
-    for (const input of [
-      "buy milk urgent",
-      "buy milk someday",
-      "buy milk asap",
-      "buy milk eod",
-      "buy milk critical",
-      "buy milk fortnight",
-    ]) {
+  /**
+   * Rule 4, and the test that actually holds it.
+   *
+   * **The words below are the ones somebody would plausibly add**, which is
+   * the whole point: an earlier version of this test named `urgent`,
+   * `someday`, `asap`, `eod`, `critical` and `fortnight`, and a mutation
+   * review pointed out that no plausible change adds any of those — so adding
+   * `now` to the `today` branch survived with the suite fully green (RM-1).
+   * A closure test that only names words nobody would add is not testing
+   * closure.
+   *
+   * Every entry here is either a synonym of something already in the
+   * vocabulary, a common abbreviation of it, or the obvious next step someone
+   * would reach for. If one of them starts firing, that was a decision, and it
+   * should be made in the copy deck and the PRD rather than in a `||`.
+   */
+  test("rule 4: the vocabulary is closed against the words most likely to be added", () => {
+    const NOT_VOCABULARY = [
+      // Synonyms and near-neighbours of `today` / `tonight`.
+      "now",
+      "later",
+      "soon",
+      "midnight",
+      "noon",
+      "immediately",
+      // Abbreviations of things that *are* vocabulary.
+      "tonite",
+      "tmrw",
+      "tmr",
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri",
+      "sat",
+      "sun",
+      // Horizons the vocabulary deliberately does not cover.
+      "weekend",
+      "yesterday",
+      "overmorrow",
+      "eod",
+      "eow",
+      "asap",
+      "someday",
+      "fortnight",
+      // Priority synonyms and shorthands.
+      "urgent",
+      "important",
+      "normal",
+      "critical",
+      "blocker",
+      "trivial",
+      "hi",
+      "lo",
+      "med",
+      "p1",
+      "p2",
+      "p3",
+      "highest",
+      "lowest",
+    ];
+
+    for (const word of NOT_VOCABULARY) {
+      const input = `finish it ${word}`;
+
       expect(parse(input), input).toMatchObject({
         title: input,
         dueAt: "",
@@ -264,6 +319,32 @@ describe("parseQuickAdd — where it must NOT fire", () => {
         tokens: [],
       });
     }
+  });
+
+  test("rule 4: the multi-word phrases are closed too", () => {
+    // `next week` is vocabulary; nothing else beginning `next` or `this` is,
+    // and `in N days` does not generalise to other units.
+    for (const phrase of [
+      "next month",
+      "next year",
+      "next friday",
+      "this week",
+      "this month",
+      "in a week",
+      "in 2 weeks",
+      "in 2 months",
+      "in 48 hours",
+    ]) {
+      const input = `ship the deck ${phrase}`;
+
+      expect(parse(input), input).toMatchObject({ title: input, dueAt: "" });
+    }
+  });
+
+  test("rule 4: the `in N days` horizon has an exact edge", () => {
+    // 365 is the last day that counts as a horizon rather than a date.
+    expect(parse("renew the lease in 365 days").dueAt).toBe("2027-08-17");
+    expect(parse("renew the lease in 366 days").dueAt).toBe("");
   });
 
   test("rule 4: the date shape is exact, not merely date-ish", () => {
@@ -294,10 +375,6 @@ describe("parseQuickAdd — where it must NOT fire", () => {
   test("rule 4: in N days is digits only", () => {
     expect(parse("chase the invoice in three days").dueAt).toBe("");
     expect(parse("chase the invoice in a few days").dueAt).toBe("");
-  });
-
-  test("rule 4: an absurd horizon is not a date", () => {
-    expect(parse("renew the lease in 400 days").dueAt).toBe("");
   });
 
   test("only one date and one priority are ever taken", () => {
@@ -377,6 +454,66 @@ describe("parseQuickAdd — the tokens, and keeping the text", () => {
     expect(
       parse("Call mum about high tomorrow", ["due"]).tokens.map((t) => t.kind),
     ).toEqual(["priority"]);
+  });
+
+  /**
+   * Review RB-1, and the other direction of the same guarantee: a release must
+   * never make the parser take *more* than it took before.
+   *
+   * **These fixtures are all-vocabulary on purpose.** Rule 2 is the only brake
+   * on such a line, and the bug was that a stepped-over run still counted
+   * toward rule 2's budget — so releasing one kind freed a lift the unreleased
+   * parse had refused. The test above this one could not see it: three
+   * non-vocabulary words in front of the vocabulary leave the budget so slack
+   * that nothing is ever refused.
+   */
+  test("a release never lets the parser take more than it already had", () => {
+    // Unreleased, rule 2 stops after the date.
+    expect(parse("high tomorrow")).toMatchObject({
+      title: "high",
+      dueAt: "2026-08-18",
+      priority: "medium",
+    });
+
+    // Pressing "keep tomorrow in the title" must give exactly that — not a
+    // todo titled `tomorrow` that has swallowed `high` on the way past.
+    expect(parse("high tomorrow", ["due"])).toMatchObject({
+      title: "high tomorrow",
+      dueAt: "",
+      priority: "medium",
+      tokens: [],
+    });
+
+    // Symmetric, with the kinds the other way round.
+    expect(parse("friday high")).toMatchObject({
+      title: "friday",
+      priority: "high",
+      dueAt: "",
+    });
+    expect(parse("friday high", ["priority"])).toMatchObject({
+      title: "friday high",
+      dueAt: "",
+      priority: "medium",
+      tokens: [],
+    });
+  });
+
+  test("the words a release hands back are never spent on something else", () => {
+    // Three words, all vocabulary. `in 3 days` is a three-word run, so
+    // releasing it must not then fund lifting `high` out of a one-word title.
+    expect(parse("high in 3 days", ["due"])).toMatchObject({
+      title: "high in 3 days",
+      dueAt: "",
+      priority: "medium",
+      tokens: [],
+    });
+
+    // And with one word to spare, the lift is allowed again.
+    expect(parse("ship high in 3 days", ["due"])).toMatchObject({
+      title: "ship in 3 days",
+      dueAt: "",
+      priority: "high",
+    });
   });
 
   test("releasing the priority puts that word back and leaves the date alone", () => {
