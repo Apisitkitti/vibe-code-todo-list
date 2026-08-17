@@ -1,6 +1,13 @@
 import type { Page } from "@playwright/test";
 
-import { markedCompleteToast, markedNotCompleteToast } from "./support/copy";
+import { countRequests, TODO_ITEM_URL } from "./support/assertions";
+import {
+  addedToast,
+  markedCompleteToast,
+  markedNotCompleteToast,
+  STATUS_FILTER_ARIA_LABEL,
+  STATUS_FILTER_LABELS,
+} from "./support/copy";
 import { expect, test, type TodosScreen } from "./support/fixtures";
 
 /**
@@ -19,6 +26,22 @@ import { expect, test, type TodosScreen } from "./support/fixtures";
  * stops between where focus used to land and the toast, which is well past the
  * point QA showed the timer wins. A fix that only works on a short list fails
  * this spec.
+ *
+ * ── Two blind spots this file used to have (QA DEF-25 §4, DEF-26 §5) ────────
+ *
+ * 1. **It navigated between seeding and acting.** `page.goto("/todos?status=
+ *    active")` destroys every outstanding toast, so every test here ran on a
+ *    screen with exactly one toast on it — the single state in which selecting
+ *    a toast by stack position happens to select the right one. The filter is
+ *    now chosen through the filter bar, which is what a user does and what
+ *    leaves the seed's `added` toasts standing.
+ * 2. **It asserted the shape of the focused element, not its identity.**
+ *    `data-slot === "toast-action-button"` is satisfied by *any* toast's Undo,
+ *    including one belonging to a different todo, whose Undo is a `DELETE`.
+ *    Focus is now named by the title of the toast that owns it.
+ *
+ * Both were load-bearing: the suite was green through a Critical defect that
+ * destroyed user data, in two independent ways.
  */
 
 const LIST_SIZE = 8;
@@ -38,6 +61,46 @@ const activeSlot = async (page: Page): Promise<string> =>
   });
 
 /**
+ * **Which** toast has focus, read from its own title.
+ *
+ * The assertion the old spec could not make. A toast stack is many buttons of
+ * identical shape wired to entirely different mutations — an `added` toast's
+ * Undo deletes the row it created, an `updated` toast's reverts an edit, and
+ * the toggle's own restores the completion. Naming the owner is the only way a
+ * test can tell "the right Undo" from "an Undo".
+ */
+const focusedToastTitle = async (page: Page): Promise<string | null> =>
+  page.evaluate(() => {
+    const active = document.activeElement;
+
+    if (active === null || active === document.body) return null;
+
+    return (
+      active.closest('[data-slot="toast"]')?.querySelector('[data-slot="toast-title"]')
+        ?.textContent ?? null
+    );
+  });
+
+const statusFilter = (page: Page, status: keyof typeof STATUS_FILTER_LABELS) =>
+  page
+    .getByRole("radiogroup", { name: STATUS_FILTER_ARIA_LABEL })
+    .getByRole("radio", { name: STATUS_FILTER_LABELS[status], exact: true });
+
+/**
+ * Selects `Active` the way a user does — **not** by navigating to the URL.
+ *
+ * `router.replace` from the filter bar re-renders the list without tearing the
+ * document down, so the toasts raised by the seed are still on screen when the
+ * toggle happens. That is the ordinary state this feature lives in (`
+ * UNDO_WINDOW_MS` is 12s precisely so toasts linger) and the state DEF-25
+ * needs. A `goto` here would sterilise it.
+ */
+const chooseActiveFilter = async (page: Page) => {
+  await statusFilter(page, "active").click();
+  await expect(page).toHaveURL(/status=active/);
+};
+
+/**
  * Establishes keyboard modality before landing on the row.
  *
  * The rescue is deliberately keyboard-only, and react-aria decides modality
@@ -45,7 +108,7 @@ const activeSlot = async (page: Page): Promise<string> =>
  * subsequent `focus()` is how the test skips the tab-walk *into* the list,
  * which is not what is under test; the walk *out* of it is.
  */
-const focusFirstRowFromKeyboard = async (page: Page, title: string) => {
+const focusRowFromKeyboard = async (page: Page, title: string) => {
   await page.keyboard.press("Tab");
   await page
     .getByRole("checkbox", { name: `Mark "${title}" as complete` })
@@ -65,17 +128,17 @@ const seedList = async (todos: TodosScreen, page: Page) => {
 };
 
 test.describe("NFR-04 — Undo reachability and focus", () => {
-  test("a keyboard toggle that removes the row lands focus on Undo, and Enter restores it", async ({
+  test("a keyboard toggle that removes the row lands focus on its own Undo, and Enter restores it", async ({
     signedIn,
     todos,
   }) => {
     await seedList(todos, signedIn);
 
     // The filter that makes the toast the only route back (US-07).
-    await signedIn.goto("/todos?status=active");
+    await chooseActiveFilter(signedIn);
     await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
 
-    await focusFirstRowFromKeyboard(signedIn, TOGGLED_TITLE);
+    await focusRowFromKeyboard(signedIn, TOGGLED_TITLE);
     expect(await activeSlot(signedIn)).not.toBe("body");
 
     await signedIn.keyboard.press("Space");
@@ -89,13 +152,16 @@ test.describe("NFR-04 — Undo reachability and focus", () => {
     ).toBeVisible();
 
     /*
-      The whole criterion, in one assertion: focus is *on* the Undo, with no
-      tab-walk in between and therefore no dependence on how many todos the
-      account has. Before the fix this read "body".
+      The whole criterion, in one assertion: focus is *on* the Undo of the
+      toast this toggle raised, with no tab-walk in between and therefore no
+      dependence on how many todos the account has. Before the rescue existed
+      this read "body"; while it selected by stack position it read the Undo of
+      whichever `added` toast the seed had left frontmost.
     */
     await expect
-      .poll(() => activeSlot(signedIn))
-      .toBe("toast-action-button");
+      .poll(() => focusedToastTitle(signedIn))
+      .toBe(markedCompleteToast(TOGGLED_TITLE));
+    expect(await activeSlot(signedIn)).toBe("toast-action-button");
 
     // And it is genuinely operable from there, not merely focused.
     await signedIn.keyboard.press("Enter");
@@ -114,13 +180,15 @@ test.describe("NFR-04 — Undo reachability and focus", () => {
   }) => {
     await seedList(todos, signedIn);
 
-    await signedIn.goto("/todos?status=active");
+    await chooseActiveFilter(signedIn);
     await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
 
-    await focusFirstRowFromKeyboard(signedIn, TOGGLED_TITLE);
+    await focusRowFromKeyboard(signedIn, TOGGLED_TITLE);
     await signedIn.keyboard.press("Space");
 
-    await expect.poll(() => activeSlot(signedIn)).toBe("toast-action-button");
+    await expect
+      .poll(() => focusedToastTitle(signedIn))
+      .toBe(markedCompleteToast(TOGGLED_TITLE));
 
     /*
       Not trapped: Tab out of the toast has to move focus somewhere real. A
@@ -137,7 +205,6 @@ test.describe("NFR-04 — Undo reachability and focus", () => {
 
     await signedIn.keyboard.press("Enter");
 
-    await expect(todos.undoButton).toHaveCount(0);
     await expect.poll(() => activeSlot(signedIn)).not.toBe("body");
   });
 
@@ -147,7 +214,7 @@ test.describe("NFR-04 — Undo reachability and focus", () => {
   }) => {
     await seedList(todos, signedIn);
 
-    await signedIn.goto("/todos?status=active");
+    await chooseActiveFilter(signedIn);
     await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
 
     /*
@@ -160,7 +227,7 @@ test.describe("NFR-04 — Undo reachability and focus", () => {
       **is** a pointer — the only thing standing between that and a hijacked
       Undo is the modality check.
     */
-    await focusFirstRowFromKeyboard(signedIn, "filler row 1");
+    await focusRowFromKeyboard(signedIn, "filler row 1");
     expect(await activeSlot(signedIn)).not.toBe("body");
 
     await todos.toggle(TOGGLED_TITLE, true);
@@ -178,6 +245,181 @@ test.describe("NFR-04 — Undo reachability and focus", () => {
       .poll(() => activeSlot(signedIn))
       .not.toBe("toast-action-button");
   });
+});
+
+/**
+ * DEF-25 — **Critical**. The rescue must not arm a mutation the user did not
+ * ask for, on a record they never touched.
+ *
+ * QA's repro, constructed rather than waited for. Two quick-adds leave two
+ * `added` toasts standing, each with an Undo that is a `DELETE` of the todo it
+ * created. The toggle then dismisses its own row's `added` toast and raises a
+ * success toast — but HeroUI serialises both through `startViewTransition`, so
+ * for a stretch of frames the *frontmost* toast is `keepme`'s. A rescue that
+ * asks for "the frontmost toast's action" gets that one, and the `Enter` that
+ * §6.8 promises will undo the completion instead deletes `keepme`
+ * permanently: no confirm, no undo behind it. Six of six for QA, verified
+ * against the database.
+ *
+ * **Why the `PATCH` is held.** Without it the window is a race and the test
+ * would be reporting the runner's frame rate. Holding the write until after
+ * the dismissal's transition has committed makes `keepme`'s toast frontmost by
+ * construction, so this fails on the old code every time rather than most of
+ * the time.
+ *
+ * The assertion is the *owner* of the focused button and the absence of a
+ * `DELETE` on the wire — not the button's `data-slot`, which the wrong toast
+ * satisfies exactly as well.
+ */
+test.describe("DEF-25 — the rescue must focus this toggle's Undo, not a neighbour's", () => {
+  const KEPT = "keepme";
+  const TARGET = "target";
+
+  test("a keyboard toggle beside an older Undo destroys nothing", async ({
+    signedIn,
+    todos,
+  }) => {
+    await todos.quickAdd(KEPT);
+    await expect(signedIn.locator("main").getByText(KEPT)).toBeVisible();
+    await todos.quickAdd(TARGET);
+    await expect(signedIn.locator("main").getByText(TARGET)).toBeVisible();
+
+    await chooseActiveFilter(signedIn);
+
+    // Both `added` toasts are still offering their Undo — the state the 12s
+    // window exists to create, and the state the old spec navigated away from.
+    await expect(todos.toastTitles.filter({ hasText: addedToast(KEPT) })).toBeVisible();
+    await expect(
+      todos.toastTitles.filter({ hasText: addedToast(TARGET) }),
+    ).toBeVisible();
+
+    const deletes = countRequests(signedIn, TODO_ITEM_URL, "DELETE");
+
+    /*
+      Long enough for the dismissal of `target`'s own `added` toast to commit
+      before the success toast is even queued, which is what puts a *different
+      todo's* toast in the frontmost slot at the moment the rescue reads it.
+    */
+    const HELD_WRITE_MS = 700;
+
+    await signedIn.route("**/api/todos/*/status", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, HELD_WRITE_MS));
+      await route.continue();
+    });
+
+    await focusRowFromKeyboard(signedIn, TARGET);
+    await signedIn.keyboard.press("Space");
+
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(TARGET) }),
+    ).toBeVisible();
+
+    /*
+      The defect, stated as an assertion: the focused Undo belongs to the
+      toggle that just happened. On the unfixed code this reads
+      `Todo “keepme” added` — a different toast, a different todo, a different
+      action.
+    */
+    await expect
+      .poll(() => focusedToastTitle(signedIn))
+      .toBe(markedCompleteToast(TARGET));
+
+    // The key §6.8 tells the user activates Undo.
+    await signedIn.keyboard.press("Enter");
+
+    // It undid the completion, which is what it promised to do.
+    await expect(signedIn.locator("main").getByText(TARGET)).toBeVisible();
+    await expect(
+      todos.toastTitles.filter({ hasText: markedNotCompleteToast(TARGET) }),
+    ).toBeVisible();
+
+    // And `keepme` was never touched — on the wire, on screen, and in the
+    // database, which is the only one of the three that is not recoverable.
+    expect(deletes.count, "a keypress aimed at Undo issued a DELETE").toBe(0);
+    await expect(signedIn.locator("main").getByText(KEPT)).toBeVisible();
+
+    const stored = await signedIn.request.get("/api/todos");
+
+    expect(stored.ok()).toBe(true);
+
+    const body = (await stored.json()) as {
+      todos: { title: string }[];
+      totalCount: number;
+    };
+
+    expect(body.totalCount).toBe(2);
+    expect(body.todos.map((todo) => todo.title).sort()).toEqual([KEPT, TARGET]);
+  });
+});
+
+/**
+ * DEF-26 — **High**. The rescue must actually deliver focus, and keep it.
+ *
+ * QA measured focus ending on `<body>` in 8 of 12 trials — verbatim the
+ * pre-fix state NFR-04 exists to eliminate — and on a toast *container*, which
+ * has no action on it, in most of the rest. They measured the rate and not the
+ * cause; the cause is the same wrong choice as DEF-25.
+ *
+ * Selecting by stack position lands focus on a toast that is **on its way
+ * out**: `dismissUndo`'s `toast.close` is queued behind the same serialized
+ * view transition as the add, so it commits a frame or two *after* the rescue
+ * has already focused it. react-aria's `useToastRegion` watches for exactly
+ * that — a focused toast being removed — and re-homes focus onto a
+ * neighbouring toast container, or drops it on `<body>` when its own index
+ * bookkeeping has not caught up. So the rescue was not failing to run. It ran,
+ * onto a doomed toast, and had focus taken back off it.
+ *
+ * Which is why this test samples focus **after the stack has finished
+ * churning** rather than on the first frame it settles. A test that only polls
+ * until it sees an action button can pass on the ~20ms the wrong toast holds
+ * focus before react-aria takes it away.
+ */
+test.describe("DEF-26 — the rescue delivers focus and keeps it", () => {
+  /** The gaps QA varied: the toggle fired at 0ms, and after the stack settled. */
+  for (const gapMs of [0, 1500]) {
+    test(`focus survives the toast stack settling — ${gapMs}ms after the last quick-add`, async ({
+      signedIn,
+      todos,
+    }) => {
+      const titles = ["alpha", "bravo", "charlie", "delta"];
+
+      for (const title of titles) {
+        await todos.quickAdd(title);
+        await expect(signedIn.locator("main").getByText(title)).toBeVisible();
+      }
+
+      await chooseActiveFilter(signedIn);
+      await signedIn.waitForTimeout(gapMs);
+
+      await focusRowFromKeyboard(signedIn, "delta");
+      await signedIn.keyboard.press("Space");
+
+      await expect(
+        todos.toastTitles.filter({ hasText: markedCompleteToast("delta") }),
+      ).toBeVisible();
+
+      await expect
+        .poll(() => focusedToastTitle(signedIn))
+        .toBe(markedCompleteToast("delta"));
+
+      /*
+        The load-bearing half. Every re-homing QA saw happened within a few
+        frames of the rescue landing, so the question is not where focus went
+        but where it *stayed*. Long enough for the dismissal, the add and the
+        stack's re-index to have all committed.
+      */
+      await signedIn.waitForTimeout(1500);
+
+      expect(await activeSlot(signedIn)).toBe("toast-action-button");
+      expect(await focusedToastTitle(signedIn)).toBe(markedCompleteToast("delta"));
+
+      // Operable, not merely focused — the state QA found focus in most often
+      // was the toast container, where `Space` and `Enter` do nothing at all.
+      await signedIn.keyboard.press("Enter");
+
+      await expect(signedIn.locator("main").getByText("delta")).toBeVisible();
+    });
+  }
 });
 
 /**
@@ -201,10 +443,10 @@ test.describe("NFR-04 — the last row in the list", () => {
     await todos.quickAdd(TOGGLED_TITLE);
     await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
 
-    await signedIn.goto("/todos?status=active");
+    await chooseActiveFilter(signedIn);
     await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
 
-    await focusFirstRowFromKeyboard(signedIn, TOGGLED_TITLE);
+    await focusRowFromKeyboard(signedIn, TOGGLED_TITLE);
     await signedIn.keyboard.press("Space");
 
     // The list is now empty — the empty state has replaced every row.
@@ -213,7 +455,15 @@ test.describe("NFR-04 — the last row in the list", () => {
       todos.toastTitles.filter({ hasText: markedCompleteToast(TOGGLED_TITLE) }),
     ).toBeVisible();
 
-    await expect.poll(() => activeSlot(signedIn)).toBe("toast-action-button");
+    /*
+      Named by owner, and it matters more here than anywhere: this row's own
+      `added` toast is still on screen and is the one `dismissUndo` is closing.
+      Its Undo deletes the todo. Focusing it would mean the user who finished
+      their last todo presses `Enter` to un-finish it and destroys it instead.
+    */
+    await expect
+      .poll(() => focusedToastTitle(signedIn))
+      .toBe(markedCompleteToast(TOGGLED_TITLE));
 
     await signedIn.keyboard.press("Enter");
     await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
@@ -238,7 +488,7 @@ test.describe("NFR-04 — when there is no toast to move to", () => {
   }) => {
     await seedList(todos, signedIn);
 
-    await signedIn.goto("/todos?status=active");
+    await chooseActiveFilter(signedIn);
     await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
 
     // No Undo is offered for a write that failed, so step 2 is skipped.
@@ -253,15 +503,21 @@ test.describe("NFR-04 — when there is no toast to move to", () => {
       }),
     );
 
-    await focusFirstRowFromKeyboard(signedIn, TOGGLED_TITLE);
+    await focusRowFromKeyboard(signedIn, TOGGLED_TITLE);
     await signedIn.keyboard.press("Space");
 
     // The row comes back and the failure is reported.
     await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
-    await expect(todos.undoButton).toHaveCount(0);
 
-    // Focus is somewhere a keyboard user can carry on from — not on the floor.
+    /*
+      Focus is somewhere a keyboard user can carry on from — not on the floor,
+      and not on a toast either. The seed's `added` toasts are still on screen
+      here, so "no toast to move to" is now a claim about *this* toggle rather
+      than about the screen being empty: a positional rescue would happily take
+      one of them.
+    */
     await expect.poll(() => activeSlot(signedIn)).not.toBe("body");
+    expect(await focusedToastTitle(signedIn)).toBeNull();
   });
 });
 
@@ -288,7 +544,7 @@ test.describe("NFR-04 — the rescue stands down once the user has moved", () =>
 
     await seedList(todos, signedIn);
 
-    await signedIn.goto("/todos?status=active");
+    await chooseActiveFilter(signedIn);
     await expect(signedIn.locator("main").getByText(TOGGLED_TITLE)).toBeVisible();
 
     /*
@@ -306,7 +562,7 @@ test.describe("NFR-04 — the rescue stands down once the user has moved", () =>
       await route.continue();
     });
 
-    await focusFirstRowFromKeyboard(signedIn, TOGGLED_TITLE);
+    await focusRowFromKeyboard(signedIn, TOGGLED_TITLE);
     await signedIn.keyboard.press("Space");
 
     // The row is gone optimistically and step 1 has moved focus to a row.
@@ -319,11 +575,13 @@ test.describe("NFR-04 — the rescue stands down once the user has moved", () =>
 
     release();
 
-    await expect(todos.undoButton).toBeVisible();
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(TOGGLED_TITLE) }),
+    ).toBeVisible();
 
     /*
-      Step 2 fires on the frame the action button appears, so once the button
-      is visible the steal has either happened or is one frame away. A bounded
+      Step 2 fires on the frame the action button appears, so once the toast is
+      on screen the steal has either happened or is one frame away. A bounded
       wait is the honest way to assert a negative here — a web-first assertion
       for "focus did not move" would pass on the frame before it did.
     */

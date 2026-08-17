@@ -20,10 +20,12 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { createHandoff } from "@/lib/handoff";
 import {
-  focusFrontmostToastAction,
   focusIsUnclaimed,
   focusRowAfterRemoval,
+  focusUndoAction,
+  nextUndoToken,
   readFocusedRow,
+  undoTokenProps,
 } from "@/lib/rowFocus";
 import type { TodoItemData, TodoListFilters } from "@/lib/todo";
 import {
@@ -199,6 +201,18 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     return true;
   };
 
+  /**
+   * Raises the Undo toast and returns the token that names **this** one.
+   *
+   * The token is what the focus rescue waits for (`src/lib/rowFocus.ts`). It
+   * has to come back from here rather than be looked up afterwards, because
+   * for a few frames the DOM holds two toasts for this same todo — the
+   * outstanding `added` one that `dismissUndo` has just asked to close, whose
+   * close is queued behind HeroUI's serialized view transition, and the one
+   * being raised now. `undoToastKeys` can tell them apart by key but nothing
+   * in the DOM carries that key, so the token is minted here and stamped on
+   * the button itself (QA DEF-25).
+   */
   const showUndoableSuccess = (
     todoId: string,
     message: string,
@@ -206,10 +220,13 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   ) => {
     dismissUndo(todoId);
 
+    const token = nextUndoToken();
+
     const key = toast.success(message, {
       timeout: UNDO_WINDOW_MS,
       actionProps: {
         children: "Undo",
+        ...undoTokenProps(token),
         onPress: () => {
           // Closing the toast does not remove it immediately — HeroUI defers
           // the unmount through a view transition, which can outlast a double
@@ -222,6 +239,8 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     });
 
     undoToastKeys.current.set(todoId, key);
+
+    return token;
   };
 
   /**
@@ -525,19 +544,22 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
         ? readFocusedRow()
         : null;
 
-    let undoIsOffered = false;
+    /*
+      The identity of the Undo this toggle raises, and `null` for as long as it
+      has raised none. Read after the write resolves, so it is the token of the
+      toast that reports *this* toggle and no other (QA DEF-25).
+    */
+    let undoToken: string | null = null;
 
     const running = runToggle(todo, nextCompleted, {
       onSuccess: () => {
-        showUndoableSuccess(
+        undoToken = showUndoableSuccess(
           todo.id,
           toggledMessage(todo.title, nextCompleted),
           () => {
             void undoToggle(todo, !nextCompleted);
           },
         );
-
-        undoIsOffered = true;
       },
       failureMessage: TOGGLE_FAILURE_MESSAGE,
       /*
@@ -564,14 +586,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       await running;
 
       /*
-        Step 2. Guarded on focus being unclaimed — still on a row where step 1
-        left it, or on `<body>` because the list emptied and step 1 had nowhere
-        to land — so a user who has already tabbed somewhere themselves is not
-        dragged into the toast. Skipped entirely when the write failed, where
-        the row comes back and there is no Undo to reach.
+        Step 2, onto the Undo this toggle raised and no other. Guarded on focus
+        being unclaimed — still on a row where step 1 left it, or on `<body>`
+        because the list emptied and step 1 had nowhere to land — so a user who
+        has already tabbed somewhere themselves is not dragged into the toast.
+        Skipped entirely when the write failed, where the row comes back, no
+        token is minted and there is no Undo to reach.
       */
-      if (undoIsOffered) {
-        await focusFrontmostToastAction(focusIsUnclaimed);
+      if (undoToken !== null) {
+        await focusUndoAction(undoToken, focusIsUnclaimed);
       }
 
       return;

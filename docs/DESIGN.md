@@ -1008,7 +1008,14 @@ Do not introduce them without updating this document.
    Escape closes both dialogs; Enter submits the todo form and confirms deletion.
 
    **When a mutation destroys the control that had focus, focus is moved —
-   first back into the list, then onto the toast's action.** This is a
+   first back into the list, then onto the action of the toast *that mutation
+   raised*.** Which toast is not a detail: the region holds several at once,
+   their action buttons are identical in shape, and an `added` toast's `Undo`
+   is a `DELETE`. Selecting one by stack position rather than by identity cost
+   a user an unrelated todo to a single keypress (`docs/QA-REPORT.md` DEF-25),
+   and cost focus altogether when react-aria re-homed it off the doomed toast
+   the position had named (DEF-26). The implementation carries a per-toast
+   token for exactly this reason; see `src/lib/rowFocus.ts`. This is a
    deliberate exception to "never move focus without the user asking", taken
    because the alternative measured worse: a keyboard toggle under a status
    filter removes the row (US-07), focus fell to `<body>`, and the Undo that is
@@ -1031,22 +1038,45 @@ Do not introduce them without updating this document.
    here, and under a status filter it now costs a detour on every row.
 
    Measured from focus-on-`Undo`, because an earlier draft of this section
-   named a workaround that does not exist:
+   named a workaround that does not exist. Re-measured after DEF-25, with one
+   toast on screen and focus on the **frontmost** toast — which is now the only
+   toast the rescue can land on:
 
    | Keys | Where focus lands |
    |---|---|
    | `Shift+Tab` | the toast **container** (it is focusable) — still in the region |
-   | `Shift+Tab` ×2 | out of the document entirely |
+   | `Shift+Tab` ×2 | **back into the list**, on the last row's `Delete` |
    | `F6` / `Shift+F6` / `Escape` | nothing moves; still on `Undo` |
    | `Tab` | the toast's `Close` button |
    | `Tab` ×2 | out of the document |
-   | `Tab` ×3 | back in at the **top of the page** (theme toggle) |
-   | `Tab` ×5 | the quick-add input — the first stop inside `<main>` |
+   | `Tab` ×3 onward | round through the top of the page (theme toggle) → `Account menu` → the quick-add input |
 
-   So: **`Shift+Tab` does not work, and neither does `Escape` or `F6`.** The
-   only way back into the list is forward — `Tab` out of the toast, round
-   through the top of the page, and on down through the filter bar to the
-   rows. Nothing is trapped, but nothing is cheap either.
+   So **`Shift+Tab` does work**, and this table used to say it did not.
+   `Escape` and `F6` still do nothing. Backwards is now the cheap route: two
+   presses to the list against six or more forward.
+
+   **Why the earlier readings disagreed, and QA's differed again.** Only the
+   *frontmost* toast's container is in the tab order — HeroUI sets
+   `tabIndex = -1` on every other one — so `Shift+Tab` from a **non**-frontmost
+   toast's `Undo` skips that container and lands on the toast in front of it,
+   which is the `Undo`↔`Close` cycle QA reported (`docs/QA-REPORT.md` DEF-27).
+   That was measured from the state DEF-25 put focus in. It is no longer
+   reachable through the rescue.
+
+   **The forward counts are dev-mode readings.** `next dev` renders a
+   `NEXTJS-PORTAL` element that takes a tab stop of its own, and it does not
+   take one on every run — it is the entire difference between this table and
+   QA's, which otherwise agree stop for stop. So the *order* of stops above is
+   the contract and the absolute counts are not; expect production to differ by
+   one. Nothing here is trapped either way.
+
+   **One cost the count hides.** With a stack of toasts on screen — the
+   ordinary case, since `UNDO_WINDOW_MS` is 12s — `Tab` ×2 from the toggle's
+   `Undo` is the *next toast's* `Undo`, and if that toast is an `added` one its
+   action is a `DELETE`. The rescue no longer puts a destructive control under
+   the user's first keypress (DEF-25), but two forward presses still reach one.
+   That is a property of stacking Undos in a tab-ordered region, not of the
+   rescue, and it is the next thing to look at if this area is revisited.
 
    Two consequences worth knowing before touching this:
 

@@ -43,6 +43,34 @@
  * finds nothing. This is the same "read before it rendered" trap that has
  * already produced two defects on this feature, so it is waited on rather than
  * assumed.
+ *
+ * **Step 2 names the toast it is waiting for, and waiting was never the
+ * missing piece (QA DEF-25, DEF-26).** It used to ask for whichever toast was
+ * frontmost, which is a *position* in a stack the caller does not control. In
+ * the frames between `dismissUndo` and the success toast mounting, that
+ * position holds the toast raised before this one — after a burst of
+ * quick-adds, some other todo's `added` toast, whose Undo is a `DELETE`. The
+ * poll matched it, focused it, and the user's next `Enter` destroyed a todo
+ * they had never touched. Six of six on QA's repro, confirmed against the
+ * database.
+ *
+ * The same wrong choice is what loses focus altogether. Both toasts in that
+ * window are on their way out — `dismissUndo`'s `toast.close` is queued behind
+ * the same serialized view transition as the add
+ * (`@heroui/react/dist/components/toast/toast-queue.js`), so it lands *after*
+ * step 2 has already focused its victim. react-aria's `useToastRegion` then
+ * sees the focused toast removed and re-homes focus onto a neighbouring toast
+ * *container* — an element with no action on it — or, when its own index
+ * bookkeeping has not caught up, drops it on `<body>`. That is DEF-26 in full:
+ * not a rescue that failed to run, but a rescue that ran onto a doomed toast
+ * and had focus taken back off it a frame later.
+ *
+ * So the cure is identity, not patience. A longer wait would only shrink the
+ * window in which the wrong toast is frontmost; it cannot close it, because
+ * "frontmost" never meant "mine". Each Undo is minted with a token that goes
+ * onto its own action button, and step 2 waits for *that* button. The toast it
+ * lands on is the one this toggle raised, which is not being closed, so
+ * nothing takes focus off it and `Enter` undoes the toggle the user just made.
  */
 
 /**
@@ -52,12 +80,50 @@
 const ROW_CHECKBOX_SELECTOR = 'main input[type="checkbox"]';
 
 /**
- * The action on the toast currently in front. HeroUI stamps `data-frontmost`
- * on it, which is what distinguishes the toast just raised from the stack of
- * older ones still sliding out behind it.
+ * Names *which* Undo an action button is, rather than where it happens to sit.
+ *
+ * HeroUI stamps `data-frontmost` on whichever toast is at the top of the
+ * stack, and there is no attribute anywhere that says "the toast this call
+ * raised" — the queue key `toast.success` returns never reaches the DOM. So
+ * the app supplies its own: `showUndoableSuccess` mints a token per Undo and
+ * hands it to the action button through `actionProps`, which HeroUI spreads
+ * onto the button and react-aria's `filterDOMProps` passes through because it
+ * is a `data-*` attribute.
+ *
+ * This is the whole of the DEF-25 fix. A positional selector cannot express
+ * "the one I just raised" and must not be asked to.
  */
-const FRONTMOST_TOAST_ACTION_SELECTOR =
-  '[data-slot="toast"][data-frontmost="true"] [data-slot="toast-action-button"]';
+export const UNDO_TOKEN_ATTRIBUTE = "data-undo-token";
+
+/**
+ * The token as `actionProps` wants it.
+ *
+ * A `Record<string, string>` rather than a literal because HeroUI's
+ * `ButtonProps` has no index signature, so a `data-*` key written inline is an
+ * excess property. Spreading is what gets it past the check without loosening
+ * the button's own types.
+ */
+export const undoTokenProps = (token: string): Record<string, string> => ({
+  [UNDO_TOKEN_ATTRIBUTE]: token,
+});
+
+/**
+ * Monotonic, so no two Undos on screen at once can share a token — including
+ * the two that belong to the **same todo**, which is the case a todo-id would
+ * get wrong: a toggle dismisses that row's outstanding `added` toast and
+ * raises its own, and for a few frames both are in the DOM under the same id.
+ * The one being closed is precisely the one that must not take focus.
+ */
+let undoTokenSeq = 0;
+
+export const nextUndoToken = (): string => {
+  undoTokenSeq += 1;
+
+  return `undo-${undoTokenSeq}`;
+};
+
+const undoActionSelector = (token: string) =>
+  `[data-slot="toast-action-button"][${UNDO_TOKEN_ATTRIBUTE}="${token}"]`;
 
 /**
  * How long step 2 will wait for the view transition to commit the toast.
@@ -65,6 +131,16 @@ const FRONTMOST_TOAST_ACTION_SELECTOR =
  * window a close-then-add chain costs, and far short of the 12s Undo timeout,
  * so a toast that never arrives leaves focus parked on the row from step 1
  * rather than hanging.
+ *
+ * **This budget is only now actually spent.** While step 2 selected by stack
+ * position it matched an already-mounted toast on the first frame every time,
+ * so the loop never ran and the number was never tested by anything. Waiting
+ * for *this* toggle's own toast, it is: measured worst case is 37 frames —
+ * a toggle fired the instant after a quick-add, so the `dismissUndo` close is
+ * queued behind the add's still-running transition and the success toast
+ * behind that. Counting frames rather than milliseconds is what keeps the
+ * margin on a slow machine, where the transitions cost the same wall time but
+ * the budget stretches with the frame rate.
  */
 export const MAX_WAIT_FRAMES = 60;
 
@@ -221,29 +297,57 @@ export const focusRowAfterRemoval = async (
 };
 
 /**
- * Moves focus onto the frontmost toast's action once it exists.
+ * What `focusUndoAction` reads the world through.
+ *
+ * Injectable for the same reason `RowFocusDeps` is, and for one more: the
+ * property under test is a *negative* — that a toast which is not this one is
+ * never focused, however long it sits there and however frontmost it looks. A
+ * browser test can show the right toast taking focus; only driving the lookup
+ * directly can show the wrong one being refused every frame it is offered.
+ */
+export interface UndoActionDeps {
+  findAction: (token: string) => FocusTarget | null;
+  getActiveElement: () => unknown;
+  waitFrame: () => Promise<void>;
+}
+
+const browserUndoDeps: UndoActionDeps = {
+  findAction: (token) =>
+    document.querySelector<HTMLElement>(undoActionSelector(token)),
+  getActiveElement: () => document.activeElement,
+  waitFrame: nextFrame,
+};
+
+/**
+ * Moves focus onto **this** toggle's Undo once it exists.
+ *
+ * `token` is the identity minted for that one toast, so the wait cannot be
+ * satisfied by an older toast, by a toast for another todo, or by the `added`
+ * toast for this same todo that the toggle has just asked to close. Every one
+ * of those is what the previous frontmost-selection version settled for, and
+ * each of them is a different mutation under the user's next keypress.
  *
  * Bounded rather than open-ended, and it never moves focus that the user has
  * since taken somewhere themselves — `shouldStillMove` is re-read on the frame
  * the button appears, not on the frame the wait started.
  */
-export const focusFrontmostToastAction = async (
+export const focusUndoAction = async (
+  token: string,
   shouldStillMove: () => boolean,
+  deps: UndoActionDeps = browserUndoDeps,
 ): Promise<boolean> => {
   for (let frame = 0; frame < MAX_WAIT_FRAMES; frame += 1) {
-    const action = document.querySelector<HTMLElement>(
-      FRONTMOST_TOAST_ACTION_SELECTOR,
-    );
+    const action = deps.findAction(token);
 
     if (action !== null) {
       if (!shouldStillMove()) return false;
 
       action.focus();
 
-      return document.activeElement === action;
+      return deps.getActiveElement() === action;
     }
 
-    await nextFrame();
+    await deps.waitFrame();
   }
 
   return false;
