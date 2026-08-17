@@ -2022,3 +2022,553 @@ fix, it needs a todo titled `in 3 days` to reach, and it announces itself with
 a visible chip when it fires. It should not, however, sit there indefinitely —
 it is the fourth member of a family that has now cost this feature four fixes,
 and the family keeps coming back in the same place.
+
+---
+
+# Release gate — list freshness + accessibility queue — 2026-08-17
+
+Gate: `develop` → `main` (auto-deploy). Tester: QA engineer. Branch `develop`
+@ `c00d702` (`Merge branch 'fix/accessibility' into develop`), working tree
+clean, single worktree. Node 24. Driven headless **and** headed in Chromium at
+1280×800 and 390×844, against `todo_app_test` on `E2E_PORT=3487`; `.env`
+re-read before starting and confirmed pointing at `127.0.0.1/todo_app_dev`.
+
+Defect numbering continues from `DEF-24`. New defects this pass start at
+**DEF-25**.
+
+> Everything below was run. Where a number is inherited rather than measured,
+> it says so.
+
+---
+
+## 0. Verdict, up front
+
+### **HOLD.** One Critical defect that destroys user data, on the keyboard path this release added.
+
+**DEF-25 — Critical — a keyboard toggle can arm a *different* todo's deletion
+under the user's next keypress, and pressing it destroys that todo
+permanently.** Reproduced 6 times out of 6 attempts on its own repro, headless
+and headed, with the `DELETE` observed on the wire and the loss confirmed
+against the database through `GET /api/todos`. There is no confirm dialog on
+this path and no undo behind it. Details and repro in §4.
+
+Everything else in this release is in good shape, and I want that on the record
+rather than buried:
+
+- **Line 1 is sound.** The DEF-20 residual does not reproduce on the exact
+  interleaving it describes — a `GET` answered by the server *before* the write
+  committed and delivered *after* the write's response is refused, re-asked,
+  and the counter ends in agreement with the database (§2.1). Four further
+  races, including two tabs and a deliberate filter/toggle storm, all converge.
+- **Search over notes is correct**, case- and accent-insensitively, and the
+  client-side "hidden by your filters" predicate agrees with the server on a
+  note-only match (§2.2).
+- **Every contrast number I re-measured independently matches the claim**, to
+  0.01, with one 0.20 discrepancy in dark that is not near a threshold (§3.1).
+- **The 44×44 target is real, not merely sized** (§3.2).
+- **Regression smoke is clean** — no 4xx, no 5xx, no console errors beyond the
+  pre-existing HeroUI `PressResponder` warning (§5).
+
+Two further findings, neither blocking on its own:
+
+- **DEF-26 — High** — the focus rescue frequently does not run: in 8 of 12
+  trials focus ended on `<body>`, which is the exact state NFR-04's fix exists
+  to eliminate. The criterion is met on a quiet screen and not otherwise.
+- **DEF-27 — Low (docs)** — `docs/DESIGN.md` §6.8's measured escape-route table
+  is wrong on its `Shift+Tab` rows.
+
+I was also asked to judge the documented keyboard trade on its merits. I think
+it is worse than what it replaced, and for a reason that is independent of
+DEF-25 — §6.
+
+---
+
+## 1. Entry condition — verified, not assumed
+
+`rm -rf .next` first, then build, then typecheck; `npm run lint` unpiped.
+
+| Gate | Result |
+|---|---|
+| `npm run build` | ✓ compiled, TypeScript pass, 8/8 static pages |
+| `npx tsc --noEmit` | exit 0 |
+| `npm run lint` (unpiped) | exit 0 |
+| `npm run test:run` | **306 passed / 306**, 13 files |
+| `npx playwright test` (`E2E_PORT=3487`) | **146 passed / 146**, 4.0m, no retries, no flakes |
+
+Exactly the claimed counts. This is the entry condition and nothing more; the
+verdict below is not derived from it, and §4 is the reason that distinction
+matters — the suite is green *through* DEF-25.
+
+---
+
+## 2. Line 1 — list freshness and search
+
+### 2.1 The races
+
+Each of these was constructed rather than waited for, and each ends with the
+rendered counter compared against a fresh `GET /api/todos` — the database, not
+another reading of the same local state.
+
+| # | What was provoked | Result |
+|---|---|---|
+| R1 | Toggle, then change the status filter **inside** the `PATCH` flight window (write held 1500ms) | `1 of 3 done`, server agrees. Row correctly gone from `Active` |
+| **R2** | **The DEF-20 residual exactly.** The list `GET` is `route.fetch()`-ed at the moment the filter changes — so the server answers it from a database that has not seen the write, proved by the held body carrying `completedCount: 0` — and its **delivery** is withheld until after the `PATCH` response has landed and settled | Counter reads `1 of 3 done` before delivery and **still `1 of 3 done` 3s after** the stale body is delivered. Server agrees. **The residual does not reproduce.** |
+| R3 | Type a search query while a write is in flight | `1 of 3 done`, all three matching rows present |
+| R3b | Change the search query while a write is in flight, sampled every frame | See below |
+| R4 | Two tabs, one account, writes from both | Tab A goes stale (expected — there is no live sync) and **converges on `3 of 3 done` after one filter round trip**; server agrees |
+| R5 | Toggle/filter storm: toggle, Active, All, toggle, Completed, All, with randomised 300–800ms writes | Settles at `2 of 4 done` = server, **no skeleton left up** |
+
+R2 is the one that mattered and it is clean. The stamp rule does what its
+comment says: the stale answer is refused because its issue stamp is not newer
+than what the write has since applied, the refusal re-asks, and the re-ask —
+issued after the write — lands.
+
+**R3b, the frame trace, is worth recording as an observation rather than a
+defect.** Changing the search query inside a write's flight window produces a
+window where the counter is briefly wrong:
+
+```
+t+0ms      no skeleton   rows: charlie,bravo,alpha   counter: 0 of 3 done
+t+60ms     no skeleton   rows: charlie,bravo,alpha   counter: 1 of 3 done   <- optimistic flip
+t+556ms    SKELETON      rows: (blank)               counter: 1 of 3 done   <- query changed
+t+587ms    no skeleton   rows: charlie               counter: 0 of 3 done   <- load lands, pre-commit
+t+1336ms   no skeleton   rows: charlie               counter: 1 of 3 done   <- write lands, refetch
+```
+
+For **749ms** the counter reads `0 of 3` when the truth is `1 of 3`. This is
+the *other* half of DEF-20 — the load landing **first** — and it is caught by
+`landedLoadsRef`, which is why it self-heals one round trip later. It is
+transient, self-correcting, and strictly better than the drift it replaced; I
+would not hold a release for it. It is here so nobody re-discovers it and
+believes DEF-20 is back.
+
+### 2.2 Search
+
+| Check | Result |
+|---|---|
+| Note-only match, lowercase `oatmilk` against note `Remember the OatMilk` | Matches; the non-matching row is filtered out |
+| `OATMILK`, `OatMilk`, `remember the oat` | All match |
+| Title match, `GROCER` against `Groceries` | Matches |
+| **Predicate agreement:** create a row through the modal whose **note** contains the active query and whose title does not | Toast reads `Todo “Trip to the park” added` — **not** "hidden by your filters" — and the row is on screen |
+| Quick-add under `Completed` (new todos are active) | Toast correctly reads `… added — hidden by your filters` |
+
+The predicate was widened with the handler. The case backlog #4 warned about —
+the client calling a note-matching row hidden while the list renders it — does
+not occur.
+
+---
+
+## 3. Line 2 — the accessibility claims, re-measured
+
+### 3.1 Contrast
+
+Measured with my own compositing implementation, written from the WCAG
+definitions rather than reused from `e2e/support/contrast.ts`: every colour
+painted into a 1×1 canvas on black and on white and solved for straight
+`rgba`, ancestors composited root-down, group `opacity` multiplied through.
+Nothing below is estimated from a token string.
+
+| Surface | Light | Dark | Claimed | Threshold | Verdict |
+|---|---|---|---|---|---|
+| `Add` button label on its fill | **4.65** | **4.65** | 4.65 / 4.65 | 4.5 | **Pass, matches** |
+| Muted on `--background` (done counter, chip hint) | **5.14** | **7.72** | 5.14 | 4.5 | **Pass, matches** |
+| Muted on `--surface` — **pending row title, un-hovered** | **5.60** | — | 5.60 | 4.5 | **Pass, matches** |
+| Muted on `--surface-hover` — completed/pending row under the pointer | **4.65** | — | 4.65 | 4.5 | **Pass, matches** |
+| Focus ring (`--focus`) vs the page | **4.37** | **4.25** | 4.37 / 4.25 | 3.0 | **Pass, matches** |
+| Selected filter chip label | **5.60** | **6.38** | 5.60 / 6.18 | 4.5 | Pass; dark differs by 0.20 |
+| Row title at rest | **17.72** | **17.27** | 17.72 / 17.27 | 4.5 | Pass |
+
+Two things I checked rather than took on trust:
+
+- **The 2.32:1 pending row is fixed by removing the dim, not by raising it.**
+  `opacity-60` is gone from the row in both states — I walked the ancestor
+  chain of the title of a row with a `PATCH` held open for 5s and every
+  ancestor reported `opacity: 1`. The pending signal is now `aria-busy="true"`
+  plus the disabled control, and the title measures **5.60** un-hovered and
+  **4.65** under the pointer. Both clear 4.5, the second by 0.15.
+- **The `--muted` override really is light-only** and the `--accent` override
+  really is unguarded: the dark done-counter reads 7.72 (HeroUI's own value,
+  untouched) while the dark `Add` label reads 4.65 (the override applying).
+  The guard behaves as `docs/DESIGN.md` §3 describes.
+
+The one discrepancy — dark selected chip, 6.38 measured against 6.18 claimed —
+is a compositing difference on a translucent chip fill, 1.9 above the
+threshold either way. Not worth acting on; recorded so the next reader does not
+think one of us mis-measured.
+
+### 3.2 Tap targets
+
+The clear button is **44×44 at 390px** and **36×36 at 1280px**, and carries
+`aria-label="Clear search"` — the "Close" leak is gone.
+
+**Hittable, not merely sized.** I probed a 5×5 grid strictly inside the
+bounding box with `document.elementFromPoint` at both widths: **21 of 25 points
+resolve to the button**, and the four that do not are the four corners, which
+fall outside the control's border radius and return the search field group
+behind it. That is how a rounded control behaves and is not a defect; the
+centre and all eight edge mid-points hit, and a click 2px inside the corner
+does *not* clear the field while a centre click does. Nothing overlaps the
+control — every miss is geometry, not an occluding layer.
+
+Other targets at 390px: row checkbox label wrapper 44×44, `Edit` 44×44,
+`Delete` 44×44, status toggles 44×44, priority select 44 tall. The bare
+`<input type="checkbox">` measures 13×13 and the visual control 16×16, but the
+`<label>` that wraps both is the target and it is 44×44.
+
+**Observation, not a defect:** the toast `Close` buttons measure 19×19 and
+20×20 at mobile — below WCAG 2.2 SC 2.5.8's 24×24. These are HeroUI's own toast
+chrome, unchanged by this release, and were never in scope. Worth a backlog
+line now that the app's own controls have all cleared the floor.
+
+### 3.3 Keyboard, driven end to end
+
+Tab order follows visual order in both themes, with and without rows, and
+wraps cleanly:
+
+```
+theme toggle → Account menu → quick-add input → Add → More options
+  → All/Active/Completed → Priority → Search → [per row: checkbox, Edit, Delete]
+  → (toast region, when present) → wrap to top
+```
+
+No control is skipped, nothing is reachable only by pointer, the row action
+buttons become focusable and visible when tabbed to, and the focus ring is
+painted (via `box-shadow`; `outline-style` is `none`, which is HeroUI's own
+mechanism, not a `focus:outline-none` violation). Creating a todo purely from
+the keyboard works and returns focus to the quick-add input, as US-05 requires.
+
+**Focus is not trapped.** From the toast's `Undo`, forward `Tab` reaches the
+list again, and backward `Shift+Tab` also eventually does. See DEF-27 for how
+that differs from what §6.8 says.
+
+---
+
+## 4. DEF-25 — **Critical** — a keyboard toggle arms the wrong Undo, and the next keypress destroys a different todo
+
+### Severity
+
+**Critical, blocking.** Silent, permanent, unconfirmed loss of a todo the user
+did not act on, triggered by a single keypress on the app's most frequent
+interaction, along the exact path `docs/DESIGN.md` §6.8 tells the user to
+expect. There is no confirm dialog on this path and nothing to undo it with.
+
+### Repro
+
+1. Sign in. Have at least one todo so the filter bar renders.
+2. Select the **Active** filter.
+3. Through the quick-add bar, add two todos in quick succession — e.g.
+   `keepme`, then `target`. (Both raise a `Todo “…” added` toast with an
+   `Undo`; `UNDO_WINDOW_MS` is 12s, so both are still on screen.)
+4. **From the keyboard**, put focus on `target`'s checkbox and press `Space`.
+   The row completes and leaves the `Active` list; the focus rescue runs.
+5. Press `Enter` (or `Space`) — the key §6.8 says will activate Undo.
+
+### Expected
+
+Per `docs/DESIGN.md` §6.8: focus is on **the toast's action** for the toggle
+that just happened, and `Enter` there un-completes `target` and returns it to
+the list. The doc's own stated cost is precisely this: *"the next `Space` press
+activates Undo rather than toggling the next row."*
+
+### Actual
+
+Focus lands on the `Undo` of the **`Todo “keepme” added`** toast — a different
+toast, for a different todo, for a different action. Read back from the DOM at
+the moment focus settles:
+
+```
+focus: BUTTON[data-slot="toast-action-button"]
+owner toast:        Todo “keepme” added
+owner is frontmost: false
+toasts on screen:  *Todo “target” marked complete     <- frontmost
+                    Todo “keepme” added               <- focus is HERE
+                    Todo “anchor” added
+                    Account created for “…”
+```
+
+`Enter` then fires:
+
+```
+DELETE /api/todos/cmsx…
+```
+
+**`keepme` is permanently deleted.** Confirmed against the database, not just
+the screen — `GET /api/todos` before and after:
+
+```
+before: total 3, completed 0, titles [target, keepme, anchor]
+after:  total 2, completed 1, titles [anchor, target]
+```
+
+`target` was correctly completed. `keepme` no longer exists. The user pressed
+one key, aimed at undoing a completion, and lost an unrelated todo. No confirm
+dialog appeared at any point (`document.querySelector('[data-slot="alert-dialog-dialog"]')`
+was `null` across the whole `keydown`/`keyup` sequence, which I recorded with a
+capture-phase listener).
+
+### Reproducibility
+
+| Run | Conditions | Result |
+|---|---|---|
+| D3 ×5 | three quick-adds, then toggle the newest, then `Space` | **5/5 destroyed a todo** (`p0a`…`p4a`) |
+| D1 | four quick-adds across a filter change, then toggle, then `Space` | destroyed `bread` |
+| E2 | two quick-adds, then toggle, then **`Enter`** | destroyed `keepme` |
+| E2, **headed** Chromium | as above, real window | destroyed `keepme` |
+| B6/B9 | instrumented, `DELETE` captured on the wire, `keydown`/`keyup` both on the toast action | destroyed `cee` |
+
+Six independent constructions, all positive. This is not a flake.
+
+### Mechanism
+
+`focusFrontmostToastAction` (`src/lib/rowFocus.ts`) polls each frame for
+
+```
+[data-slot="toast"][data-frontmost="true"] [data-slot="toast-action-button"]
+```
+
+and focuses the first match. The trouble is what "frontmost" means at the
+instant it matches:
+
+1. `handleToggle` calls `dismissUndo(todo.id)` first, which closes the toggled
+   row's **own** outstanding `added` toast. So the toggled todo's toast is gone
+   from the stack.
+2. The toggle's success toast is queued behind `document.startViewTransition`
+   — the file's own comment says so, which is why step 2 waits at all.
+3. In the frames before it mounts, `data-frontmost="true"` still sits on the
+   **previous** toast, which after a burst of quick-adds is
+   `Todo “<some other todo>” added`.
+4. The poll matches that toast, focuses its `Undo`, and returns. The new toast
+   then mounts and takes `data-frontmost`, but focus has already been placed
+   and is never revised.
+5. The `Undo` of an **added** toast deletes the todo it created. So the armed
+   action is a delete, on a todo the user never touched.
+
+The wait loop guards against the toast *not existing yet*. It does not guard
+against the wrong toast existing already, and the selector cannot tell them
+apart because it names a position in the stack rather than the toast that was
+just raised.
+
+The same shape hits an **edit** toast (E3): with a `Todo “edited title” updated`
+toast on screen, the rescue focuses *its* `Undo` and `Enter` reverts that edit
+instead of the completion. Same defect, recoverable consequence.
+
+### Boundary — where it does and does not fire
+
+| Screen state when the toggle happens | Where focus lands | Outcome |
+|---|---|---|
+| **No other action toast on screen** (13s+ since the last one) | the toggle's own `Undo`, `frontmost=true` | Correct. `Enter` restores the row. Nothing lost |
+| Another action toast on screen, raised ~0s earlier | **that** toast's `Undo`, `frontmost=false` | **Data loss** |
+| ~3s earlier | the toast **container** (not a button) | No loss; `Space`/`Enter` do nothing at all |
+| ~7–11s earlier | `<body>` | No loss; focus lost (DEF-26) |
+| No status filter (`All`) — no row removed | `<body>` | Rescue does not run; harmless |
+
+So it needs a status filter *and* another action toast inside its 12s window.
+Both are ordinary: the filter is the case US-07 and §6.8 are written about, and
+`UNDO_WINDOW_MS` was deliberately raised to 12s precisely so toasts linger.
+Capturing a few todos through the bar and then completing one is the app's
+headline flow.
+
+### Why the suite is green through it
+
+`e2e/undo-focus.spec.ts` calls `page.goto("/todos?status=active")` between
+seeding and toggling. A full navigation destroys every outstanding toast, so
+the spec always runs in the one screen state where the defect cannot fire.
+Its assertion is also
+
+```ts
+await expect.poll(() => activeSlot(signedIn)).toBe("toast-action-button");
+```
+
+— the `data-slot` of whatever has focus. Focusing the **wrong** toast's action
+satisfies it exactly as well as focusing the right one. The spec cannot see
+this defect by construction, in two independent ways.
+
+### Suggested fix and the test that should carry it
+
+Focus the action of **the toast this toggle raised**, identified by the key
+`toast.success(...)` already returns and `undoToastKeys` already stores —
+`showUndoableSuccess` has that key in hand. Resolve the element from the key
+rather than from stack position, and keep the frame wait for the mount. A
+positional selector cannot express "the one I just raised" and should not be
+asked to.
+
+The regression test must assert the **owning toast's title**, not the slot, and
+must run with an older action toast deliberately on screen. `page.goto` between
+seeding and acting should be removed from `undo-focus.spec.ts` for the same
+reason — it sterilises the state the defect lives in.
+
+---
+
+## 5. DEF-26 — **High** — the rescue often does not run at all
+
+**Severity: High, not independently blocking** (the outcome is the pre-fix
+behaviour, not a worse one), but it means NFR-04's criterion is **not**
+delivered outside a quiet screen, and it should be fixed alongside DEF-25.
+
+Twelve trials, four fresh todos each, a keyboard toggle of the last row under
+`Active`, varying the gap between the last quick-add and the toggle:
+
+| Gap | Trials | Focus after the toggle |
+|---|---|---|
+| 0ms | 3 | toast container ×1, a **stale** toast's `Undo` ×2 |
+| 300ms | 3 | **`<body>` ×3** |
+| 1500ms | 3 | **`<body>` ×3** |
+| 4000ms | 3 | **`<body>` ×3** |
+
+**8 of 12 ended on `<body>`** — focus on the floor, which is verbatim the state
+`docs/QA-REPORT.md` §A3 reported and this release set out to fix. A separate
+run with a settled screen (E1, all toasts expired) landed correctly on the
+toggle's own `Undo` with `frontmost=true`, and `Enter` restored the row. So the
+mechanism works; it works only when nothing else is on screen.
+
+I did not chase the root cause beyond establishing it is real and frequent —
+it lives in the same few lines as DEF-25 and should be diagnosed with it.
+
+---
+
+## 6. The documented trade — my view, as asked
+
+Set DEF-25 aside for a moment and judge §6.8's trade on its own terms: after a
+qualifying toggle, focus sits on `Undo`; the next `Space` activates Undo rather
+than toggling the next row; there is no cheap keyboard route back to the list.
+
+**I think it is worse than what it replaced**, for a reason that is not about
+taste and not about the bug:
+
+- The old failure was **inert**. Focus fell to `<body>`; a stray `Space`
+  scrolled the page. The user lost their place and had to tab back. Annoying,
+  costly on a long list, recoverable.
+- The new behaviour is **armed**. Focus is moved — without the user asking —
+  onto a control whose activation *mutates data*, and the very next keypress in
+  the app's most repeated interaction fires it. §6.8 acknowledges this
+  ("the next `Space` press activates Undo") and treats it as a papercut. It is
+  not a papercut: it is auto-focusing a mutating control, and the moment the
+  wrong toast is under that focus — which DEF-25 shows is easy — the same
+  design turns a papercut into destruction. DEF-25 is not an unlucky bug
+  bolted onto a sound design; it is the failure mode this design makes
+  available.
+
+The reachability problem was real and worth solving. But step 2 solves it by
+spending safety, and step 1 already buys most of the value at no risk: landing
+focus on the row that replaced the removed one keeps the user's place, keeps
+burst-completion working (the next `Space` toggles the next row, which is what
+a burst-completing user wants), and arms nothing.
+
+**What I would ship instead:** keep step 1, drop the automatic hop to the
+toast, and give the toast a discoverable, documented keyboard route — the
+region is already `role="alertdialog"` and react-aria already has a
+jump-to-toast hotkey; §A3 of the earlier audit found `F6` reaches the region in
+one press. Name it in the UI or in the toast's own accessible description, and
+NFR-04's "reachable from where focus landed" is satisfied in one deliberate
+keypress rather than by pre-positioning the user on a live action they did not
+choose.
+
+Reasonable people can disagree about that last paragraph. What is not a matter
+of taste is that the trade as *documented* is not the trade as *implemented*:
+§6.8 promises the toast's action for the toggle that just happened, and the
+code delivers whichever toast is frontmost at poll time.
+
+---
+
+## 7. DEF-27 — **Low (docs)** — §6.8's escape-route table is wrong on `Shift+Tab`
+
+§6.8 presents a measured table and says plainly *"`Shift+Tab` does not work"*.
+Measured from focus-on-`Undo` on this tree:
+
+| Keys | §6.8 says | I measured |
+|---|---|---|
+| `Shift+Tab` | the toast **container** | the toast's **`Close`** button |
+| `Shift+Tab` ×2 | **out of the document entirely** | **back on `Undo`** |
+| `Shift+Tab` ×3 | — | the toast container |
+| `Shift+Tab` ×5 | — | out of the document |
+| `Shift+Tab` ×6 | — | **back into the list** (`Delete "…"`) |
+| `Tab` ×1 / ×2 / ×3 / ×5 | `Close` / out / theme toggle / quick-add | **all four confirmed exactly** |
+
+So backwards is a short cycle between `Undo` and `Close` before it breaks out,
+and it does eventually reach the list — six presses, better than "out of the
+document entirely". The forward table is exactly right.
+
+**Caveat, stated rather than hidden:** these were measured against `next dev`,
+whose `NEXTJS-PORTAL` devtools element occupies a tab stop between the toast
+region and the document edge. The "out of the document" steps are therefore
+dev-mode readings and the counts may shift by one in production. The
+`Undo` ↔ `Close` cycle is independent of that element and is not affected.
+
+Nothing here is trapped, so this does not change the safety conclusion — but
+§6.8's table is the artifact a reviewer uses to judge whether the trade is
+acceptable, and it currently overstates the cost in one direction while §6.8's
+prose understates it in another.
+
+---
+
+## 8. Regression smoke — **clean**
+
+One account, one session, Chromium at 1280×800 and 390×844, every response and
+console message watched.
+
+| Step | Result |
+|---|---|
+| Quick-add with parse (`Buy milk tomorrow high`) | Row `Buy milk`, `Priority: High`, `Tomorrow` |
+| Quick-add chips (`pay rent friday high`) | `Due Aug 21 ×`, `High priority ×`, hint `Press Esc to keep your text exactly as typed.` |
+| `Esc` to refuse the chips | Text kept, chips released |
+| Modal create with note | `Vet appointment` created |
+| Edit | → `Vet appointment (moved)`, `updated` toast |
+| Due-date grouping | `Upcoming` / `No date` sections, correct membership; a dated row shows `Aug 24` |
+| Toggle + Undo | `1 of 2 done` → Undo → `0 of 2 done` |
+| Filters | `?status=active` in the URL, 1 row; `Completed` 1 row; `All` restores |
+| Search on a **note** (`carrier`) | 1 row; clear restores 2 |
+| Clear button | Clears, and the list reloads |
+| Delete | Confirm dialog, row gone, `deleted` toast |
+| Empty state | 0 rows, `Add a todo` call to action present |
+| Sign out | Lands on `/sign-in` |
+| Sign back in | Lands on `/todos` |
+| Mobile pointer pass @390 | Toggle, Undo, modal (full-screen, 390×844), all targets 44×44 |
+
+**4xx/5xx: none. Console errors: none.** The only console output is HeroUI's
+`A PressResponder was rendered without a pressable child` warning, a `warn`
+from the library's own toast internals that predates this branch.
+
+---
+
+## 9. What I did not test
+
+- **Real assistive technology.** I can read the accessibility tree and
+  `document.activeElement`; I cannot tell you what VoiceOver says when the
+  rescue moves focus onto a toast for an action the user did not take. Given
+  DEF-25, that is worth a real screen-reader pass once the fix lands, because
+  the announcement in that moment is the user's only warning.
+- **The production build's tab order.** §7's caveat. Everything else was
+  measured on `next dev`, which is what the Playwright harness serves.
+- **Sustained load.** The toast stack grew past twenty entries during the
+  twelve-trial run in §5 with no cap in evidence. I did not pursue it; it is
+  the condition DEF-25 needs, so it will get attention anyway.
+- **Line 1's server side.** Cross-user isolation was re-proved at a previous
+  gate and nothing in this release touches the handler's `where` scoping.
+
+---
+
+## 10. Ship / do not ship
+
+**HOLD.**
+
+One defect blocks: **DEF-25**. A keyboard user who captures a few todos and
+then completes one under a status filter — the flow the product is built
+around — can lose an unrelated todo to a single keypress, silently,
+permanently, with no confirmation and nothing to undo it with. It reproduced
+six times out of six, headless and headed, and the loss is visible in the
+database and not only on screen. This is auto-deploying to production on merge.
+
+**DEF-26** should be fixed in the same change: without it, NFR-04's criterion
+is not actually met, and shipping the fix's cost without its benefit is the
+worst of both.
+
+**DEF-27** is a documentation correction and can ride along.
+
+Nothing else blocks, and I want to be plain about that rather than pad the
+list. Line 1 is the best-verified work I have seen through this gate: the
+residual it set out to close does not reproduce on its own construction, and
+five further races all converge on the database. Every contrast figure I
+re-derived independently matched the claim. The tap target is genuinely
+hittable. The smoke pass is clean. **The accessibility queue's colour and
+target work is ready; its focus work is not.**
+
