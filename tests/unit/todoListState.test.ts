@@ -511,12 +511,42 @@ describe("todoMatchesFilters", () => {
     expect(todoMatchesFilters(created, filters({ query: "bread" }))).toBe(false);
   });
 
-  test("the search reads the title only, as the server does today", () => {
-    // `GET /api/todos` searches `title` and not `note`. Reading the note here
-    // would make the toast claim a row is visible that the list does not show.
+  /**
+   * Backlog #4 widened `GET /api/todos` to search the note as well, and this
+   * predicate had to move with it in the same commit. The direction of the
+   * error is what makes that non-optional: left reading titles only, it would
+   * call a note-matching row *hidden* while the list was showing it, and the
+   * quick-add toast would say "hidden by your filters" about a todo sitting in
+   * front of the user. `tests/api/filterPredicate.test.ts` is what catches the
+   * drift against the real handler; this pins the intent.
+   */
+  test("the search reads the note as well as the title, as the server does", () => {
     const created = todo({ id: "a", title: "Call the vet", note: "about milk" });
 
-    expect(todoMatchesFilters(created, filters({ query: "milk" }))).toBe(false);
+    expect(todoMatchesFilters(created, filters({ query: "milk" }))).toBe(true);
+    expect(todoMatchesFilters(created, filters({ query: "MILK" }))).toBe(true);
+    expect(todoMatchesFilters(created, filters({ query: "vet" }))).toBe(true);
+    expect(todoMatchesFilters(created, filters({ query: "bread" }))).toBe(false);
+  });
+
+  test("a todo with no note is matched on its title alone, and not crashed on", () => {
+    // `note` is nullable, and the row the quick-add bar asks about usually has
+    // none — the bar collects a title.
+    const created = todo({ id: "a", title: "Buy milk", note: null });
+
+    expect(todoMatchesFilters(created, filters({ query: "milk" }))).toBe(true);
+    expect(todoMatchesFilters(created, filters({ query: "vet" }))).toBe(false);
+  });
+
+  test("a note folds the same way a title does", () => {
+    // `fold` is applied to whichever field is being read, so the İ and the
+    // accent cases hold in the note exactly as they do in the title.
+    const created = todo({ id: "a", title: "Trip", note: "İstanbul, café" });
+
+    expect(todoMatchesFilters(created, filters({ query: "istanbul" }))).toBe(
+      true,
+    );
+    expect(todoMatchesFilters(created, filters({ query: "cafe" }))).toBe(true);
   });
 
   /**
