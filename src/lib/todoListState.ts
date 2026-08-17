@@ -1,4 +1,9 @@
-import type { TodoItemData, TodoListResult, TodoStatusFilter } from "./todo";
+import type {
+  TodoItemData,
+  TodoListFilters,
+  TodoListResult,
+  TodoStatusFilter,
+} from "./todo";
 
 /**
  * The local half of an optimistic write: how a `TodoListResult` changes when
@@ -46,6 +51,79 @@ export const todoMatchesStatusFilter = (
   status: TodoStatusFilter,
 ): boolean => {
   return status === "all" || (status === "completed") === completed;
+};
+
+/**
+ * Case- and accent-insensitive containment, folded hard enough that no
+ * plausible database collation matches *less* than this does.
+ *
+ * The reason it is deliberately loose: JavaScript and Postgres do not agree
+ * about lowercasing, and the disagreement is not hypothetical. `İ` (U+0130)
+ * lowercases to `i` under glibc, which is what `ILIKE` uses, and to `i` plus a
+ * combining dot (U+0069 U+0307) in JavaScript — so `İstanbul` matches a search
+ * for `istanbul` in the database and did **not** match here, which is exactly
+ * how the toast came to say "hidden" about a row sitting in the list.
+ * Decomposing and dropping the combining marks closes that case, and every
+ * other one shaped like it, by folding at least as far as any collation will.
+ *
+ * Folding further than the server is safe **in one direction only**, and that
+ * is the whole design: this can now say "visible" about a row the database
+ * would not have returned (`café` vs a search for `cafe`), and the cost of
+ * that is a plain toast instead of an explanatory one. It can no longer say
+ * "hidden" about a row that is on screen, which is the error that makes the
+ * app look like it is lying.
+ */
+const fold = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase();
+
+/**
+ * Whether a todo would appear in the list the user is currently looking at —
+ * or, read honestly, **whether we are certain it would not**.
+ *
+ * This is **not** used to put a row on screen — invariant 2 stands, and the
+ * server remains the only authority on where a row goes. It answers a
+ * narrower question the quick-add bar has to ask: *the todo you just made is
+ * not in front of you — is that because it is hidden, or because something
+ * went wrong?* Without an answer, capturing under an active filter looks
+ * exactly like a silent failure, which is the one thing that makes a capture
+ * bar untrustworthy.
+ *
+ * The clauses mirror `GET /api/todos` (`src/app/api/todos/route.ts`): status
+ * against `completed` and priority by equality — both exact comparisons over
+ * an enum and a boolean, where no collation is involved and the two languages
+ * cannot disagree — and the query as a substring of the **title**, the same
+ * field the server searches today.
+ *
+ * That last clause is the one that can drift, in two ways: the Unicode
+ * disagreement `fold` handles, and a future change to what the server searches
+ * — backlog #4 would add `note` to the `OR` and falsify this file silently.
+ * Neither is caught by restating the clauses in a unit test, so
+ * `tests/api/filterPredicate.test.ts` asserts the property that actually
+ * matters against the real handler: **anything this calls hidden is genuinely
+ * absent from the response.** The converse is not asserted, because it is not
+ * required — see `fold`.
+ *
+ * It reads no `where` clause and grants no access; it is arithmetic over a row
+ * the server already returned to this user.
+ */
+export const todoMatchesFilters = (
+  todo: TodoItemData,
+  filters: TodoListFilters,
+): boolean => {
+  if (!todoMatchesStatusFilter(todo.completed, filters.status)) return false;
+
+  if (filters.priority !== "all" && todo.priority !== filters.priority) {
+    return false;
+  }
+
+  if (filters.query !== "" && !fold(todo.title).includes(fold(filters.query))) {
+    return false;
+  }
+
+  return true;
 };
 
 /**

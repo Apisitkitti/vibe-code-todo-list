@@ -1,10 +1,15 @@
 import { describe, expect, test } from "vitest";
 
-import type { TodoItemData, TodoListResult } from "@/lib/todo";
+import type {
+  TodoItemData,
+  TodoListFilters,
+  TodoListResult,
+} from "@/lib/todo";
 import { groupTodos } from "@/lib/todoGroups";
 import {
   applyCompletion,
   replaceTodo,
+  todoMatchesFilters,
   todoMatchesStatusFilter,
 } from "@/lib/todoListState";
 
@@ -457,5 +462,116 @@ describe("replaceTodo — reconciling with the server", () => {
 
     expect(before.todos[0].completed).toBe(false);
     expect(before.completedCount).toBe(0);
+  });
+});
+
+/**
+ * The quick-add bar's "is it hidden, or did it fail?" question (PM backlog #1).
+ *
+ * It never puts a row on screen — invariant 2 stands. It decides one sentence
+ * of a toast, and the whole value of that sentence is that it agrees with the
+ * list, so every case below is written against what `GET /api/todos` would
+ * have returned for the same filters.
+ */
+describe("todoMatchesFilters", () => {
+  const filters = (
+    overrides: Partial<TodoListFilters> = {},
+  ): TodoListFilters => ({
+    status: "all",
+    priority: "all",
+    query: "",
+    ...overrides,
+  });
+
+  test("the default filters hide nothing", () => {
+    expect(todoMatchesFilters(todo({ id: "a" }), filters())).toBe(true);
+  });
+
+  test("a new todo is active, so the Completed filter hides it", () => {
+    const created = todo({ id: "a" });
+
+    expect(todoMatchesFilters(created, filters({ status: "completed" }))).toBe(
+      false,
+    );
+    expect(todoMatchesFilters(created, filters({ status: "active" }))).toBe(true);
+  });
+
+  test("the priority filter matches by equality", () => {
+    const created = todo({ id: "a", priority: "high" });
+
+    expect(todoMatchesFilters(created, filters({ priority: "high" }))).toBe(true);
+    expect(todoMatchesFilters(created, filters({ priority: "low" }))).toBe(false);
+  });
+
+  test("the search is a case-insensitive substring of the title", () => {
+    const created = todo({ id: "a", title: "Buy Oat Milk" });
+
+    expect(todoMatchesFilters(created, filters({ query: "oat" }))).toBe(true);
+    expect(todoMatchesFilters(created, filters({ query: "MILK" }))).toBe(true);
+    expect(todoMatchesFilters(created, filters({ query: "bread" }))).toBe(false);
+  });
+
+  test("the search reads the title only, as the server does today", () => {
+    // `GET /api/todos` searches `title` and not `note`. Reading the note here
+    // would make the toast claim a row is visible that the list does not show.
+    const created = todo({ id: "a", title: "Call the vet", note: "about milk" });
+
+    expect(todoMatchesFilters(created, filters({ query: "milk" }))).toBe(false);
+  });
+
+  /**
+   * Review finding: JavaScript and Postgres disagree about lowercasing. `İ`
+   * (U+0130) folds to a bare `i` under glibc — which is what `ILIKE` uses —
+   * and to `i` plus a combining dot (U+0069 U+0307) in JavaScript, so a naive
+   * `toLowerCase().includes()` called `İstanbul` hidden while the row sat in
+   * the list. `fold` decomposes and drops the marks, which folds at least as
+   * far as any collation will.
+   */
+  test("folds hard enough that no collation matches less than it does", () => {
+    const istanbul = todo({ id: "a", title: "İstanbul trip" });
+
+    expect(todoMatchesFilters(istanbul, filters({ query: "istanbul" }))).toBe(
+      true,
+    );
+    expect(todoMatchesFilters(istanbul, filters({ query: "İSTANBUL" }))).toBe(
+      true,
+    );
+
+    // Accents fold too. This is the direction that is *allowed* to be looser
+    // than the server: erring toward "visible" costs a plain toast, erring
+    // toward "hidden" costs a sentence that is a lie.
+    const cafe = todo({ id: "b", title: "Café receipts" });
+
+    expect(todoMatchesFilters(cafe, filters({ query: "cafe" }))).toBe(true);
+    expect(todoMatchesFilters(cafe, filters({ query: "café" }))).toBe(true);
+  });
+
+  test("still says hidden when the words genuinely are not there", () => {
+    // The folding must not collapse into "everything matches".
+    const istanbul = todo({ id: "a", title: "İstanbul trip" });
+
+    expect(todoMatchesFilters(istanbul, filters({ query: "berlin" }))).toBe(
+      false,
+    );
+    expect(todoMatchesFilters(istanbul, filters({ query: "istanbulx" }))).toBe(
+      false,
+    );
+  });
+
+  test("filters combine with AND", () => {
+    const created = todo({ id: "a", title: "Buy milk", priority: "high" });
+
+    expect(
+      todoMatchesFilters(
+        created,
+        filters({ status: "active", priority: "high", query: "milk" }),
+      ),
+    ).toBe(true);
+    expect(
+      todoMatchesFilters(
+        created,
+        filters({ status: "active", priority: "low", query: "milk" }),
+      ),
+    ).toBe(false);
   });
 });

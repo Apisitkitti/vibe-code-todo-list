@@ -66,7 +66,7 @@ test.describe("fault injection — writes", () => {
       await fulfilApiError(route, 500, "INTERNAL", INTERNAL_ERROR_MESSAGE);
     });
 
-    await page.getByRole("button", { name: "New todo", exact: true }).click();
+    await todos.openCreate();
     await todos.submitCreate(TODO_TITLE);
 
     // The API's own message is what the user reads when the body is intact.
@@ -91,7 +91,7 @@ test.describe("fault injection — writes", () => {
       await fulfilOpaqueError(route, 502);
     });
 
-    await page.getByRole("button", { name: "New todo", exact: true }).click();
+    await todos.openCreate();
     await todos.submitCreate(TODO_TITLE);
 
     await expect(todos.toasts.filter({ hasText: CREATE_FAILURE })).toBeVisible();

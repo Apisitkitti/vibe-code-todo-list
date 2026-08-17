@@ -34,7 +34,27 @@ export const PAGE_HEADING = "Your todos";
  */
 export const doneCount = (done: number, total: number) =>
   `${done} of ${total} done`;
-export const NEW_TODO_LABEL = "New todo";
+
+/**
+ * §7.17 / §7.18 — the quick-add bar, which replaced the `New todo` toolbar
+ * button as the primary capture path. The modal is still reachable, from
+ * `More options`, and that is what `openCreate` now presses.
+ */
+export const QUICK_ADD_LABEL = "Add a todo";
+export const QUICK_ADD_PLACEHOLDER = 'Add a todo — try "pay rent friday high"';
+export const QUICK_ADD_SUBMIT_LABEL = "Add";
+export const MORE_OPTIONS_LABEL = "More options";
+export const CHIP_GROUP_LABEL = "Read from your text";
+export const CHIP_HINT = "Press Esc to keep your text exactly as typed.";
+export const EMPTY_STATE_ACTION_LABEL = "Add a todo";
+export const keepInTitleLabel = (label: string, words: string) =>
+  `${label} — keep ${ariaQuoted(words)} in the title`;
+export const dueChipLabel = (day: string) => `Due ${day}`;
+export const priorityChipLabel = (priority: string) => `${priority} priority`;
+
+/** §7.17 — the receipt when the new todo is outside the current filter. */
+export const addedHiddenToast = (title: string) =>
+  `Todo ${quoted(title)} added — hidden by your filters`;
 export const ACCOUNT_MENU_LABEL = "Account menu";
 
 /**

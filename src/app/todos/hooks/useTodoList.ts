@@ -86,6 +86,13 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
    * dropping the opacity alone remains open; that is a designer's call, filed
    * as review MI-6 against the §4.8 / §8.3.2 contradiction. The dim is in any
    * case half of what it was, a toggle now being one round trip, not two.
+   *
+   * **QA has since measured the signal and it is not being sent.** A completing
+   * row stacks `text-muted` — applied optimistically now — with `opacity-60`
+   * for **2.32:1**, under even the 3:1 large-text floor (accessibility audit,
+   * 2026-08-17). The argument above is about what the dim is *for*; that
+   * measurement is about whether anyone can see it, and it wins. The lock is
+   * unaffected and stays. Queued against `TodoRow`, not fixed here.
    */
   const [pendingTodoIds, setPendingTodoIds] = useState<ReadonlySet<string>>(
     new Set(),

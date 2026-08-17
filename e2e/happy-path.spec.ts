@@ -40,11 +40,10 @@ test.describe("happy path", () => {
     await expect(page.getByRole("heading", { name: PAGE_HEADING })).toBeVisible();
 
     // ── Create ───────────────────────────────────────────────────────────────
-    // A brand-new account has no "New todo" toolbar button — the empty state
-    // carries the only copy of that call to action (TodoListScreen: `hasTodos`).
-    await page
-      .getByRole("button", { name: "New todo", exact: true })
-      .click();
+    // The toolbar `New todo` button is retired (PM backlog #1). This exercises
+    // the modal path, which is now reached from the bar's `More options`; the
+    // bar's own keyboard journey is `e2e/quick-add.spec.ts`.
+    await todos.openCreate();
     await todos.submitCreate(TODO_TITLE);
 
     await expect(todos.row(TODO_TITLE)).toBeVisible();

@@ -21,11 +21,13 @@ import type { TodoItemData, TodoListFilters } from "@/lib/todo";
 import {
   applyCompletion,
   replaceTodo,
+  todoMatchesFilters,
   todoMatchesStatusFilter,
 } from "@/lib/todoListState";
 import { deleteTodo, toggleTodo, updateTodo } from "@/service/todo.service";
 
 import type { TodoFormValues } from "./form";
+import { QuickAddBar } from "./QuickAddBar";
 import { TodoEmptyState } from "./TodoEmptyState";
 import { TodoFilters } from "./TodoFilters";
 import { TodoFormModal } from "./TodoFormModal";
@@ -50,8 +52,12 @@ const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
  */
 const UNDO_WINDOW_MS = 12_000;
 
-/** Rendered twice: the toolbar button and the brand-new-account empty state. */
-const NEW_TODO_LABEL = "New todo";
+/**
+ * The empty state's call to action (`docs/DESIGN.md` §7.18). It no longer
+ * opens the modal — it moves focus to the quick-add bar, which is the one
+ * capture path, so the label describes that rather than a dialog.
+ */
+const ADD_TODO_LABEL = "Add a todo";
 
 /**
  * Failure fallbacks from the copy deck (`docs/DESIGN.md` §7.9, §7.13, §7.15),
@@ -110,7 +116,24 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   const [editingTodo, setEditingTodo] = useState<TodoItemData | null>(null);
   const [pendingDelete, setPendingDelete] = useState<TodoItemData | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  /**
+   * What `More options` had already read from the quick-add bar. Held here
+   * rather than in the bar because the modal is the list's, and bumping
+   * `createSeq` with it is what remounts the form onto a new draft — two
+   * consecutive creates otherwise share one `key` and the second would open
+   * on the first one's values.
+   */
+  const [createDraft, setCreateDraft] = useState<TodoFormValues | null>(null);
+  const [createSeq, setCreateSeq] = useState(0);
   const formState = useOverlayState();
+
+  /**
+   * The quick-add input. Held here because one thing outside the bar moves
+   * focus to it: the empty state's call to action, and nothing else — which is
+   * the point. Focus after a submit is the bar's own business and never leaves
+   * it (`docs/PRD.md` US-05).
+   */
+  const quickAddInputRef = useRef<HTMLInputElement>(null);
 
   const router = useRouter();
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
@@ -174,7 +197,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     undoToastKeys.current.set(todoId, key);
   };
 
-  const openCreate = () => {
+  /**
+   * The modal's only remaining create entry point: `More options` on the bar,
+   * carrying whatever it had already read. There is no toolbar button any
+   * more — one bar, and one modal behind it for a note or a date the
+   * vocabulary cannot say.
+   */
+  const openCreate = (draft: TodoFormValues) => {
+    setCreateDraft(draft);
+    setCreateSeq((seq) => seq + 1);
     setEditingTodo(null);
     formState.open();
   };
@@ -182,6 +213,10 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   const openEdit = (todo: TodoItemData) => {
     setEditingTodo(todo);
     formState.open();
+  };
+
+  const focusQuickAdd = () => {
+    quickAddInputRef.current?.focus();
   };
 
   const clearFilters = () => {
@@ -193,6 +228,51 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    * later write dismiss an earlier Undo — the modal cannot see the toast it
    * raised two edits ago (review M-2).
    */
+  /**
+   * The receipt for a create, and the one sentence that stops a filtered list
+   * from looking like a failure.
+   *
+   * A create can land outside the list the user is looking at, and the row
+   * then simply never appears. Inserting it anyway is not an option — a
+   * filtered list must match what a reload of the same URL would show at every
+   * moment (`docs/PRD.md` US-10, the rule the toggle already follows) — and
+   * clearing the filter on their behalf would throw away something they asked
+   * for. So the receipt says it, and keeps its Undo.
+   *
+   * `todoMatchesFilters` only ever claims "hidden" when it is certain, and
+   * that asymmetry is deliberate: being wrong in this direction costs a
+   * missing sentence, being wrong in the other costs a sentence that is a lie.
+   */
+  const createdMessage = (saved: TodoItemData) =>
+    todoMatchesFilters(saved, filters)
+      ? `Todo “${saved.title}” added`
+      : `Todo “${saved.title}” added — hidden by your filters`;
+
+  /**
+   * The bar's create. **No skeleton** (review MA-3): nothing closed over the
+   * list, the toast is already on screen saying what happened, and blanking
+   * every row to report a change to one of them is the disproportion the
+   * delete path settled. It is worse than disproportionate under a filter that
+   * hides the new row, where the list flashes and comes back identical — and
+   * worse again during burst capture, where it would flash on every Enter.
+   *
+   * The refetch still happens; it is just quiet. The row arrives in its §2
+   * place when the data lands, which is the same guarantee the skeleton gave.
+   */
+  const handleQuickAdded = (saved: TodoItemData) => {
+    reloadSilently();
+
+    showUndoableSuccess(saved.id, createdMessage(saved), () => {
+      void undoSave(saved, null);
+    });
+  };
+
+  /**
+   * The modal's save. This one keeps the skeleton, and the difference is not
+   * an inconsistency: the modal closing over an unchanged list is the gap m-8
+   * was reported against, and there is a real moment where the dialog has gone
+   * and nothing on screen has moved yet. The bar has no such moment.
+   */
   const handleSaved = (saved: TodoItemData, previous: TodoFormValues | null) => {
     reloadWithSkeleton();
 
@@ -200,7 +280,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
 
     showUndoableSuccess(
       saved.id,
-      isEdit ? `Todo “${saved.title}” updated` : `Todo “${saved.title}” added`,
+      isEdit ? `Todo “${saved.title}” updated` : createdMessage(saved),
       () => {
         void undoSave(saved, previous);
       },
@@ -456,8 +536,10 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       return {
         heading: "Nothing here yet",
         body: "Add your first todo and it will show up here.",
-        actionLabel: NEW_TODO_LABEL,
-        onAction: openCreate,
+        actionLabel: ADD_TODO_LABEL,
+        // Signposts the bar rather than opening a second way to do the same
+        // thing (`docs/DESIGN.md` §7.18).
+        onAction: focusQuickAdd,
       };
     }
 
@@ -567,21 +649,16 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       </div>
 
       {/*
-        On a brand-new account the empty state carries its own "New todo"
-        action, so this button would be the second copy of the same call to
-        action on one screen. It comes back as soon as there is a todo — a
-        filter that matches nothing still needs it, because that empty state
-        offers "Clear filters" instead.
+        Never gated on `hasTodos`, unlike the filter bar below it and unlike
+        the "New todo" button it replaced. A capture bar that appears only once
+        you have something to capture is not a capture bar, and this is also
+        the control the empty state's call to action focuses.
       */}
-      {hasTodos ? (
-        <Button
-          variant="primary"
-          className="min-h-11 w-full sm:w-auto sm:self-start"
-          onPress={openCreate}
-        >
-          {NEW_TODO_LABEL}
-        </Button>
-      ) : null}
+      <QuickAddBar
+        inputRef={quickAddInputRef}
+        onCreated={handleQuickAdded}
+        onMoreOptions={openCreate}
+      />
 
       {hasTodos ? <TodoFilters filters={filters} /> : null}
 
@@ -590,10 +667,12 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       </Card>
 
       <TodoFormModal
-        // Remounts the form so it starts from the right record's values.
-        key={editingTodo?.id ?? "create"}
+        // Remounts the form so it starts from the right record's values — and,
+        // on a create, from the right draft.
+        key={editingTodo?.id ?? `create-${createSeq}`}
         state={formState}
         todo={editingTodo}
+        draft={createDraft}
         onSaved={handleSaved}
       />
 
