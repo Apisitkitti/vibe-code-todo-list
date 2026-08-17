@@ -1049,7 +1049,7 @@ Do not introduce them without updating this document.
    | `F6` / `Shift+F6` / `Escape` | nothing moves; still on `Undo` |
    | `Tab` | the toast's `Close` button |
    | `Tab` ×2 | out of the document |
-   | `Tab` → top of the page (theme toggle) → `Account menu` → the quick-add input |
+   | `Tab` ×3 onward | round through the top of the page (theme toggle) → `Account menu` → the quick-add input |
 
    So **`Shift+Tab` does work**, and this table used to say it did not.
    `Escape` and `F6` still do nothing. Backwards is now the cheap route: two
