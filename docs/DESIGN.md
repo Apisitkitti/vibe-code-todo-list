@@ -1078,6 +1078,18 @@ Do not introduce them without updating this document.
    That is a property of stacking Undos in a tab-ordered region, not of the
    rescue, and it is the next thing to look at if this area is revisited.
 
+   **Each Undo is now named for what it reverses** (§7.13): the accessible name
+   is `Undo — {toast title}`, so `Undo — Todo “keepme” added` announces itself
+   as a `DELETE` of `keepme` before it is pressed. That was the half of the
+   hazard that fell only on screen-reader users, who previously heard "Undo,
+   button" for all of them; a sighted user could always read the toast the
+   focus ring was sitting in. **The hazard itself is unchanged and still
+   deferred.** Two forward presses still reach a destructive control, the
+   distance is still two, and nothing about naming makes it further away — a
+   name is heard on arrival, not before the second `Tab`. Fixing it properly
+   means a roving tabindex over the region or dropping `Undo` from `added`
+   toasts, and both change what a toast stack is.
+
    Two consequences worth knowing before touching this:
 
    - **A toast with focus on it does not expire.** react-aria pauses the
@@ -1366,8 +1378,25 @@ reports its own outcome with the §7.11 toast for the flipped state.
 | Slot | String |
 |---|---|
 | Toggle toast action | `Undo` |
+| Toast action `aria-label` (all Undo toasts) | `Undo — {toast title}` |
 | Undo failure toast | `Couldn’t undo that. Try again.` |
 | Sign out failure toast | `Couldn’t sign you out. Try again.` |
+
+**Why the action has an `aria-label` at all, when its visible word is already
+its name.** `UNDO_WINDOW_MS` is 12s so that several Undo toasts stand at once,
+and every one of their buttons reads `Undo`. A sighted user tabbing forward
+sees which toast they are in; a screen-reader user hears "Undo, button" three
+times with no way to tell a completion-revert from an `added` toast's `Undo`,
+which is a `DELETE` (`docs/QA-REPORT.md` §8, raised against the `Tab` ×2 hazard
+in §6.8). The name is built from the toast's own title — `Undo — Todo “keepme”
+added` — so the subject is the record and the action is the one §7.11 already
+names, rather than a second wording that could drift from it. The visible word
+stays `Undo`; `aria-label` overrides the child text for assistive technology
+only.
+
+This does **not** close the `Tab` ×2 hazard, and §6.8 is where that is
+recorded. It makes the destination audible before it is activated, which is the
+half a name can carry.
 
 ### 7.15 Create and edit Undo
 
@@ -1385,6 +1414,7 @@ review (M-3) for naming nothing.
 | Create toast | `Todo “{title}” added` |
 | Edit toast | `Todo “{title}” updated` |
 | Toast action | `Undo` |
+| Toast action `aria-label` | `Undo — {toast title}` (shared with §7.13) |
 | Create Undo succeeded | `Todo “{title}” removed` |
 | Edit Undo succeeded | `Todo “{title}” restored` |
 | Undo failure | `Couldn’t undo that. Try again.` (shared with §7.13) |

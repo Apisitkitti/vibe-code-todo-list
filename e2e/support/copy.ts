@@ -119,6 +119,17 @@ export const restoredToast = (title: string) => `Todo ${quoted(title)} restored`
 
 /** §7.13 / §7.15 */
 export const UNDO_LABEL = "Undo";
+
+/**
+ * §7.13 — the Undo button's accessible name.
+ *
+ * The visible word is `Undo` on every toast in the stack, so the name a screen
+ * reader announces is the only thing that separates a completion-revert from an
+ * `added` toast's Undo, which is a `DELETE`. Built from the toast's own title
+ * for the same reason the app builds it that way: one wording, not two.
+ */
+export const undoActionLabel = (toastTitle: string) =>
+  `${UNDO_LABEL} — ${toastTitle}`;
 export const UNDO_FAILURE = "Couldn’t undo that. Try again.";
 
 /**
