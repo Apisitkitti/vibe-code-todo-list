@@ -36,6 +36,22 @@ export const doneCount = (done: number, total: number) =>
   `${done} of ${total} done`;
 export const NEW_TODO_LABEL = "New todo";
 export const ACCOUNT_MENU_LABEL = "Account menu";
+
+/**
+ * §7.3 / §7.10 — the status filter.
+ *
+ * It renders as react-aria's `ToggleButtonGroup` in single-selection mode,
+ * which is a `role="radiogroup"` of `role="radio"` buttons, *not* a group of
+ * buttons — `getByRole("button")` matches none of them. The group's own
+ * `aria-label` is the only handle that distinguishes it from the priority
+ * filter beside it.
+ */
+export const STATUS_FILTER_ARIA_LABEL = "Filter todos by status";
+export const STATUS_FILTER_LABELS = {
+  all: "All",
+  active: "Active",
+  completed: "Completed",
+} as const;
 export const SIGN_OUT_LABEL = "Sign out";
 
 /** §7.1 / §7.2 */
