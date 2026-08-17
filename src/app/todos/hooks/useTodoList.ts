@@ -33,7 +33,14 @@ const EMPTY_RESULT: TodoListResult = {
 
 export interface UseTodoListReturn {
   result: TodoListResult;
-  /** For the optimistic writes, which own the arithmetic in `todoListState`. */
+  /**
+   * For the optimistic writes, which own the arithmetic in `todoListState`.
+   *
+   * Not the raw `useState` setter: going through it is what marks the result
+   * as post-write, so a list load already in flight cannot answer over the
+   * top of it (DEF-20, `appliedStampRef` below). Writes must not reach
+   * `result` any other way.
+   */
   setResult: React.Dispatch<React.SetStateAction<TodoListResult>>;
   isLoading: boolean;
   loadError: string | null;
@@ -52,7 +59,7 @@ export interface UseTodoListReturn {
 }
 
 export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
-  const [result, setResult] = useState<TodoListResult>(EMPTY_RESULT);
+  const [result, setLoadedResult] = useState<TodoListResult>(EMPTY_RESULT);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   /**
@@ -124,6 +131,46 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
    */
   const landedLoadsRef = useRef(0);
 
+  /**
+   * The freshness half of DEF-20, and the case counting landed loads cannot
+   * see.
+   *
+   * `landedLoadsRef` answers "did a load replace `result` *while* my write was
+   * in flight?", which covers every interleaving where the load lands first.
+   * The residual is the mirror image: a `GET` the server answered **before**
+   * the write committed, whose response lands **after** the `PATCH` response.
+   * At the moment the toggle checks, nothing has landed — the counter agrees
+   * with itself, `replaceTodo` splices in the authoritative row — and then the
+   * stale answer arrives and overwrites all of it with counts computed from a
+   * database that had not seen the write. The header drifts and stays drifted,
+   * because nothing on the toggle path refetches any more (m-7).
+   *
+   * A response cannot be asked when it was computed, so the ordering is
+   * imposed on this side instead. Two numbers do it:
+   *
+   *  - `loadStampRef` — a monotonic stamp handed to each load **when it is
+   *    issued**. Never reset; never reused.
+   *  - `appliedStampRef` — the newest stamp whose answer is currently
+   *    rendered.
+   *
+   * The rule is one line in each direction:
+   *
+   *  1. **A load may only replace `result` if it is strictly newer than the
+   *     newest one already applied.** Strictly: an equal stamp is the load
+   *     already applied, and re-applying it would undo whatever a write put on
+   *     top of it.
+   *  2. **A write moves `appliedStampRef` up to the issued high-water mark.**
+   *     Every load already in flight was asked of a database that predates the
+   *     write, so from this instant their answers are all older than what is
+   *     on screen — which is precisely rule 1 refusing them.
+   *
+   * Rule 2 is what makes this a *freshness* stamp rather than a de-duplicator,
+   * and it is the half that fixes the defect. It also strands the load it
+   * refuses, so the drop path re-asks: see the `finally` in the effect.
+   */
+  const loadStampRef = useRef(0);
+  const appliedStampRef = useRef(0);
+
   const { status, priority, query } = filters;
   const filterKey = `${status}|${priority}|${query}`;
 
@@ -136,6 +183,32 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
     setLastFilterKey(filterKey);
     setIsLoading(true);
   }
+
+  /**
+   * The only way a *write* reaches `result`, and the only place rule 2 above
+   * is applied.
+   *
+   * Wrapping the setter rather than exposing a `markWrite()` beside it is
+   * deliberate, and it is the same argument that moved the load counter onto
+   * the line that replaces `result`: a rule enforced at the one statement that
+   * can break it holds by construction, while a rule enforced by remembering
+   * to call something first holds until the next caller. `TodoListScreen`
+   * needs no change and cannot forget.
+   *
+   * The bump is unconditional, including when the updater is a no-op that
+   * returns the identical object (`todoListState` invariant 3). React bails
+   * out of the re-render either way; what matters here is that the *decision*
+   * was made against post-write knowledge, so a read taken before it must not
+   * be allowed to speak over it afterwards. `replaceTodo` no-opping because
+   * the row left the filter is exactly that case, and it is the one this
+   * defect was reported against.
+   */
+  const setResult: React.Dispatch<React.SetStateAction<TodoListResult>> = (
+    action,
+  ) => {
+    appliedStampRef.current = loadStampRef.current;
+    setLoadedResult(action);
+  };
 
   const markPending = (todoId: string) => {
     setPendingTodoIds((ids) => new Set(ids).add(todoId));
@@ -202,16 +275,51 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
 
   useEffect(() => {
     let isCurrent = true;
+    /*
+      Stamped at issue, not at landing. The whole point is to compare *when the
+      question was asked* against what has been applied since, and a stamp
+      taken on arrival would carry no information the arrival order does not
+      already have.
+    */
+    loadStampRef.current += 1;
+
+    const loadStamp = loadStampRef.current;
+    /*
+      Set on the drop path and read in `finally`, so the re-ask is issued after
+      this load has finished failing to matter. Requesting the reload inline
+      would bump the token during the same microtask that is still resolving
+      this one, which is harmless but reads as if the two were related.
+    */
+    let wasRefused = false;
 
     void getTodoList({ status, priority, query })
       .then((nextResult) => {
         if (!isCurrent) return;
 
+        /*
+          Rule 1. `<=`, not `<`: an answer whose stamp equals the applied one
+          *is* the applied one, and re-applying it would throw away the write
+          that has since been layered on top — which is the defect, reached by
+          a different door.
+
+          `isCurrent` above does not subsume this and is not subsumed by it.
+          That guard is about the *question* being stale (the filters moved
+          on); this one is about the *answer* being stale (a write happened
+          after it was asked). A load can be current and stale at once, and
+          that combination is DEF-20.
+        */
+        if (loadStamp <= appliedStampRef.current) {
+          wasRefused = true;
+
+          return;
+        }
+
+        appliedStampRef.current = loadStamp;
         // Counted here, at the one line that discards a toggle's optimistic
         // arithmetic, so every way of starting a load is covered by
         // construction rather than by remembering to bump a token.
         landedLoadsRef.current += 1;
-        setResult(nextResult);
+        setLoadedResult(nextResult);
         setLoadError(null);
       })
       .catch((error: unknown) => {
@@ -222,7 +330,24 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
         );
       })
       .finally(() => {
-        if (isCurrent) setIsLoading(false);
+        if (!isCurrent) return;
+
+        setIsLoading(false);
+
+        /*
+          Refusing a load leaves the question unanswered. A filter change is
+          the ordinary way into this window, and its `GET` is the only thing
+          that would ever put the newly-filtered rows on screen — dropping it
+          silently would fix the counter by freezing the list, which is a worse
+          bug than the one being fixed.
+
+          So the refusal re-asks. This terminates: the re-ask is issued after
+          the write that refused the first one, so it carries a stamp above
+          `appliedStampRef` and lands. Only a write landing inside *its* window
+          refuses it again, which is a user pressing faster than the server
+          answers, not a loop.
+        */
+        if (wasRefused) requestReload();
       });
 
     // A response that arrives after the filters moved on must not win.
