@@ -217,6 +217,34 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   const moreOptionsHandoff = useRef(createHandoff<boolean>());
 
   /**
+   * The create the modal is already serving, or `null` when it is serving
+   * none. What makes a second `More options` press join the opening it found
+   * instead of starting a second one (`openCreate`).
+   *
+   * Deliberately *not* `formState.isOpen`, but not for the reason that reads
+   * as obvious. An earlier version of this comment claimed two presses in one
+   * task both read `isOpen === false` and so slip past a guard on it. The
+   * review tried to demonstrate that and could not: React batches both
+   * `setCreateSeq` calls into one render before the modal mounts, so the
+   * same-task case produces a single mount and no re-key, and a guard on
+   * `isOpen` passes the whole suite (review F-2). Anyone hunting for that
+   * failure will not find it.
+   *
+   * What the ref actually buys is stated below — the second press is
+   * *answered* rather than dropped — and an invariant that does not depend on
+   * knowing when React commits. That is worth having on its own; it is not
+   * worth defending with a failure mode nobody has produced.
+   *
+   * Holding the promise rather than a boolean is what lets the second press be
+   * *answered* rather than merely ignored: it awaits the same outcome the
+   * first one did, so `Handoff`'s answer-exactly-once invariant covers both
+   * openers with one question. Cleared when that promise settles, which every
+   * exit does — the save (`handleSaved`), the three dismissals (the
+   * `formState.isOpen` effect) and unmount (the effect below it).
+   */
+  const outstandingCreate = useRef<Promise<boolean> | null>(null);
+
+  /**
    * Returns whether it dismissed anything, which is what makes it usable as a
    * re-entrancy guard: reading and clearing the key is atomic, so only the
    * first of two fast presses sees a key and runs the undo (review r-1).
@@ -319,20 +347,59 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    * `×` (QA DEF-23). The bar used to be emptied on the press, so backing out
    * of a dialog that committed nothing destroyed the line — the one lossy path
    * in a feature whose contract is that it never loses a keystroke.
+   *
+   * **A second press joins the create already outstanding rather than starting
+   * another one.** Without the guard each press bumped `createSeq`, and
+   * `createSeq` feeds the modal's `key`: a press landing after the dialog had
+   * mounted re-keyed it, so React threw the mounted form away and built a new
+   * one from `createDraft` — discarding whatever the user had typed into it
+   * since it opened, mid-edit and with no indication anything had happened.
+   *
+   * A mouse cannot deliver that second press, which is why it survived this
+   * long: the backdrop is up by then and `isDismissable` closes the dialog on
+   * the press instead. A *virtual* click can — no pointer events, so nothing
+   * reads it as an interaction outside — which is what a screen reader's
+   * activation, voice control, and `element.click()` all produce. So the path
+   * that reaches this is the assistive one, and it reached it silently.
+   *
+   * The draft is deliberately not refreshed from the second press. Taking the
+   * newer reading would mean re-keying the modal to show it, which is the
+   * remount this exists to prevent — and the bar cannot have changed between
+   * two presses of its own button.
    */
   const openCreate = (draft: TodoFormValues) => {
+    const outstanding = outstandingCreate.current;
+
+    if (outstanding) return outstanding;
+
     setCreateDraft(draft);
     setCreateSeq((seq) => seq + 1);
     setEditingTodo(null);
     formState.open();
 
     /*
-      `false` for anything still outstanding: two presses in one frame would
-      otherwise strand the first opener on a promise nothing can resolve
-      (Senior F5). Not reachable through the dialog today, which is the reason
-      to state it here rather than rely on it.
+      `ask` still supersedes anything outstanding, and that is left exactly as
+      it was (Senior F5, `src/lib/handoff.ts`): dropping a resolver is the
+      "never resolves" case wearing a different hat, so the invariant has to
+      hold for callers that have not thought about it. The guard above simply
+      means this call site is no longer one of them — it never asks a second
+      question while the first is unanswered, so the supersede is now a floor
+      under `openCreate` rather than the thing keeping it correct.
     */
-    return moreOptionsHandoff.current.ask(false);
+    const answered = moreOptionsHandoff.current.ask(false);
+
+    outstandingCreate.current = answered;
+
+    /*
+      Attached before the promise is handed back, so it runs ahead of the
+      awaiting `handleMoreOptions` continuation: by the time the bar acts on
+      the answer, the next press can already open a fresh modal.
+    */
+    void answered.finally(() => {
+      outstandingCreate.current = null;
+    });
+
+    return answered;
   };
 
   const openEdit = (todo: TodoItemData) => {

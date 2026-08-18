@@ -5,7 +5,7 @@ import {
   type TodoFieldErrors,
 } from "@/app/todos/components/form";
 import { ApiErrorCode, apiError } from "@/lib/apiError";
-import { TODO_NOT_FOUND_MESSAGE } from "@/lib/todo";
+import { CREATED_VIA_VALUES, TODO_NOT_FOUND_MESSAGE } from "@/lib/todo";
 
 /**
  * The todo-specific error wording. The body shape, the status codes and the
@@ -78,4 +78,18 @@ export const malformedBodyResponse = (message: string) =>
 export const completionNotHereResponse = () =>
   malformedBodyResponse(
     "Completion is changed by the checkbox, not by saving the todo.",
+  );
+
+/**
+ * Sent when a create body carries a `createdVia` that is not a capture
+ * surface. Not a field error: `createdVia` has no input behind it, so there is
+ * nothing for the client to mark invalid, and it is a caller mistake rather
+ * than something the person at the keyboard typed.
+ *
+ * Omitting the key entirely is not this — that is a caller declining to
+ * participate in a measurement, and it succeeds (`readCreatedVia`).
+ */
+export const createdViaNotValidResponse = () =>
+  malformedBodyResponse(
+    `A todo records where it was created from: ${CREATED_VIA_VALUES.join(" or ")}.`,
   );

@@ -73,6 +73,16 @@ enum Priority {
   high
 }
 
+/// Which capture surface a todo was created through. Analytics only — never
+/// rendered, never in the API response body, and never something the user can
+/// change. Members are the wire values, the same convention `Priority`
+/// follows, so the string in the database, in the request body and in the
+/// client's call are one spelling.
+enum CreatedVia {
+  quickAdd
+  form
+}
+
 model Todo {
   id        String    @id @default(cuid())
   title     String
@@ -80,6 +90,24 @@ model Todo {
   priority  Priority  @default(medium)
   completed Boolean   @default(false)
   dueAt     DateTime?
+
+  /// **Nullable with no default, and that is the point.** Every row that
+  /// existed before this column predates the distinction it records: they were
+  /// created when there was one capture surface, and neither `quickAdd` nor
+  /// `form` is true of them. A `@default` would backfill the whole table with
+  /// an answer nobody measured, and the analytics it exists for would read
+  /// that answer as data. `NULL` says "not recorded", which is the only honest
+  /// thing to say about them.
+  ///
+  /// New rows are not left to a default either: `POST /api/todos` takes the
+  /// value from the request body, and both call sites — `QuickAddBar` and
+  /// `TodoFormModal` — always send it. A create that omits it stores `NULL`
+  /// rather than failing, because this is analytics and must never be the
+  /// reason a user's todo does not get saved; a create that sends a value
+  /// which is not a member is a `400`, because that is a caller getting it
+  /// wrong rather than a caller not participating.
+  createdVia CreatedVia?
+
   userId    String
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime  @default(now())

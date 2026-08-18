@@ -4418,3 +4418,73 @@ than it was. RB-1 is the same defect class as B-1 in the one input shape the new
 loop does not cover, and the fix is a counter and a test. One more push.
 
 > **Request changes.**
+
+---
+
+# DEF-02 — decision record: the `PressResponder` warning was ours
+
+Backlog item #3, on `chore/backlog-cleanup`. Recorded here because the defect
+has outlived several people's attention and was twice noted as "confirmed
+present, not re-diagnosed" (`docs/QA-REPORT.md` §7.1, §8) — the diagnosis is
+the part that kept going missing, so it is written down rather than left in a
+commit message.
+
+## What raised it
+
+`A PressResponder was rendered without a pressable child. Either call the
+usePress hook, or wrap your DOM node with <Pressable> component.`
+
+Raised from `TodoFormModal`'s `Modal` root, once per mount, dev builds only
+(`node_modules/react-aria/dist/private/interactions/PressResponder.*`, guarded
+by `process.env.NODE_ENV !== 'production'`).
+
+## Why — and it is not HeroUI's
+
+`Modal`'s root is react-aria's `DialogTrigger`
+(`@heroui/react/dist/components/modal/modal.js` → `ModalRoot`, which renders
+`DialogTrigger` from `react-aria-components/Dialog`). `DialogTrigger` wraps its
+children in a `PressResponder` **unconditionally**, so that a `Modal.Trigger`
+beneath it can register itself as the pressable that opens the dialog. The
+responder warns in an effect when nothing registered.
+
+`docs/DESIGN.md` §4.5 says, in as many words, *"Do not use `Modal.Trigger`
+here — the same modal is opened from the page button and from every row's edit
+button."* That instruction is right and is not in question. But it means the
+root is asked for trigger plumbing that is then given nothing to trigger, and
+the warning is the library reporting exactly that. HeroUI is behaving
+correctly; the composition was wrong.
+
+This is the same defect `ConfirmDialog` carried and closed, by the same route
+(the DEF-02 row earlier in this file). Two components reached it independently
+because both are controlled dialogs with no trigger, which is the shape this
+app uses everywhere.
+
+## The fix
+
+Drop the root and render `Modal.Backdrop` directly with the controlled props:
+
+```tsx
+<Modal.Backdrop variant="blur" isOpen={state.isOpen} onOpenChange={state.setOpen}>
+```
+
+Safe because `Backdrop` is a `ModalOverlay`, which builds its **own** overlay
+state from `isOpen` / `onOpenChange` when they are passed
+(`react-aria-components/dist/private/Modal.mjs`) and publishes it as the
+`OverlayTriggerStateContext` that `Modal.Dialog`, `Escape`, the backdrop
+dismiss and `Modal.CloseTrigger`'s `slot="close"` all read. It also computes
+the full slot set itself rather than inheriting it from the root, so the
+styling is unchanged. `useOverlayState`'s `setOpen` is what `ModalRoot` was
+passing as `onOpenChange` anyway, so the state round-trip is identical.
+
+## The gate — MI-7, taken
+
+MI-7 asked for a `page.on("console")` collector and an
+`expect(warnings).toEqual([])`, and called it the cheapest coverage available.
+It is now `e2e/console-clean.spec.ts`, and it is written against the whole
+console rather than this one string — a suite that asserts only the warning it
+already knows about learns nothing the next time a different one appears.
+Next's own dev-server chatter is filtered by pattern; nothing else is.
+
+Watched failing against the unfixed component (5 warnings per run, both
+projects), and passing after. DEF-02 is closed rather than silenced: the
+warning is gone because the cause is gone.

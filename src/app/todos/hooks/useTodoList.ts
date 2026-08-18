@@ -73,33 +73,37 @@ export const useTodoList = (filters: TodoListFilters): UseTodoListReturn => {
    * and struck through, and has moved into `Completed`. It now means *this is
    * your change and it is not confirmed yet*, which is a different claim and
    * still worth making: the flip on screen is a promise the server has not
-   * kept, and `opacity-60` is the only thing distinguishing it from a fact.
+   * kept.
    *
-   * It also stays load-bearing as a lock. `pointer-events-none` plus
-   * `isDisabled` is what stops a second press — mouse or held Space — from
-   * racing a PATCH that is still in flight and letting the two land out of
-   * order (m-4, QA DEF-12). Optimism makes that *more* likely, not less: the
-   * box now moves instantly, so a user who wants it back presses again
-   * immediately rather than waiting for the first press to visibly resolve.
-   * That is the whole of the argument for keeping the treatment, and it is
-   * enough on its own.
+   * **What carries that claim on screen is the row's disabled controls, and
+   * nothing else.** `TodoRow` passes `isDisabled={isPending}` to the checkbox
+   * and to both row actions, and HeroUI dims a disabled control itself through
+   * `--disabled-opacity`; the `<li>` carries `aria-busy={isPending}`, which is
+   * the same statement made to a screen reader. There is no `opacity-60` on
+   * the row in any state, and no `pointer-events-none` either — that one is
+   * kept for a confirmed delete alone (`isVanishing`), where the row is about
+   * to stop existing (`docs/DESIGN.md` §8.3.2).
    *
-   * `docs/DESIGN.md` §8.3.2 suggests dropping the dimming from a toggle once
-   * it is optimistic. Not taken here, because it was written about perceived
-   * latency and was not reasoning about races — and because a locked but
-   * *undimmed* row is the worst of the three: it ignores you without saying
-   * why. Note the lock and the dim are separable (`isDisabled` +
-   * `pointer-events-none` is the guard, `opacity-60` only the signal), so
-   * dropping the opacity alone remains open; that is a designer's call, filed
-   * as review MI-6 against the §4.8 / §8.3.2 contradiction. The dim is in any
-   * case half of what it was, a toggle now being one round trip, not two.
+   * The row-level dim this comment used to name was removed rather than
+   * narrowed, and for a measurement rather than for taste: `opacity` is a
+   * **group** multiplier, so it dimmed the title with everything else, and a
+   * completing row already carries `text-muted line-through` optimistically —
+   * the title measured **2.32:1**, below even the 3:1 large-text floor, on
+   * 16px text, for the length of the round trip (accessibility audit,
+   * 2026-08-17; QA §A4). A dimmed *control* is exempt from that floor as an
+   * inactive component under SC 1.4.11; a dimmed *title* is not. §4.8 and
+   * §8.3.2 were reconciled on this in the same change (MI-6, settled — §8.3.2
+   * is the design and §4.8 was corrected to it), so there is no longer a
+   * contradiction to file against. Pinned by `e2e/a11y-contrast.spec.ts`,
+   * which measures both mutation paths in both themes.
    *
-   * **QA has since measured the signal and it is not being sent.** A completing
-   * row stacks `text-muted` — applied optimistically now — with `opacity-60`
-   * for **2.32:1**, under even the 3:1 large-text floor (accessibility audit,
-   * 2026-08-17). The argument above is about what the dim is *for*; that
-   * measurement is about whether anyone can see it, and it wins. The lock is
-   * unaffected and stays. Queued against `TodoRow`, not fixed here.
+   * The set also stays load-bearing as a lock, and that is now the whole of
+   * the argument for it. `isDisabled` is what stops a second press — mouse or
+   * held Space — from racing a PATCH that is still in flight and letting the
+   * two land out of order (m-4, QA DEF-12); `pointer-events-none` only ever
+   * stopped a mouse. Optimism makes that race *more* likely, not less: the box
+   * now moves instantly, so a user who wants it back presses again immediately
+   * rather than waiting for the first press to visibly resolve.
    */
   const [pendingTodoIds, setPendingTodoIds] = useState<ReadonlySet<string>>(
     new Set(),

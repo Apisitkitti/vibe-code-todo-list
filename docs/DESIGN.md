@@ -594,36 +594,57 @@ actions column stays on the right, always at full opacity. Tablet+: one line
 
 Control it with `useOverlayState()` from `@heroui/react`
 (verified: `dist/hooks/use-overlay-state.d.ts`; returns
-`{ isOpen, setOpen, open, close, toggle }`) and pass it as `Modal`'s `state` prop.
+`{ isOpen, setOpen, open, close, toggle }`).
 Do **not** use `Modal.Trigger` here — the same modal is opened from the page
 button and from every row's edit button.
+
+> **DEF-02, settled. There is no `Modal` root in this composition, and that
+> follows from the `Modal.Trigger` rule above rather than contradicting it.**
+>
+> This section used to open the tree with `<Modal state={state}>` and hand the
+> state to the root. `Modal`'s root *is* react-aria's `DialogTrigger`
+> (`@heroui/react/dist/components/modal/modal.js` → `ModalRoot`), which wraps
+> its children in a `PressResponder` unconditionally so that a `Modal.Trigger`
+> beneath it can register as the pressable that opens the dialog. Since this
+> modal correctly has no trigger, nothing ever registered, and the root logged
+> `A PressResponder was rendered without a pressable child` once per mount —
+> in every console log this project produced.
+>
+> The state goes on `Modal.Backdrop` instead. `Backdrop` is a `ModalOverlay`,
+> which builds its own overlay state from `isOpen` / `onOpenChange` and
+> publishes it as the `OverlayTriggerStateContext` that `Modal.Dialog`,
+> `Escape`, the backdrop dismiss and `Modal.CloseTrigger`'s `slot="close"` all
+> read — so this drops the trigger plumbing and nothing else. It also computes
+> the full slot set itself rather than inheriting it from the root, so the
+> styling is unchanged. `ConfirmDialog` (§4.6) reached the same conclusion for
+> `AlertDialog` first; this is the same shape and the same fix.
+>
+> Pinned by `e2e/console-clean.spec.ts`, which fails on any console output.
 
 ```tsx
 const state = useOverlayState();
 
-<Modal state={state}>
-  <Modal.Backdrop variant="blur">
-    <Modal.Container size="md" placement="center" className="sm:placement-center">
-      <Modal.Dialog>
-        <Modal.Header>
-          <Modal.Heading>{mode === "create" ? "New todo" : "Edit todo"}</Modal.Heading>
-          <Modal.CloseTrigger aria-label="Close" />
-        </Modal.Header>
-        <Modal.Body>
-          <Form id="todo-form" onSubmit={…} className="flex flex-col gap-4">
-            …fields…
-          </Form>
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="tertiary" onPress={state.close}>Cancel</Button>
-          <Button type="submit" form="todo-form" variant="primary" isDisabled={isPending}>
-            {mode === "create" ? "Add todo" : "Save changes"}
-          </Button>
-        </Modal.Footer>
-      </Modal.Dialog>
-    </Modal.Container>
-  </Modal.Backdrop>
-</Modal>
+<Modal.Backdrop variant="blur" isOpen={state.isOpen} onOpenChange={state.setOpen}>
+  <Modal.Container size="md" placement="center" className="sm:placement-center">
+    <Modal.Dialog>
+      <Modal.Header>
+        <Modal.Heading>{mode === "create" ? "New todo" : "Edit todo"}</Modal.Heading>
+        <Modal.CloseTrigger aria-label="Close" />
+      </Modal.Header>
+      <Modal.Body>
+        <Form id="todo-form" onSubmit={…} className="flex flex-col gap-4">
+          …fields…
+        </Form>
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="tertiary" onPress={state.close}>Cancel</Button>
+        <Button type="submit" form="todo-form" variant="primary" isDisabled={isPending}>
+          {mode === "create" ? "Add todo" : "Save changes"}
+        </Button>
+      </Modal.Footer>
+    </Modal.Dialog>
+  </Modal.Container>
+</Modal.Backdrop>
 ```
 
 `Modal.Backdrop` `variant`: `"blur" | "opaque" | "transparent"`; also

@@ -1,7 +1,12 @@
 import type { Prisma, Todo } from "@/generated/prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import type { TodoItemData, TodoListResult } from "@/lib/todo";
+import {
+  CREATED_VIA_VALUES,
+  type TodoCreatedVia,
+  type TodoItemData,
+  type TodoListResult,
+} from "@/lib/todo";
 
 /**
  * Everything the `/api/todos` handlers share: turning rows into the response
@@ -93,4 +98,88 @@ export const mentionsCompleted = (body: unknown): boolean => {
 /** `request.json()` throws on a malformed body; the caller gets `null`. */
 export const readJsonBody = async (request: Request): Promise<unknown> => {
   return await request.json().catch(() => null);
+};
+
+/**
+ * The body's `createdVia`, if it carried one.
+ *
+ * Parsed on its own rather than added to `todoFormSchema`, because it is not a
+ * field of the todo: it records the act of creating one. Putting it in the
+ * form schema would hand it to `TodoForm`, to `TODO_FIELD_NAMES` and to the
+ * field-error mapping, none of which should ever see it — and a field error
+ * against a key with no input to attach to is an error the user cannot act on.
+ *
+ * Three answers, deliberately distinct, because two of them are not the same
+ * mistake:
+ *
+ *  - a member → record it;
+ *  - **absent** → `undefined`, and the row stores `NULL`. A caller that does
+ *    not participate still gets its todo saved; this is a measurement, and a
+ *    measurement is never a good enough reason to refuse somebody's write;
+ *  - **present and not a member** → `"invalid"`, and the route answers `400`.
+ *    Dropping it silently would be the half-applied write
+ *    `docs/CONVENTIONS.md` rules out — a `201` that looks like it recorded
+ *    what it was told and did not.
+ *
+ * The `"invalid"` sentinel rather than a thrown error or a `null` mirrors
+ * `parseDueDate` in `@/lib/todo`, which distinguishes the same three cases for
+ * the same reason.
+ */
+export const readCreatedVia = (
+  body: unknown,
+): TodoCreatedVia | undefined | "invalid" => {
+  if (typeof body !== "object" || body === null) return undefined;
+  if (!("createdVia" in body)) return undefined;
+
+  const value = (body as { createdVia: unknown }).createdVia;
+
+  return (CREATED_VIA_VALUES as readonly unknown[]).includes(value)
+    ? (value as TodoCreatedVia)
+    : "invalid";
+};
+
+/**
+ * LIKE's three metacharacters — the two wildcards and the escape character
+ * itself.
+ *
+ * One character class in one pass, deliberately. `\` has to be escaped too,
+ * and doing that as a separate `replace` would have to run *first*: a second
+ * pass over the output would revisit the backslashes the first pass had just
+ * introduced and turn `\%` into `\\%`, a literal backslash followed by a live
+ * wildcard. A single pass cannot see its own output, so the ordering question
+ * does not arise.
+ */
+const LIKE_METACHARACTERS = /[\\%_]/g;
+
+/**
+ * Makes a user's search term mean itself.
+ *
+ * Prisma's `contains` compiles to `ILIKE '%' || $1 || '%'`. Binding `$1` as a
+ * parameter is what stops SQL injection, and it is *all* it stops: `ILIKE`
+ * interprets `%`, `_` and `\` inside the bound value afterwards, so until this
+ * ran a search box was quietly a pattern box. Measured against the real
+ * Postgres before the fix (`tests/api/searchWildcards.test.ts`):
+ *
+ *  - `50% off` returned `50 things to sell off` as well — `%` stood for any
+ *    run of characters, so a user looking for a discount got nonsense.
+ *  - `%` alone returned the entire account.
+ *  - `a_b` also returned `plan axb review` — `_` stood for any one character.
+ *  - `C:\temp` returned the row **without** the backslash and not the row
+ *    with it: `\t` escaped the `t` down to a plain `t`. The one case where the
+ *    defect hides the very row the user is looking for.
+ *
+ * Escaping here rather than reaching for `$queryRaw` keeps the `where` a
+ * Prisma object, which is what keeps the `userId` scope and the `OR` arms
+ * checkable by reading them (see the security note in `route.ts`). Postgres's
+ * default LIKE escape character is `\`, so no `ESCAPE` clause is needed and
+ * none can be passed through `contains` anyway.
+ *
+ * This also puts the server back in step with `todoMatchesFilters`
+ * (`src/lib/todoListState.ts`), which mirrors this predicate on the client
+ * with `String.prototype.includes` and has always been literal. The two
+ * disagreeing is what makes the quick-add bar's *hidden by your filters*
+ * message wrong rather than merely unhelpful.
+ */
+export const escapeLikePattern = (term: string): string => {
+  return term.replace(LIKE_METACHARACTERS, (match) => `\\${match}`);
 };
