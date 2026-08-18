@@ -17,6 +17,7 @@ import {
   TODO_LIST_URL,
   TODO_STATUS_URL,
   countRequests,
+  expectAbsentNow,
 } from "./support/assertions";
 import { expect, test } from "./support/fixtures";
 
@@ -47,9 +48,20 @@ test.describe("happy path", () => {
     await todos.submitCreate(TODO_TITLE);
 
     await expect(todos.row(TODO_TITLE)).toBeVisible();
-    // Create does not confirm — it fires and offers Undo (CONVENTIONS: Mutation UX).
+    /*
+      Create does not confirm — it fires and reports (CONVENTIONS: Mutation
+      UX). The receipt is the whole of it: a create's Undo was a `DELETE` and
+      was withdrawn (`docs/DESIGN.md` §7.15), so this path offers no action.
+      Asserted here rather than only in `undo-semantics.spec.ts` because this
+      is the spec that walks the whole journey, and the Undo it presses further
+      down belongs to the toggle — leaving the count unasserted here would let
+      a create-Undo come back without this test noticing.
+    */
     await expect(todos.toastTitles.filter({ hasText: addedToast(TODO_TITLE) })).toBeVisible();
-    await expect(todos.undoButton).toBeVisible();
+    await expectAbsentNow(
+      todos.undoButton,
+      "a create offered an Undo on the happy path",
+    );
 
     // ── Edit ─────────────────────────────────────────────────────────────────
     await todos.openEdit(TODO_TITLE);

@@ -14,12 +14,15 @@ import {
 import {
   badRequestResponse,
   completionNotHereResponse,
+  createdViaNotValidResponse,
   toFieldErrors,
   unauthorizedResponse,
 } from "./errors";
 import {
   TODO_LIST_ORDER_BY,
+  escapeLikePattern,
   mentionsCompleted,
+  readCreatedVia,
   readJsonBody,
   toTodoListResponse,
   toTodoResponse,
@@ -71,11 +74,20 @@ export const GET = async (request: NextRequest) => {
 
     `mode: "insensitive"` on both, matching the title behaviour this widens
     rather than inventing a second rule for the second field.
+
+    **`escapeLikePattern` is what makes the term mean itself.** `contains`
+    compiles to `ILIKE '%' || $1 || '%'`, and binding `$1` stops injection but
+    not LIKE's own metacharacters — `%`, `_` and `\` were all live inside the
+    user's text until this call. Both arms get it, because either one left raw
+    reproduces the whole defect on its own. See `escapeLikePattern` in
+    `./util.ts` for what was measured before it.
   */
   if (query !== "") {
+    const term = escapeLikePattern(query);
+
     where.OR = [
-      { title: { contains: query, mode: "insensitive" } },
-      { note: { contains: query, mode: "insensitive" } },
+      { title: { contains: term, mode: "insensitive" } },
+      { note: { contains: term, mode: "insensitive" } },
     ];
   }
 
@@ -103,6 +115,20 @@ export const POST = async (request: NextRequest) => {
   // away would return a 201 whose body silently disagrees with the request.
   if (mentionsCompleted(body)) return completionNotHereResponse();
 
+  /*
+    Which capture surface the caller says it is (PM backlog #5). Read before
+    the form parse and rejected before anything is written, so a body that
+    names a surface nobody has still leaves the table alone — the alternative
+    is a 201 that recorded something other than what it was told.
+
+    `undefined` is a different answer from an invalid one and is allowed
+    through: the column is nullable and stores "not said" (see
+    `readCreatedVia`).
+  */
+  const createdVia = readCreatedVia(body);
+
+  if (createdVia === "invalid") return createdViaNotValidResponse();
+
   const parsed = todoFormSchema.safeParse(body);
 
   if (!parsed.success) return badRequestResponse(toFieldErrors(parsed.error));
@@ -116,6 +142,7 @@ export const POST = async (request: NextRequest) => {
       note: note === "" ? null : note,
       priority,
       dueAt: parsedDueAt === "invalid" ? null : parsedDueAt,
+      createdVia,
       // Ownership comes from the session, never from the request.
       userId: session.user.id,
     },

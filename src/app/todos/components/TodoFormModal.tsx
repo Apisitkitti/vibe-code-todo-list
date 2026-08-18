@@ -122,9 +122,15 @@ export const TodoFormModal = ({
     // the `try` would report the list's own failures as a failed save
     // (review r-4).
     try {
+      /*
+        `form` regardless of how the modal was reached (backlog #5). `More
+        options` opens it from the quick-add bar, but the todo is still
+        captured through the full form — the measurement is of the surface the
+        user filled in, not of the button they arrived by.
+      */
       saved = isEdit
         ? await updateTodo(todo.id, values)
-        : await createTodo(values);
+        : await createTodo(values, "form");
     } catch (error) {
       const fieldErrors = readFieldErrors(error);
 
@@ -155,61 +161,86 @@ export const TodoFormModal = ({
   };
 
   return (
-    <Modal state={state}>
-        <Modal.Backdrop variant="blur">
-          <Modal.Container
-            size={isDesktop ? "md" : "full"}
-            placement={isDesktop ? "center" : "bottom"}
-          >
-            <Modal.Dialog>
-              <Modal.Header>
-                <Modal.Heading>
-                  {isEdit ? "Edit todo" : "New todo"}
-                </Modal.Heading>
-                <Modal.CloseTrigger aria-label="Close" />
-              </Modal.Header>
-              <Modal.Body>
-                <TodoForm
-                  formId={FORM_ID}
-                  defaultValues={toFormValues(todo, draft)}
-                  serverFieldErrors={serverFieldErrors}
-                  isDisabled={isPending}
-                  onValidSubmit={(values) => {
-                    void handleValidSubmit(values);
-                  }}
-                />
-              </Modal.Body>
-              <Modal.Footer className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <Button
-                  variant="tertiary"
-                  className="min-h-11 w-full sm:w-auto"
-                  isDisabled={isPending}
-                  onPress={closeForm}
-                >
-                  {CANCEL_LABEL}
-                </Button>
-                <Button
-                  type="submit"
-                  form={FORM_ID}
-                  variant="primary"
-                  className="min-h-11 w-full sm:w-auto"
-                  isDisabled={isPending}
-                >
-                  {isPending ? (
-                    <>
-                      <Spinner size="sm" color="current" />
-                      {isEdit ? UPDATE_PENDING_LABEL : CREATE_PENDING_LABEL}
-                    </>
-                  ) : isEdit ? (
-                    "Save changes"
-                  ) : (
-                    "Add todo"
-                  )}
-                </Button>
-              </Modal.Footer>
-            </Modal.Dialog>
-        </Modal.Container>
-      </Modal.Backdrop>
-    </Modal>
+    /*
+      No `<Modal>` root here, and that is what closes QA DEF-02 — the
+      `A PressResponder was rendered without a pressable child` warning that
+      has been in every console log this project has produced.
+
+      `Modal`'s root is react-aria's `DialogTrigger`
+      (`@heroui/react/dist/components/modal/modal.js` → `ModalRoot`), which
+      wraps its children in a `PressResponder` unconditionally so that a
+      `Modal.Trigger` beneath it can register as the pressable that opens the
+      dialog. `docs/DESIGN.md` §4.5 says explicitly not to use `Modal.Trigger`
+      here, because one modal is opened from the quick-add bar and from every
+      row's edit button — so nothing ever registers and the responder warns,
+      once per mount. The warning is therefore ours and not HeroUI's: the
+      library is reporting, correctly, that we asked for a trigger and gave it
+      nothing to trigger with.
+
+      `ConfirmDialog` had the identical defect and closed it the identical way
+      (`docs/REVIEW.md`, DEF-02). `Backdrop` is a `ModalOverlay`, which builds
+      its own overlay state from `isOpen` / `onOpenChange` and publishes it as
+      the `OverlayTriggerStateContext` that `Modal.Dialog`, `Escape`, the
+      backdrop dismiss and `Modal.CloseTrigger`'s `slot="close"` all read — so
+      dropping the root removes the trigger plumbing and nothing else. It also
+      computes the full slot set itself rather than inheriting it, which is why
+      the styling is unchanged.
+    */
+    <Modal.Backdrop
+      variant="blur"
+      isOpen={state.isOpen}
+      onOpenChange={state.setOpen}
+    >
+      <Modal.Container
+        size={isDesktop ? "md" : "full"}
+        placement={isDesktop ? "center" : "bottom"}
+      >
+        <Modal.Dialog>
+          <Modal.Header>
+            <Modal.Heading>{isEdit ? "Edit todo" : "New todo"}</Modal.Heading>
+            <Modal.CloseTrigger aria-label="Close" />
+          </Modal.Header>
+          <Modal.Body>
+            <TodoForm
+              formId={FORM_ID}
+              defaultValues={toFormValues(todo, draft)}
+              serverFieldErrors={serverFieldErrors}
+              isDisabled={isPending}
+              onValidSubmit={(values) => {
+                void handleValidSubmit(values);
+              }}
+            />
+          </Modal.Body>
+          <Modal.Footer className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              variant="tertiary"
+              className="min-h-11 w-full sm:w-auto"
+              isDisabled={isPending}
+              onPress={closeForm}
+            >
+              {CANCEL_LABEL}
+            </Button>
+            <Button
+              type="submit"
+              form={FORM_ID}
+              variant="primary"
+              className="min-h-11 w-full sm:w-auto"
+              isDisabled={isPending}
+            >
+              {isPending ? (
+                <>
+                  <Spinner size="sm" color="current" />
+                  {isEdit ? UPDATE_PENDING_LABEL : CREATE_PENDING_LABEL}
+                </>
+              ) : isEdit ? (
+                "Save changes"
+              ) : (
+                "Add todo"
+              )}
+            </Button>
+          </Modal.Footer>
+        </Modal.Dialog>
+      </Modal.Container>
+    </Modal.Backdrop>
   );
 };

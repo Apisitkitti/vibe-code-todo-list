@@ -88,8 +88,15 @@ test.describe("quick-add bar", () => {
     await expect(
       todos.toastTitles.filter({ hasText: addedToast(TODO_TITLE) }),
     ).toBeVisible();
-    // A create destroys nothing, so it does not confirm — it offers Undo.
-    await expect(todos.undoButton).toBeVisible();
+    /*
+      A create destroys nothing, so it does not confirm — and it does not offer
+      Undo either. That action was a `DELETE` and was withdrawn
+      (`docs/DESIGN.md` §7.15); the receipt above is the whole report.
+    */
+    await expectAbsentNow(
+      todos.undoButton,
+      "a quick-add create offered an Undo",
+    );
 
     // The whole point of the bar: cleared, still focused, ready for the next.
     await expect(todos.quickAddInput).toHaveValue("");
@@ -722,8 +729,18 @@ test.describe("quick-add bar", () => {
     ).toBeVisible();
     // Not inserted: the filtered list still matches what a reload would show.
     await expect(todos.row(SECOND_TITLE)).toHaveCount(0);
-    // The Undo is still offered — the todo exists, it is simply not in view.
-    await expect(todos.undoButton).toBeVisible();
+    /*
+      No Undo, here least of all. This receipt used to keep one, and it was the
+      worst-placed instance of the whole hazard §7.15 closed: the action was a
+      `DELETE`, and it was the only control on screen referring to a row the
+      user could not see to check it against. What replaces it is the sentence
+      itself — the todo exists, it is simply not in view — and the route to
+      removing it is the row, once the filter shows it again.
+    */
+    await expectAbsentNow(
+      todos.undoButton,
+      "a hidden-by-filters receipt offered an Undo",
+    );
 
     // And it really was saved.
     await page.goto("/todos");

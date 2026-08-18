@@ -20,9 +20,11 @@ const CREATE_FAILURE_MESSAGE = "Couldn’t add the todo. Try again.";
 export interface QuickAddBarProps {
   inputRef: RefObject<HTMLInputElement | null>;
   /**
-   * Hands the created record to the list, which reloads and raises the toast
-   * with its Undo. `previous` is `null` on a create, matching the modal's
-   * `onSaved`, so both capture paths report through one place.
+   * Hands the created record to the list, which reloads and raises the
+   * receipt. That receipt carries no action — a create's Undo was a `DELETE`
+   * and was withdrawn (`docs/DESIGN.md` §7.15) — and the modal's create
+   * reports exactly the same way, so both capture paths still go through one
+   * place.
    */
   onCreated: (saved: TodoItemData) => void;
   /**
@@ -37,7 +39,7 @@ export interface QuickAddBarProps {
  * form collects, this performs, and the list reports.
  *
  * A create destroys nothing, so it does not confirm — it fires on Enter and
- * the list's toast carries Undo (`docs/CONVENTIONS.md` → Mutation UX). It
+ * the list's toast reports it (`docs/CONVENTIONS.md` → Mutation UX). It
  * calls the same `createTodo` service, the same `POST /api/todos`, and is
  * re-validated by the same `todoFormSchema` against the same
  * `userId: session.user.id`. Reading the typed text is a client-side
@@ -68,7 +70,9 @@ export const QuickAddBar = ({
     // Only the write is inside the `try`. Handing the result upward from in
     // here would report the list's own failures as a failed create (r-4).
     try {
-      saved = await createTodo(values);
+      // The bar is the quick-add surface by definition; nothing about a
+      // request can be inferred back to it, so it says so (backlog #5).
+      saved = await createTodo(values, "quickAdd");
     } catch (error) {
       const fieldErrors = readFieldErrors(error);
 

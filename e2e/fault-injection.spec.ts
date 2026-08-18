@@ -12,7 +12,6 @@ import {
   doneCount,
   markedCompleteToast,
   markedNotCompleteToast,
-  removedToast,
   restoredToast,
   updatedToast,
 } from "./support/copy";
@@ -268,29 +267,19 @@ test.describe("fault injection — the Undo request itself", () => {
     it would have broken is already done.
   */
 
-  test("500 on a create-Undo reports failure and keeps the todo", async ({
-    signedIn: page,
-    todos,
-  }) => {
-    await todos.createTodo(TODO_TITLE);
-    await expect(todos.undoButton).toBeVisible();
+  /*
+    There was a "500 on a create-Undo" test here, and it is gone rather than
+    rewritten. It failed the `DELETE` that a create's Undo issued and asserted
+    the todo survived — but a create no longer offers an Undo at all
+    (`docs/DESIGN.md` §7.15), so there is no request to fail and no button to
+    press. Nothing about it could be salvaged into a test of current
+    behaviour: the closest thing, a failing delete, is `fault-injection`'s
+    delete test above, which already exists and goes through the confirm
+    dialog rather than a toast.
 
-    // A create-Undo deletes the todo it just made.
-    await page.route(TODO_ITEM_URL, async (route) => {
-      if (route.request().method() !== "DELETE") return route.fallback();
-
-      await fulfilOpaqueError(route, 500);
-    });
-
-    await todos.pressUndo();
-
-    await expect(todos.toasts.filter({ hasText: UNDO_FAILURE })).toBeVisible();
-    await expectNoTransportLeak(todos.toasts);
-
-    // The undo failed, so the todo it would have removed is still there.
-    await expect(todos.rowByText(TODO_TITLE)).toBeVisible();
-    await expectNoFalseSuccess(todos.toasts, removedToast(TODO_TITLE));
-  });
+    That a create raises no action at all is asserted directly, in
+    `e2e/undo-semantics.spec.ts` → "added toasts are receipts, not controls".
+  */
 
   test("500 on an edit-Undo reports failure and keeps the new values", async ({
     signedIn: page,

@@ -149,6 +149,43 @@ export const deleteTestAccount = async (email: string): Promise<void> => {
   }
 };
 
+/**
+ * Reads one account's `createdVia` for one todo title (PM backlog #5).
+ *
+ * The column is analytics-facing: no UI, and deliberately absent from the API
+ * response body, so there is nothing on screen or on the wire for a test to
+ * assert against. Reading the database is the only way to prove the two call
+ * sites send what they claim, and proving that is the whole point of the
+ * column — a value nobody can see is a value that can stop being written
+ * without anything going red.
+ *
+ * Read-only, parameterised, and bounded by the same resolved account id the
+ * teardown uses, so it cannot see a row belonging to anyone else.
+ */
+export const readCreatedVia = async (
+  email: string,
+  title: string,
+): Promise<string | null> => {
+  assertDeletable(email);
+
+  const connection = await getClient();
+
+  const found = await connection.query<{ createdVia: string | null }>(
+    `SELECT t."createdVia" FROM "todo" t
+       JOIN "user" u ON u.id = t."userId"
+      WHERE u.email = $1 AND t.title = $2`,
+    [email, title],
+  );
+
+  if (found.rows.length !== 1) {
+    throw new Error(
+      `Expected exactly one todo titled "${title}" for ${email}, found ${found.rows.length}.`,
+    );
+  }
+
+  return found.rows[0].createdVia;
+};
+
 export const disconnectDatabase = async (): Promise<void> => {
   if (!client) return;
 

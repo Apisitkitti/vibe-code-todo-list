@@ -2994,3 +2994,30 @@ not the cluster the previous readings came from. I looked for a difference in
 the place one would surface first — the case-insensitive search over titles and
 notes — and found none.
 
+
+## Observation — one unreproduced failure on the merge of 2026-08-18
+
+The first full run of `develop` after merging `feature/toast-undo-scope`
+and `chore/backlog-cleanup` failed one test:
+
+```
+[chromium-desktop] › undo-semantics.spec.ts:509 ›
+  an edit keeps its Undo while the added receipt beside it keeps none
+Error: expect(locator).toBeVisible() failed — getByRole('dialog')
+```
+
+The server log for that test carries `PATCH /api/todos/<id>/status 404`,
+which this test never issues — it edits, it does not toggle. A 404 on a
+write is the shape a scoping defect makes, so it was chased rather than
+dismissed.
+
+It did not reproduce: 3/3 runs of that test alone, 14/14 of the whole
+file, and 172/172 of the full suite immediately afterwards, all exit 0.
+The same machine had produced 13 scattered failures earlier in the day
+under load, with `develop` itself — known green — failing 2 of 3 on this
+same file, so contention is the likeliest explanation.
+
+Recorded rather than closed, because the 404 is not explained. If this
+recurs, the thing to capture is which account the 404's row belonged to;
+the isolation matrix already has the fixtures for that. It shipped on the
+evidence above, not on a decision that flakes are acceptable.

@@ -2,7 +2,7 @@ import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 import utc from "dayjs/plugin/utc";
 
-import type { Priority } from "@/generated/prisma/client";
+import type { CreatedVia, Priority } from "@/generated/prisma/client";
 
 dayjs.extend(utc);
 dayjs.extend(customParseFormat);
@@ -15,6 +15,24 @@ export const TITLE_MAX_LENGTH = 200;
 export const NOTE_MAX_LENGTH = 2000;
 
 export const PRIORITY_VALUES = ["low", "medium", "high"] as const;
+
+/**
+ * The two capture surfaces, and the wire spelling of each.
+ *
+ * Analytics only (`prisma/schema.prisma` → `CreatedVia`): it is never
+ * rendered, never in a response body, and never editable. It lives here rather
+ * than beside the route because the client is what *knows* the answer — the
+ * route cannot infer which surface a request came from, and a header or a
+ * `User-Agent` guess would be inference dressed as measurement.
+ *
+ * Not part of `todoFormSchema`. It is not a field of the todo the user is
+ * describing; it is a fact about the act of creating it, so folding it into
+ * the form schema would put it in front of `TodoForm`, `readFieldErrors` and
+ * `TODO_FIELD_NAMES`, none of which have any business with it.
+ */
+export const CREATED_VIA_VALUES = ["quickAdd", "form"] as const;
+
+export type TodoCreatedVia = CreatedVia;
 export const STATUS_FILTER_VALUES = ["all", "active", "completed"] as const;
 export const PRIORITY_FILTER_VALUES = ["all", ...PRIORITY_VALUES] as const;
 
