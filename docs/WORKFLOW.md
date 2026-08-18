@@ -128,3 +128,23 @@ side edits files the other has open. Two things do not separate themselves:
 
 Never kill a process you did not start: a port that is busy belongs to someone,
 possibly to another project entirely.
+
+## Schema changes reach production by hand
+
+This project has no `prisma/migrations/`; it has always used `prisma db push`,
+and CI pushes the schema to a throwaway database. Vercel's build runs
+`prisma generate && next build` — **nothing applies schema to Neon**. A branch
+that adds a column therefore ships code that expects a column production does
+not have, and Prisma selects every scalar field, so a missing one does not
+degrade a feature: every list query 500s.
+
+So a schema change is two deploys' worth of care in one:
+
+1. Apply the DDL to Neon **before** merging to `main`, additively — a new
+   column nullable, no default, so existing rows are not backfilled with an
+   answer nobody measured.
+2. Record the exact DDL in the pull request, since the repo does not.
+3. Only then merge, and check the first write of that shape after the deploy.
+
+`createdVia` was the first change where this mattered and it was applied this
+way. Anything that drops or renames needs more than this note.
