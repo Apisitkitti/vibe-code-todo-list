@@ -225,10 +225,16 @@ test.describe("Undo semantics", () => {
     /*
       **The outstanding Undo is an edit's, not a create's.** It used to be a
       create's, which was the shortest way to arm one — but a create no longer
-      offers Undo at all (`docs/DESIGN.md` §7.15), so that setup now arms
-      nothing and the test would assert `0 === 0` before and after the delete:
-      green, and testing nothing whatsoever. The edit is the same collision
-      with the same mechanism, and it is the one that still exists.
+      offers Undo at all (`docs/DESIGN.md` §7.15), so that setup can no longer
+      construct the precondition. Stated plainly, because it is the kind of
+      change that deserves suspicion: this rewrite turns a red test green. The
+      old version fails at its own precondition — `expect(undoButton)
+      .toBeVisible()` times out, never reaching the assertion under test — and
+      the honest justification is that the setup became impossible, not that
+      the test became vacuous. An earlier version of this comment claimed it
+      would silently pass as `0 === 0`; the review ran it and it does not
+      (review F-1). The edit is the same collision with the same mechanism,
+      and it is the one that still exists.
 
       The collision: `handleDelete` calls `dismissUndo` before it starts.
       Without it the edit's Undo would sit there offering to write values back
