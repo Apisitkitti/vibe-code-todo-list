@@ -54,6 +54,15 @@
  * they had never touched. Six of six on QA's repro, confirmed against the
  * database.
  *
+ * **That `DELETE` no longer exists.** `added` toasts carry no action at all
+ * now (`docs/DESIGN.md` §7.15), so the worst a mis-selected toast can do
+ * today is revert somebody else's toggle or edit. **Nothing below is softened
+ * for it.** Landing on the wrong toast is still the wrong mutation under the
+ * user's next keypress, it is still the mechanism behind DEF-26's lost focus,
+ * and "frontmost" still never meant "mine" — the consequence shrank, the
+ * defect did not. `added` receipts are also still in the stack this poll
+ * walks past; they simply have no button left to be matched by.
+ *
  * The same wrong choice is what loses focus altogether. Both toasts in that
  * window are on their way out — `dismissUndo`'s `toast.close` is queued behind
  * the same serialized view transition as the add
@@ -110,9 +119,10 @@ export const undoTokenProps = (token: string): Record<string, string> => ({
 /**
  * Monotonic, so no two Undos on screen at once can share a token — including
  * the two that belong to the **same todo**, which is the case a todo-id would
- * get wrong: a toggle dismisses that row's outstanding `added` toast and
- * raises its own, and for a few frames both are in the DOM under the same id.
- * The one being closed is precisely the one that must not take focus.
+ * get wrong: a toggle dismisses that row's outstanding Undo — its edit's,
+ * since an `added` receipt no longer registers one — and raises its own, so
+ * for a few frames both are in the DOM under the same id. The one being closed
+ * is precisely the one that must not take focus.
  */
 let undoTokenSeq = 0;
 
@@ -373,10 +383,10 @@ const browserUndoDeps: UndoActionDeps = {
  * Moves focus onto **this** toggle's Undo once it exists.
  *
  * `token` is the identity minted for that one toast, so the wait cannot be
- * satisfied by an older toast, by a toast for another todo, or by the `added`
- * toast for this same todo that the toggle has just asked to close. Every one
- * of those is what the previous frontmost-selection version settled for, and
- * each of them is a different mutation under the user's next keypress.
+ * satisfied by an older toast, by a toast for another todo, or by the Undo for
+ * this same todo that the toggle has just asked to close. Every one of those
+ * is what the previous frontmost-selection version settled for, and each of
+ * them is a different mutation under the user's next keypress.
  *
  * Bounded rather than open-ended, and it never moves focus that the user has
  * since taken somewhere themselves — `shouldStillMove` is re-read on the frame

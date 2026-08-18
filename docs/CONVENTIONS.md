@@ -402,7 +402,7 @@ to re-read what you just typed, while Undo actually puts things back.
 | Action | Confirm? | Why |
 |---|---|---|
 | Delete a todo | **Yes** | Nothing restores it |
-| Create a todo | No | Undo removes it |
+| Create a todo | No | The row is on screen; deleting it is one press |
 | Edit a todo | No | Undo restores the previous values |
 | Toggle complete | No | Undo flips it back |
 | Sign in | No | Signing out undoes it |
@@ -450,6 +450,15 @@ Every mutation reports its outcome with a toast.
   a normal mutation: it goes through the same endpoint with the same
   authorization, never a privileged shortcut. If a mutation cannot offer a
   working Undo, that is the signal it needed a confirm dialog instead.
+- **With one exception, and it is about what the Undo itself does.** An Undo
+  that *destroys* a record is not a reversal, whatever the button says — it is
+  a second unconfirmed destructive action, sitting in a stack of buttons that
+  all read `Undo` and all look alike. A create's Undo was exactly that, so it
+  is gone: `Todo “{title}” added` is a receipt with no action
+  (`docs/DESIGN.md` §7.15, §6.8). The test is not "is this mutation
+  reversible" but "does the reversal put something back". Where it does not,
+  and the user has a plainer route to the same outcome — here, deleting the
+  row they can see, behind the confirm dialog — the toast reports and stops.
 
 Exact strings come from the copy deck in `docs/DESIGN.md`. If a string is
 missing there, add it to that file rather than improvising inline.

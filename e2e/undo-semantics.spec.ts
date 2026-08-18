@@ -3,14 +3,17 @@ import {
   deletedToast,
   markedCompleteToast,
   markedNotCompleteToast,
-  removedToast,
   restoredToast,
   UNDO_LABEL,
   undoActionLabel,
   updatedToast,
 } from "./support/copy";
-import { TODO_STATUS_URL, countRequests } from "./support/assertions";
-import { expect, test } from "./support/fixtures";
+import {
+  TODO_STATUS_URL,
+  countRequests,
+  expectAbsentNow,
+} from "./support/assertions";
+import { expect, test, type TodosScreen } from "./support/fixtures";
 
 /**
  * Undo semantics — the behaviour no existing test covers and that two rounds
@@ -191,9 +194,11 @@ test.describe("Undo semantics", () => {
       That assertion retries, and toasts expire on their own after four
       seconds, so it would sit there watching the stale Undos disappear by
       timeout and then report success. Verified by mutation: with the dismissal
-      removed from `showUndoableSuccess` this point-in-time read returns 3
-      while the retrying form passed happily. The contract is "already gone by
-      the time the later write lands", and only an immediate read says that.
+      removed from `showUndoableSuccess` this point-in-time read returns one
+      per surviving edit instead of 1 — 2 here, and 3 when the create still
+      armed one of its own — while the retrying form passed happily. The
+      contract is "already gone by the time the later write lands", and only an
+      immediate read says that.
     */
     const armedUndos = await todos.undoButton.count();
 
@@ -218,12 +223,30 @@ test.describe("Undo semantics", () => {
     await todos.createTodo(TODO_TITLE);
 
     /*
-      A create-Undo is armed, and it deletes. Deleting the row by hand while
-      that is live is the collision: without `dismissUndo` at the top of
-      `handleDelete`, the toast would sit there offering to delete a row that
-      no longer exists, and pressing it would 404 — reporting a failure for a
-      mutation that had already succeeded.
+      **The outstanding Undo is an edit's, not a create's.** It used to be a
+      create's, which was the shortest way to arm one — but a create no longer
+      offers Undo at all (`docs/DESIGN.md` §7.15), so that setup can no longer
+      construct the precondition. Stated plainly, because it is the kind of
+      change that deserves suspicion: this rewrite turns a red test green. The
+      old version fails at its own precondition — `expect(undoButton)
+      .toBeVisible()` times out, never reaching the assertion under test — and
+      the honest justification is that the setup became impossible, not that
+      the test became vacuous. An earlier version of this comment claimed it
+      would silently pass as `0 === 0`; the review ran it and it does not
+      (review F-1). The edit is the same collision with the same mechanism,
+      and it is the one that still exists.
 
+      The collision: `handleDelete` calls `dismissUndo` before it starts.
+      Without it the edit's Undo would sit there offering to write values back
+      to a row that no longer exists, and pressing it would 404 — reporting a
+      failure for a mutation that had already succeeded.
+    */
+    await todos.editTodo(TODO_TITLE, SECOND_TITLE);
+    await expect(
+      todos.toastTitles.filter({ hasText: updatedToast(SECOND_TITLE) }),
+    ).toBeVisible();
+
+    /*
       **Waited for, not read once.** This is a *precondition* — it establishes
       that there is an Undo to disarm — and the file's argument for
       point-in-time reads does not apply to it. That argument is about
@@ -244,19 +267,19 @@ test.describe("Undo semantics", () => {
     await expect(todos.undoButton).toBeVisible();
     expect(await todos.undoButton.count()).toBe(1);
 
-    await todos.openDelete(TODO_TITLE);
+    await todos.openDelete(SECOND_TITLE);
     await todos.confirmDelete();
 
     await expect(
-      todos.toastTitles.filter({ hasText: deletedToast(TODO_TITLE) }),
+      todos.toastTitles.filter({ hasText: deletedToast(SECOND_TITLE) }),
     ).toBeVisible();
-    await expect(todos.rowByText(TODO_TITLE)).toHaveCount(0);
+    await expect(todos.rowByText(SECOND_TITLE)).toHaveCount(0);
 
     /*
-      The create-Undo is gone: the delete dismissed it before it started.
+      The edit-Undo is gone: the delete dismissed it before it started.
       Read once rather than retried, for the same reason as the test above —
-      a retrying assertion would be satisfied by the toast's own four-second
-      expiry and would pass even if nothing dismissed anything.
+      a retrying assertion would be satisfied by the toast's own expiry and
+      would pass even if nothing dismissed anything.
     */
     const armedAfterDelete = await todos.undoButton.count();
 
@@ -265,8 +288,12 @@ test.describe("Undo semantics", () => {
       "the delete must leave no Undo pointing at the row it removed",
     ).toBe(0);
 
-    // And nothing reports the undo path having run.
-    await expect(todos.toasts.filter({ hasText: removedToast(TODO_TITLE) })).toHaveCount(0);
+    // And nothing reports the undo path having run — the row is not back
+    // under its pre-edit title.
+    await expect(
+      todos.toasts.filter({ hasText: restoredToast(TODO_TITLE) }),
+    ).toHaveCount(0);
+    await expect(todos.rowByText(TODO_TITLE)).toHaveCount(0);
   });
 });
 
@@ -276,22 +303,31 @@ test.describe("Undo semantics", () => {
  * `UNDO_WINDOW_MS` is 12s precisely so a stack of Undos is the ordinary state,
  * and every button in it reads the bare word `Undo`. A sighted user tabbing
  * through reads the toast the focus ring is sitting in. A screen-reader user
- * heard "Undo, button" for all of them, with nothing to separate the one that
- * reverses a completion from the one that **deletes a todo** — which is what an
- * `added` toast's Undo does.
+ * heard "Undo, button" for all of them, with nothing to separate a
+ * completion-revert from an edit-revert.
  *
- * The stack built here is QA's own: two `added` toasts still standing and a
- * third toast for a toggle. Toggling `target` dismisses `target`'s own `added`
- * toast, so the three on screen are one of each kind that matters.
+ * **The stack is no longer QA's.** Theirs was two `added` toasts and a toggle,
+ * which is not a state the app can reach any more: an `added` toast carries no
+ * action (`docs/DESIGN.md` §7.15), so that recipe now yields exactly one Undo
+ * and the property — that no two Undos on screen answer to the same name —
+ * becomes unfalsifiable. This is the same property against the stack that
+ * still exists: one edit and two toggles, on three different records.
  *
- * This does not close the deferred `Tab` ×2 hazard (`docs/DESIGN.md` §6.8) and
- * is not claimed to: it makes the destination audible on arrival, which is the
- * half a name can carry.
+ * That is a fair substitute rather than a weaker one. The names have to
+ * separate two *kinds* of reversal (an edit's from a toggle's) and two
+ * instances of the *same* kind on different records — and the second of those
+ * is the harder case, since it is carried entirely by the title the name
+ * borrows.
+ *
+ * The `Tab` ×2 hazard this was originally filed under is closed, by removing
+ * the create's Undo (§6.8). The naming still earns its place: the buttons
+ * below are still three identical visible words.
  */
 test.describe("Undo accessible names", () => {
   const TARGET = "target";
   const KEEPME = "keepme";
   const ANCHOR = "anchor";
+  const ANCHOR_EDITED = "anchor edited";
 
   test("three Undos standing at once are told apart by name", async ({
     signedIn: page,
@@ -308,6 +344,17 @@ test.describe("Undo accessible names", () => {
       await expect(todos.rowByText(title)).toBeVisible();
     }
 
+    /*
+      The slowest write first, and the two fast ones after it, so the whole
+      stack is comfortably inside one 12s window when it is read. An edit
+      drives a modal; a toggle is a single click.
+    */
+    await todos.editTodo(ANCHOR, ANCHOR_EDITED);
+    await expect(
+      todos.toastTitles.filter({ hasText: updatedToast(ANCHOR_EDITED) }),
+    ).toBeVisible();
+
+    await todos.toggle(KEEPME, true);
     await todos.toggle(TARGET, true);
 
     await expect(
@@ -316,8 +363,11 @@ test.describe("Undo accessible names", () => {
 
     const undoButtons = page.locator('[data-slot="toast-action-button"]');
 
-    // The stack QA described: `target` marked complete, `keepme` and `anchor`
-    // added. `target`'s own `added` toast was dismissed by the toggle.
+    /*
+      Three, out of six toasts raised: the three `added` receipts standing
+      beside these contribute no buttons at all, which is the §7.15 change
+      showing up as arithmetic.
+    */
     await expect(undoButtons).toHaveCount(3);
 
     /*
@@ -329,8 +379,8 @@ test.describe("Undo accessible names", () => {
     */
     for (const title of [
       markedCompleteToast(TARGET),
-      addedToast(KEEPME),
-      addedToast(ANCHOR),
+      markedCompleteToast(KEEPME),
+      updatedToast(ANCHOR_EDITED),
     ]) {
       await expect(
         page.getByRole("button", { name: undoActionLabel(title), exact: true }),
@@ -353,5 +403,151 @@ test.describe("Undo accessible names", () => {
     // The visible word is unchanged — the name is for assistive technology,
     // not a relabelling of the button (`docs/DESIGN.md` §7.13).
     await expect(undoButtons.first()).toHaveText(UNDO_LABEL);
+  });
+});
+
+/**
+ * An `added` toast is a receipt and nothing else (`docs/DESIGN.md` §7.15).
+ *
+ * The action it used to carry was a `DELETE`, and it sat in a tab-ordered
+ * region beside Undos that put things back — so `Tab` ×2 from the toast the
+ * focus rescue had just moved to reached an unconfirmed destructive control
+ * on a record the user had not touched (§6.8, QA §8). Removing the action
+ * removed the target; the sentence stays, because a create still has to
+ * report itself and §7.17's `hidden by your filters` variant is the only
+ * explanation a filtered-out row ever gets.
+ *
+ * **Both create paths are pinned**, because they are two call sites: the bar
+ * and the modal report through `handleQuickAdded` and `handleSaved`
+ * respectively, and an action restored to either one is the defect back.
+ *
+ * The absence assertions are one-shot `expectAbsentNow` reads rather than
+ * retrying `toHaveCount(0)`, for the reason that helper documents: a toast
+ * expires on its own, so a retrying "no action button" would be satisfied by
+ * the whole toast going away and would pass against code that still renders
+ * the button.
+ */
+test.describe("added toasts are receipts, not controls", () => {
+  /*
+    The whole toast, not its title: the assertions below count what is *inside*
+    it, so the locator has to be the container rather than the `toast-title`
+    slot the other tests in this file filter on.
+  */
+  const receiptFor = (todos: TodosScreen, title: string) =>
+    todos.toasts.filter({ hasText: addedToast(title) });
+
+  const ACTION_BUTTON = '[data-slot="toast-action-button"]';
+
+  test("a quick-add receipt offers no action at all", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await todos.quickAdd(TODO_TITLE);
+    await expect(todos.rowByText(TODO_TITLE)).toBeVisible();
+
+    /*
+      Presence first, and waited for — this is the precondition, and it is also
+      half the contract: the receipt must still be raised. Without it the
+      absence assertions below would pass against an app that had stopped
+      reporting creates entirely.
+    */
+    const receipt = receiptFor(todos, TODO_TITLE);
+
+    await expect(receipt).toBeVisible();
+
+    await expectAbsentNow(
+      receipt.locator(ACTION_BUTTON),
+      "an `added` toast rendered an action button",
+    );
+
+    /*
+      And by accessible name, which is the other way in: the rescue and a
+      screen-reader user both reach these buttons by name, so a button that
+      escaped the locator above would still be caught here.
+    */
+    await expectAbsentNow(
+      page.getByRole("button", {
+        name: undoActionLabel(addedToast(TODO_TITLE)),
+        exact: true,
+      }),
+      "an `added` toast's Undo was still reachable by its accessible name",
+    );
+  });
+
+  test("a modal create receipt offers no action either", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await todos.createTodo(TODO_TITLE);
+
+    const receipt = receiptFor(todos, TODO_TITLE);
+
+    await expect(receipt).toBeVisible();
+
+    await expectAbsentNow(
+      receipt.locator(ACTION_BUTTON),
+      "a modal-created `added` toast rendered an action button",
+    );
+    await expectAbsentNow(
+      page.getByRole("button", {
+        name: undoActionLabel(addedToast(TODO_TITLE)),
+        exact: true,
+      }),
+      "a modal-created `added` toast's Undo was reachable by name",
+    );
+  });
+
+  /**
+   * The discriminating case, and the reason this is one test rather than two
+   * assertions in separate files: both toasts are on screen at the same
+   * moment, from the same todo, and exactly one of them has an action.
+   *
+   * A change that dropped the action from the wrong toast kind — the edit's
+   * instead of the create's — passes every assertion in the two tests above
+   * and fails here.
+   */
+  test("an edit keeps its Undo while the added receipt beside it keeps none", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await todos.quickAdd(TODO_TITLE);
+    await expect(todos.rowByText(TODO_TITLE)).toBeVisible();
+
+    await todos.editTodo(TODO_TITLE, SECOND_TITLE);
+    await expect(
+      todos.toastTitles.filter({ hasText: updatedToast(SECOND_TITLE) }),
+    ).toBeVisible();
+
+    /*
+      Both stand together: `UNDO_WINDOW_MS` is 12s and an edit dismisses only
+      an *armed* Undo for the same row, of which the receipt is not one. The
+      original toast therefore has not been closed and is genuinely beside the
+      new one.
+    */
+    const receipt = receiptFor(todos, TODO_TITLE);
+
+    await expect(receipt).toBeVisible();
+    await expectAbsentNow(
+      receipt.locator(ACTION_BUTTON),
+      "the `added` receipt grew an action back when an edit followed it",
+    );
+
+    // The edit's Undo is untouched — same button, same accessible name.
+    const updated = todos.toasts.filter({ hasText: updatedToast(SECOND_TITLE) });
+
+    await expect(updated.locator(ACTION_BUTTON)).toHaveCount(1);
+    await expect(
+      page.getByRole("button", {
+        name: undoActionLabel(updatedToast(SECOND_TITLE)),
+        exact: true,
+      }),
+    ).toHaveCount(1);
+
+    // Exactly one armed Undo on the whole screen, which is the property the
+    // stack-shape argument in §6.8 turns on.
+    expect(
+      await todos.undoButton.count(),
+      "a create and an edit must leave exactly one armed Undo between them",
+    ).toBe(1);
   });
 });
