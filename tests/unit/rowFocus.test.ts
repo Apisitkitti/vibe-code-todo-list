@@ -166,10 +166,15 @@ describe("focusRowAfterRemoval", () => {
  */
 describe("focusIsUnclaimed", () => {
   /** Stand-ins: identity is the only property the guard reads. */
-  const body = { name: "body" };
-  const rescuedRow = { name: "rescued row" };
-  const neighbouringRow = { name: "neighbouring row" };
-  const quickAddInput = { name: "quick-add input" };
+  // Identity is the whole point of these — the guard compares references, it
+  // never calls anything on them — but `focus` is part of `FocusTarget`, so a
+  // no-op keeps the fixtures honest to the contract they stand in for.
+  const stand = (name: string) => ({ name, focus: () => {} });
+
+  const body = stand("body");
+  const rescuedRow = stand("rescued row");
+  const neighbouringRow = stand("neighbouring row");
+  const quickAddInput = stand("quick-add input");
 
   const world = (active: unknown) => ({
     getActiveElement: () => active,

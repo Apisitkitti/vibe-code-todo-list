@@ -8,7 +8,13 @@
  * - Toast and dialog prose wrap the title in curly double quotes (`“ ”`) and
  *   use the typographic apostrophe in contractions (`Couldn’t`) — §7.15's
  *   punctuation note.
- * - `aria-label`s use straight double quotes (`"`) — §7.4.
+ * - §7.4's row controls build their `aria-label` from the raw title, so those
+ *   use straight double quotes (`"`).
+ * - The one exception is `undoActionLabel` below, whose `aria-label` borrows a
+ *   toast's own prose rather than inventing a second wording — so it carries
+ *   that prose's curly quotes. Naming what the button reverses is worth more
+ *   than a uniform quote character; the alternative was a second copy deck to
+ *   keep in step with the first.
  *
  * Asserting the wrong one is the difference between a passing test and a test
  * that silently matches nothing, so the two shapes are built by separate

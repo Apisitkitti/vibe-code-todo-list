@@ -244,7 +244,15 @@ const browserUnclaimedDeps: UnclaimedFocusDeps = {
  * not a category that happens to contain the right answer.
  */
 export const focusIsUnclaimed = (
-  rescued: unknown,
+  /*
+    Typed rather than `unknown`, which is what `getActiveElement` needs on the
+    other side of the comparison. DEF-28 *was* this guard comparing against the
+    wrong thing, and `unknown` accepts every wrong thing: passing the undo token
+    here would typecheck, lint, build, and then silently decline forever. The
+    review's own mutation passing `null` cleared all three gates and only fell
+    over five tests deep in the e2e suite (review F3).
+  */
+  rescued: FocusTarget | null,
   deps: UnclaimedFocusDeps = browserUnclaimedDeps,
 ): boolean => {
   const active = deps.getActiveElement();
