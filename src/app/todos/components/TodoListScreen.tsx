@@ -212,12 +212,19 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    * none. What makes a second `More options` press join the opening it found
    * instead of starting a second one (`openCreate`).
    *
-   * Deliberately *not* `formState.isOpen`, which is the reading that looks
-   * obvious and is a frame too late: two presses delivered inside one task
-   * both read `isOpen === false` from the render they were called in, so a
-   * guard on it lets exactly the case it was written for through. A ref is
-   * written the instant the first press decides to open and is therefore true
-   * for the second press, whenever it arrives.
+   * Deliberately *not* `formState.isOpen`, but not for the reason that reads
+   * as obvious. An earlier version of this comment claimed two presses in one
+   * task both read `isOpen === false` and so slip past a guard on it. The
+   * review tried to demonstrate that and could not: React batches both
+   * `setCreateSeq` calls into one render before the modal mounts, so the
+   * same-task case produces a single mount and no re-key, and a guard on
+   * `isOpen` passes the whole suite (review F-2). Anyone hunting for that
+   * failure will not find it.
+   *
+   * What the ref actually buys is stated below — the second press is
+   * *answered* rather than dropped — and an invariant that does not depend on
+   * knowing when React commits. That is worth having on its own; it is not
+   * worth defending with a failure mode nobody has produced.
    *
    * Holding the promise rather than a boolean is what lets the second press be
    * *answered* rather than merely ignored: it awaits the same outcome the
