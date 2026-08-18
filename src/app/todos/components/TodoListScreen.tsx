@@ -77,6 +77,28 @@ const ADD_TODO_LABEL = "Add a todo";
 const TOGGLE_FAILURE_MESSAGE = "Couldn’t update the todo. Try again.";
 const UNDO_FAILURE_MESSAGE = "Couldn’t undo that. Try again.";
 
+/** The word on the button (`docs/DESIGN.md` §7.13, §7.15). */
+const UNDO_LABEL = "Undo";
+
+/**
+ * What a screen reader announces for an Undo (`docs/DESIGN.md` §7.13).
+ *
+ * The visible word is `Undo` on every one of them, and `UNDO_WINDOW_MS` is 12s
+ * precisely so several stand at once — so a sighted user tabbing forward reads
+ * which toast they are in, and a screen-reader user hears "Undo, button" three
+ * times with nothing to tell a completion-revert from a `DELETE`. QA raised
+ * this on the deferred `Tab` ×2 hazard (`docs/QA-REPORT.md` §8): the two
+ * presses are the same for everyone, but only some users can see what they
+ * land on.
+ *
+ * The subject is the toast's own title rather than a second wording invented
+ * here — `Todo “x” added`, `Todo “x” marked complete` — so the name says what
+ * this Undo reverses and stays true wherever §7.11's copy goes. Building it
+ * from the value it describes is `docs/CONVENTIONS.md`'s rule; a per-case
+ * literal would be four more strings to keep in step with one.
+ */
+const undoActionLabel = (message: string) => `${UNDO_LABEL} — ${message}`;
+
 /** What a toggle and its Undo do differently; everything else is shared. */
 interface ToggleOutcome {
   onSuccess: () => void;
@@ -225,7 +247,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     const key = toast.success(message, {
       timeout: UNDO_WINDOW_MS,
       actionProps: {
-        children: "Undo",
+        children: UNDO_LABEL,
+        /*
+          The accessible name, which the visible word cannot be: it is `Undo`
+          on every toast in the stack, and the stack is the ordinary case.
+          `aria-label` overrides the child text for assistive technology and
+          leaves the button reading `Undo` on screen, which is what the copy
+          deck asks for in both places (§7.13).
+        */
+        "aria-label": undoActionLabel(message),
         ...undoTokenProps(token),
         onPress: () => {
           // Closing the toast does not remove it immediately — HeroUI defers
@@ -582,19 +612,24 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
         somewhere useful from the first frame whatever step 2 does next
         (`src/lib/rowFocus.ts`).
       */
-      await focusRowAfterRemoval(focusAnchor);
+      const rescuedRow = await focusRowAfterRemoval(focusAnchor);
+
       await running;
 
       /*
         Step 2, onto the Undo this toggle raised and no other. Guarded on focus
-        being unclaimed — still on a row where step 1 left it, or on `<body>`
+        being unclaimed — still on the exact row step 1 focused, or on `<body>`
         because the list emptied and step 1 had nowhere to land — so a user who
-        has already tabbed somewhere themselves is not dragged into the toast.
+        has already moved themselves is not dragged into the toast. `rescuedRow`
+        is why that can be said of a *neighbouring* row too: a slow write leaves
+        time to tab one row across, and against "any row checkbox" that was
+        indistinguishable from not having moved (QA DEF-28).
+
         Skipped entirely when the write failed, where the row comes back, no
         token is minted and there is no Undo to reach.
       */
       if (undoToken !== null) {
-        await focusUndoAction(undoToken, focusIsUnclaimed);
+        await focusUndoAction(undoToken, () => focusIsUnclaimed(rescuedRow));
       }
 
       return;

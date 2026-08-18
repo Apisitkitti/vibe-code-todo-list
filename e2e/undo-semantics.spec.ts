@@ -5,6 +5,8 @@ import {
   markedNotCompleteToast,
   removedToast,
   restoredToast,
+  UNDO_LABEL,
+  undoActionLabel,
   updatedToast,
 } from "./support/copy";
 import { TODO_STATUS_URL, countRequests } from "./support/assertions";
@@ -265,5 +267,91 @@ test.describe("Undo semantics", () => {
 
     // And nothing reports the undo path having run.
     await expect(todos.toasts.filter({ hasText: removedToast(TODO_TITLE) })).toHaveCount(0);
+  });
+});
+
+/**
+ * Every Undo on screen has to say what it undoes — QA's §8 addition.
+ *
+ * `UNDO_WINDOW_MS` is 12s precisely so a stack of Undos is the ordinary state,
+ * and every button in it reads the bare word `Undo`. A sighted user tabbing
+ * through reads the toast the focus ring is sitting in. A screen-reader user
+ * heard "Undo, button" for all of them, with nothing to separate the one that
+ * reverses a completion from the one that **deletes a todo** — which is what an
+ * `added` toast's Undo does.
+ *
+ * The stack built here is QA's own: two `added` toasts still standing and a
+ * third toast for a toggle. Toggling `target` dismisses `target`'s own `added`
+ * toast, so the three on screen are one of each kind that matters.
+ *
+ * This does not close the deferred `Tab` ×2 hazard (`docs/DESIGN.md` §6.8) and
+ * is not claimed to: it makes the destination audible on arrival, which is the
+ * half a name can carry.
+ */
+test.describe("Undo accessible names", () => {
+  const TARGET = "target";
+  const KEEPME = "keepme";
+  const ANCHOR = "anchor";
+
+  test("three Undos standing at once are told apart by name", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    /*
+      Each add is waited for. `quickAdd` fills and presses Enter without
+      waiting for anything, and the bar clears asynchronously — three in a row
+      unwaited lose two of the three writes, which quietly builds a stack of
+      one and asserts nothing.
+    */
+    for (const title of [ANCHOR, KEEPME, TARGET]) {
+      await todos.quickAdd(title);
+      await expect(todos.rowByText(title)).toBeVisible();
+    }
+
+    await todos.toggle(TARGET, true);
+
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(TARGET) }),
+    ).toBeVisible();
+
+    const undoButtons = page.locator('[data-slot="toast-action-button"]');
+
+    // The stack QA described: `target` marked complete, `keepme` and `anchor`
+    // added. `target`'s own `added` toast was dismissed by the toggle.
+    await expect(undoButtons).toHaveCount(3);
+
+    /*
+      Asked for by accessible name, which is the thing under test — a name
+      computed from `aria-label`, not from the child text, and each one
+      matching exactly one button. Before this, every one of these three
+      queries would have matched nothing and `Undo` would have matched all
+      three.
+    */
+    for (const title of [
+      markedCompleteToast(TARGET),
+      addedToast(KEEPME),
+      addedToast(ANCHOR),
+    ]) {
+      await expect(
+        page.getByRole("button", { name: undoActionLabel(title), exact: true }),
+      ).toHaveCount(1);
+    }
+
+    /*
+      And the property itself, stated once rather than inferred from the three
+      lookups: no two Undos on screen answer to the same name. A per-case
+      literal that drifted, or a name that dropped the subject, would pass the
+      loop above for two of them and fail here.
+    */
+    const names = await undoButtons.evaluateAll((buttons) =>
+      buttons.map((button) => button.getAttribute("aria-label")),
+    );
+
+    expect(names.filter((name) => name !== null)).toHaveLength(3);
+    expect(new Set(names).size).toBe(3);
+
+    // The visible word is unchanged — the name is for assistive technology,
+    // not a relabelling of the button (`docs/DESIGN.md` §7.13).
+    await expect(undoButtons.first()).toHaveText(UNDO_LABEL);
   });
 });
