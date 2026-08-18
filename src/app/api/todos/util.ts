@@ -94,3 +94,49 @@ export const mentionsCompleted = (body: unknown): boolean => {
 export const readJsonBody = async (request: Request): Promise<unknown> => {
   return await request.json().catch(() => null);
 };
+
+/**
+ * LIKE's three metacharacters — the two wildcards and the escape character
+ * itself.
+ *
+ * One character class in one pass, deliberately. `\` has to be escaped too,
+ * and doing that as a separate `replace` would have to run *first*: a second
+ * pass over the output would revisit the backslashes the first pass had just
+ * introduced and turn `\%` into `\\%`, a literal backslash followed by a live
+ * wildcard. A single pass cannot see its own output, so the ordering question
+ * does not arise.
+ */
+const LIKE_METACHARACTERS = /[\\%_]/g;
+
+/**
+ * Makes a user's search term mean itself.
+ *
+ * Prisma's `contains` compiles to `ILIKE '%' || $1 || '%'`. Binding `$1` as a
+ * parameter is what stops SQL injection, and it is *all* it stops: `ILIKE`
+ * interprets `%`, `_` and `\` inside the bound value afterwards, so until this
+ * ran a search box was quietly a pattern box. Measured against the real
+ * Postgres before the fix (`tests/api/searchWildcards.test.ts`):
+ *
+ *  - `50% off` returned `50 things to sell off` as well — `%` stood for any
+ *    run of characters, so a user looking for a discount got nonsense.
+ *  - `%` alone returned the entire account.
+ *  - `a_b` also returned `plan axb review` — `_` stood for any one character.
+ *  - `C:\temp` returned the row **without** the backslash and not the row
+ *    with it: `\t` escaped the `t` down to a plain `t`. The one case where the
+ *    defect hides the very row the user is looking for.
+ *
+ * Escaping here rather than reaching for `$queryRaw` keeps the `where` a
+ * Prisma object, which is what keeps the `userId` scope and the `OR` arms
+ * checkable by reading them (see the security note in `route.ts`). Postgres's
+ * default LIKE escape character is `\`, so no `ESCAPE` clause is needed and
+ * none can be passed through `contains` anyway.
+ *
+ * This also puts the server back in step with `todoMatchesFilters`
+ * (`src/lib/todoListState.ts`), which mirrors this predicate on the client
+ * with `String.prototype.includes` and has always been literal. The two
+ * disagreeing is what makes the quick-add bar's *hidden by your filters*
+ * message wrong rather than merely unhelpful.
+ */
+export const escapeLikePattern = (term: string): string => {
+  return term.replace(LIKE_METACHARACTERS, (match) => `\\${match}`);
+};

@@ -19,6 +19,7 @@ import {
 } from "./errors";
 import {
   TODO_LIST_ORDER_BY,
+  escapeLikePattern,
   mentionsCompleted,
   readJsonBody,
   toTodoListResponse,
@@ -71,11 +72,20 @@ export const GET = async (request: NextRequest) => {
 
     `mode: "insensitive"` on both, matching the title behaviour this widens
     rather than inventing a second rule for the second field.
+
+    **`escapeLikePattern` is what makes the term mean itself.** `contains`
+    compiles to `ILIKE '%' || $1 || '%'`, and binding `$1` stops injection but
+    not LIKE's own metacharacters — `%`, `_` and `\` were all live inside the
+    user's text until this call. Both arms get it, because either one left raw
+    reproduces the whole defect on its own. See `escapeLikePattern` in
+    `./util.ts` for what was measured before it.
   */
   if (query !== "") {
+    const term = escapeLikePattern(query);
+
     where.OR = [
-      { title: { contains: query, mode: "insensitive" } },
-      { note: { contains: query, mode: "insensitive" } },
+      { title: { contains: term, mode: "insensitive" } },
+      { note: { contains: term, mode: "insensitive" } },
     ];
   }
 
