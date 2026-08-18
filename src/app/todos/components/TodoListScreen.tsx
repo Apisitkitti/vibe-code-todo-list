@@ -12,12 +12,21 @@ import {
   useOverlayState,
 } from "@heroui/react";
 import { useRouter } from "next/navigation";
+import { useFocusVisible } from "react-aria";
 
 import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
 import { useTodoList } from "@/app/todos/hooks/useTodoList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { createHandoff } from "@/lib/handoff";
+import {
+  focusIsUnclaimed,
+  focusRowAfterRemoval,
+  focusUndoAction,
+  nextUndoToken,
+  readFocusedRow,
+  undoTokenProps,
+} from "@/lib/rowFocus";
 import type { TodoItemData, TodoListFilters } from "@/lib/todo";
 import {
   applyCompletion,
@@ -67,6 +76,28 @@ const ADD_TODO_LABEL = "Add a todo";
  */
 const TOGGLE_FAILURE_MESSAGE = "Couldn’t update the todo. Try again.";
 const UNDO_FAILURE_MESSAGE = "Couldn’t undo that. Try again.";
+
+/** The word on the button (`docs/DESIGN.md` §7.13, §7.15). */
+const UNDO_LABEL = "Undo";
+
+/**
+ * What a screen reader announces for an Undo (`docs/DESIGN.md` §7.13).
+ *
+ * The visible word is `Undo` on every one of them, and `UNDO_WINDOW_MS` is 12s
+ * precisely so several stand at once — so a sighted user tabbing forward reads
+ * which toast they are in, and a screen-reader user hears "Undo, button" three
+ * times with nothing to tell a completion-revert from a `DELETE`. QA raised
+ * this on the deferred `Tab` ×2 hazard (`docs/QA-REPORT.md` §8): the two
+ * presses are the same for everyone, but only some users can see what they
+ * land on.
+ *
+ * The subject is the toast's own title rather than a second wording invented
+ * here — `Todo “x” added`, `Todo “x” marked complete` — so the name says what
+ * this Undo reverses and stays true wherever §7.11's copy goes. Building it
+ * from the value it describes is `docs/CONVENTIONS.md`'s rule; a per-case
+ * literal would be four more strings to keep in step with one.
+ */
+const undoActionLabel = (message: string) => `${UNDO_LABEL} — ${message}`;
 
 /** What a toggle and its Undo do differently; everything else is shared. */
 interface ToggleOutcome {
@@ -138,6 +169,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
 
   const router = useRouter();
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
+  /**
+   * Whether the user is driving from the keyboard. The focus rescue below only
+   * runs then, and that restriction is the point: a pointer user's focus is
+   * not a place they are standing, so moving it into a toast would arm Undo
+   * under a Space press they meant for something else. react-aria's own toast
+   * region draws the same line — on a removal it moves focus *out* of the
+   * region in pointer modality.
+   */
+  const { isFocusVisible } = useFocusVisible();
   const { status, priority, query } = filters;
 
   /**
@@ -183,6 +223,18 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     return true;
   };
 
+  /**
+   * Raises the Undo toast and returns the token that names **this** one.
+   *
+   * The token is what the focus rescue waits for (`src/lib/rowFocus.ts`). It
+   * has to come back from here rather than be looked up afterwards, because
+   * for a few frames the DOM holds two toasts for this same todo — the
+   * outstanding `added` one that `dismissUndo` has just asked to close, whose
+   * close is queued behind HeroUI's serialized view transition, and the one
+   * being raised now. `undoToastKeys` can tell them apart by key but nothing
+   * in the DOM carries that key, so the token is minted here and stamped on
+   * the button itself (QA DEF-25).
+   */
   const showUndoableSuccess = (
     todoId: string,
     message: string,
@@ -190,10 +242,21 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   ) => {
     dismissUndo(todoId);
 
+    const token = nextUndoToken();
+
     const key = toast.success(message, {
       timeout: UNDO_WINDOW_MS,
       actionProps: {
-        children: "Undo",
+        children: UNDO_LABEL,
+        /*
+          The accessible name, which the visible word cannot be: it is `Undo`
+          on every toast in the stack, and the stack is the ordinary case.
+          `aria-label` overrides the child text for assistive technology and
+          leaves the button reading `Undo` on screen, which is what the copy
+          deck asks for in both places (§7.13).
+        */
+        "aria-label": undoActionLabel(message),
+        ...undoTokenProps(token),
         onPress: () => {
           // Closing the toast does not remove it immediately — HeroUI defers
           // the unmount through a view transition, which can outlast a double
@@ -206,6 +269,8 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     });
 
     undoToastKeys.current.set(todoId, key);
+
+    return token;
   };
 
   /**
@@ -497,9 +562,28 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     // that the change is visible immediately (review M-1, M-2).
     dismissUndo(todo.id);
 
-    await runToggle(todo, nextCompleted, {
+    /*
+      Read *before* the flip, because the flip is what destroys the answer: the
+      optimistic update removes the row on the very next render, taking the
+      checkbox the user is standing on with it (`docs/PRD.md` US-07). `null`
+      means there is nothing to rescue — the row is staying, or the press came
+      from a pointer, or focus was never on a row to begin with.
+    */
+    const focusAnchor =
+      isFocusVisible && !todoMatchesStatusFilter(nextCompleted, status)
+        ? readFocusedRow()
+        : null;
+
+    /*
+      The identity of the Undo this toggle raises, and `null` for as long as it
+      has raised none. Read after the write resolves, so it is the token of the
+      toast that reports *this* toggle and no other (QA DEF-25).
+    */
+    let undoToken: string | null = null;
+
+    const running = runToggle(todo, nextCompleted, {
       onSuccess: () => {
-        showUndoableSuccess(
+        undoToken = showUndoableSuccess(
           todo.id,
           toggledMessage(todo.title, nextCompleted),
           () => {
@@ -515,6 +599,43 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       */
       reloadOnSuccess: false,
     });
+
+    if (focusAnchor !== null) {
+      /*
+        Step 1, and it is deliberately not awaited behind the request: the row
+        is already gone optimistically, so waiting for the server would leave
+        focus on `<body>` for the whole round trip.
+
+        It is also the fallback for every path step 2 cannot take — a refused
+        write raises no Undo toast, and `focusIsUnclaimed` declines once the
+        user has moved focus themselves. Running it first means focus is
+        somewhere useful from the first frame whatever step 2 does next
+        (`src/lib/rowFocus.ts`).
+      */
+      const rescuedRow = await focusRowAfterRemoval(focusAnchor);
+
+      await running;
+
+      /*
+        Step 2, onto the Undo this toggle raised and no other. Guarded on focus
+        being unclaimed — still on the exact row step 1 focused, or on `<body>`
+        because the list emptied and step 1 had nowhere to land — so a user who
+        has already moved themselves is not dragged into the toast. `rescuedRow`
+        is why that can be said of a *neighbouring* row too: a slow write leaves
+        time to tab one row across, and against "any row checkbox" that was
+        indistinguishable from not having moved (QA DEF-28).
+
+        Skipped entirely when the write failed, where the row comes back, no
+        token is minted and there is no Undo to reach.
+      */
+      if (undoToken !== null) {
+        await focusUndoAction(undoToken, () => focusIsUnclaimed(rescuedRow));
+      }
+
+      return;
+    }
+
+    await running;
   };
 
   const handleDelete = async () => {
@@ -660,6 +781,13 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       <TodoGroupedList
         todos={result.todos}
         pendingTodoIds={rowPendingIds()}
+        /*
+          The one row §8.3.2 still gives a row-level pending treatment to: a
+          confirmed delete is running against it and it is about to stop
+          existing. Everything else that is busy is busy optimistically and
+          says so through `aria-busy` and its disabled controls.
+        */
+        vanishingTodoId={isDeleting ? (pendingDelete?.id ?? null) : null}
         showTooltips={isDesktop}
         onToggle={(target, nextCompleted) => {
           void handleToggle(target, nextCompleted);

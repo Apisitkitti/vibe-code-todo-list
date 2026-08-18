@@ -109,3 +109,22 @@ testable, not what makes it finished.
 3. `npm run build` succeeds
 4. Senior review approved
 5. Commits follow the convention above
+
+## Two branches at once
+
+Parallel work goes in a `git worktree`, one checkout per branch, so neither
+side edits files the other has open. Two things do not separate themselves:
+
+- **The e2e port.** `playwright.config.ts` reuses an existing server rather
+  than fighting for the port, which means a second worktree adopts the first
+  one's dev server and reports a pass for code it never ran. Set `E2E_PORT` to
+  something other than 3117 in every worktree but one. This has already cost a
+  night of chasing flakes that were one branch testing another's build.
+- **The database.** Both worktrees resolve the same `todo_app_test`, so two
+  suites running at the same moment share it. The account-scoped isolation in
+  `e2e/support/fixtures.ts` holds — every test signs up its own account and
+  only ever sees rows it created — but any test that counts rows globally or
+  truncates a table would not. Don't write one.
+
+Never kill a process you did not start: a port that is busy belongs to someone,
+possibly to another project entirely.

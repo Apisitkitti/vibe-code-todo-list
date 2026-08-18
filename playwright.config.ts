@@ -15,8 +15,21 @@ import { resolveTestDatabaseUrl } from "./e2e/support/testDatabaseUrl";
  * same port, which is why dev mode is the right target here.
  */
 
-/** Not 3000 — see the note above. */
-const PORT = 3117;
+/**
+ * Not 3000 — see the note above — and overridable, because 3117 is only free
+ * if this checkout is the only one running the suite.
+ *
+ * `reuseExistingServer` adopts whatever already answers on the port. With two
+ * git worktrees on one machine that is not a convenience but a trap: the
+ * second run adopts the first worktree's dev server and reports a pass for
+ * code it never executed. That happened during the DEF-20 work, and it cost a
+ * night of chasing flakes that were really one branch testing another's build.
+ *
+ * A worktree that runs its own suite sets `E2E_PORT` to something else. CI
+ * leaves it unset: one checkout, one port, and `reuseExistingServer` is off
+ * there anyway.
+ */
+const PORT = Number(process.env.E2E_PORT ?? 3117);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 /**

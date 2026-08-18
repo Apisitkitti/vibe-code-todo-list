@@ -94,12 +94,14 @@ const fold = (value: string) =>
  * The clauses mirror `GET /api/todos` (`src/app/api/todos/route.ts`): status
  * against `completed` and priority by equality — both exact comparisons over
  * an enum and a boolean, where no collation is involved and the two languages
- * cannot disagree — and the query as a substring of the **title**, the same
- * field the server searches today.
+ * cannot disagree — and the query as a substring of the **title or the note**,
+ * the two fields the server searches.
  *
- * That last clause is the one that can drift, in two ways: the Unicode
- * disagreement `fold` handles, and a future change to what the server searches
- * — backlog #4 would add `note` to the `OR` and falsify this file silently.
+ * That last clause is the one that can drift, and backlog #4 is the worked
+ * example: widening the handler's `where` to the note without widening this
+ * would have left the predicate calling a note-matching row hidden while the
+ * list rendered it, silently. It was widened in the same commit for that
+ * reason. The other drift is the Unicode disagreement `fold` handles.
  * Neither is caught by restating the clauses in a unit test, so
  * `tests/api/filterPredicate.test.ts` asserts the property that actually
  * matters against the real handler: **anything this calls hidden is genuinely
@@ -119,8 +121,16 @@ export const todoMatchesFilters = (
     return false;
   }
 
-  if (filters.query !== "" && !fold(todo.title).includes(fold(filters.query))) {
-    return false;
+  if (filters.query !== "") {
+    const needle = fold(filters.query);
+    // Both fields, because `GET /api/todos` searches both (backlog #4). A row
+    // whose note matches is returned by the handler, so calling it hidden here
+    // would be the lie this predicate exists to avoid.
+    const matches =
+      fold(todo.title).includes(needle) ||
+      (todo.note !== null && fold(todo.note).includes(needle));
+
+    if (!matches) return false;
   }
 
   return true;

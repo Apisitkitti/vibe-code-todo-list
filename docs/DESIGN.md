@@ -144,6 +144,41 @@ Assignments:
   `globals.css`. If a colour is missing, compose it with `color-mix` from an
   existing token, matching the pattern `variables.css` uses.
 
+  **One exception, and the only one: a token whose shipped value fails a WCAG
+  floor.** A contrast failure is not a palette preference, and it cannot be
+  composed around — every consumer of the token is affected, so correcting it
+  anywhere but the token means correcting it in a dozen places and missing the
+  thirteenth. Such an override must:
+
+  - **(a)** change only the failing channel, keeping HeroUI's hue and chroma;
+  - **(b)** name the defect, the measured before/after, and the surfaces it was
+    measured on, in a comment beside the value;
+  - **(c)** be scoped to exactly the themes that were failing — guarded when
+    one theme already passed, unguarded when neither did — and in **either**
+    case the themes it does *not* correct must be measured too, and stated, so
+    "left alone" is a finding rather than an assumption.
+
+  Two instances today, one of each shape (`src/app/globals.css`):
+
+  | Token | Defect | Themes failing | Scope |
+  |---|---|---|---|
+  | `--muted` | DEF-15 | light only (4.43:1; dark 7.72:1) | `:root:not(.dark):not([data-theme="dark"])` |
+  | `--accent` | DEF-14 | both (3.59:1 in each) | bare `:root` |
+
+  **Why the scopes differ, and why (c) is not boilerplate.** HeroUI scopes its
+  dark palette to `.dark, [data-theme="dark"]`, which has the **same
+  specificity** as a bare `:root` — so an unguarded `:root { --muted: … }`
+  comes later in the cascade and silently overwrites the dark value as well.
+  Measured, that mutation drops dark's muted text from 7.72:1 to 3.62:1.
+  `--accent` needs no guard for the mirror-image reason: HeroUI's dark block
+  never defines it, both themes read the one value, and both measured 3.59:1 —
+  so guarding it to light would have fixed half the defect and left no trace of
+  the other half.
+
+  A token that fails in both themes is the case a "protect the passing theme"
+  rule does not describe at all, which is why (c) is written as *scope to what
+  is failing* rather than as *always guard*. Test both themes either way.
+
 ---
 
 ## 4. Screen inventory
@@ -769,8 +804,38 @@ foreground. Keep the button width stable: render
 `<Spinner size="sm" color="current" />` plus the pending label, and set
 `isDisabled` rather than swapping the element.
 
-**Row-level pending** (toggle, delete): apply `opacity-60 pointer-events-none`
-to the `<li>`. No spinner — these are optimistic.
+**Row-level pending** (delete only): apply `pointer-events-none` to the `<li>`.
+No spinner, and **no `opacity-60` on the row in any state**.
+
+> **MI-6 — settled. §8.3.2 is the design; this paragraph was the half that was
+> wrong, and it is corrected here.**
+>
+> This section used to say `opacity-60 pointer-events-none` on *both* the
+> toggle and the delete, while §8.3.2 said the treatment should apply to the
+> delete alone. §8.3.2 wins, for the reason it gave — a toggle is optimistic,
+> so the row already shows its outcome and dimming it is visible latency for
+> its own sake.
+>
+> The measurement then went further than either paragraph did, so the dimming
+> is gone entirely rather than merely narrowed. `opacity` is a **group**
+> multiplier: it dims the row's own paint *and every descendant's*, the title
+> included. A completing row carries `text-muted line-through` from the moment
+> of the press, so the dim landed on the muted token and the title measured
+> **2.32:1** — below even the 3:1 large-text floor, on 16px text, for the
+> length of the round trip (QA §A4). Deleting an *already-completed* row
+> reaches the identical 2.32:1 by the identical route, so keeping the dim for
+> the delete alone would not have been enough: it is the group opacity that is
+> the defect, not which mutation raised it.
+>
+> Nothing is lost. The row still announces itself with `aria-busy`, and its
+> controls still read as unavailable because they are genuinely disabled and
+> HeroUI dims a disabled control itself through `--disabled-opacity`. SC 1.4.11
+> exempts an inactive component from its contrast floor; a dimmed *title* has
+> no such exemption. Measured after the change: **4.83:1 light / 6.75:1 dark**,
+> the token's ordinary value on the Card.
+>
+> Pinned by `e2e/a11y-contrast.spec.ts`, which measures both mutation paths in
+> both themes.
 
 **Route transitions.** `/todos` gets a `loading.tsx` rendering the same header
 plus the skeleton list.
@@ -941,6 +1006,128 @@ Do not introduce them without updating this document.
    hover-revealed row actions use `group-focus-within:opacity-100` so they become
    visible when tabbed to — hiding them with `hidden` or `display:none` is a bug.
    Escape closes both dialogs; Enter submits the todo form and confirms deletion.
+
+   **When a mutation destroys the control that had focus, focus is moved —
+   first back into the list, then onto the action of the toast *that mutation
+   raised*.** Which toast is not a detail: the region holds several at once,
+   their action buttons are identical in shape, and an `added` toast's `Undo`
+   is a `DELETE`. Selecting one by stack position rather than by identity cost
+   a user an unrelated todo to a single keypress (`docs/QA-REPORT.md` DEF-25),
+   and cost focus altogether when react-aria re-homed it off the doomed toast
+   the position had named (DEF-26). The implementation carries a per-toast
+   token for exactly this reason; see `src/lib/rowFocus.ts`. This is a
+   deliberate exception to "never move focus without the user asking", taken
+   because the alternative measured worse: a keyboard toggle under a status
+   filter removes the row (US-07), focus fell to `<body>`, and the Undo that is
+   the *only* route back sat behind every remaining row at three tab stops
+   each, against a 12s timeout. QA measured it unreachable at 19 todos at any
+   human pace (`docs/QA-REPORT.md` §A3).
+
+   **The order.** Step 2 is what satisfies the reachability criterion; on the
+   happy path it catches focus whether or not step 1 ran. Step 1 is there for
+   the paths step 2 *cannot* take — a refused write raises no toast to move to,
+   and the rescue stands down once the user has moved focus themselves. Doing
+   it first makes it a fallback rather than a cleanup: focus is somewhere
+   useful from the first frame regardless of what step 2 does. Both halves are
+   pinned in `e2e/undo-focus.spec.ts`, the second by failing the status write.
+
+   **The cost, stated honestly: it is one surprise per toggle, and there is no
+   cheap way out of it.** After each qualifying toggle focus sits on `Undo`, so
+   the next `Space` activates Undo and restores the row rather than toggling
+   the next one. Burst-completing a list from the keyboard is a real pattern
+   here, and under a status filter it now costs a detour on every row.
+
+   Measured from focus-on-`Undo`, because an earlier draft of this section
+   named a workaround that does not exist. Re-measured after DEF-25, with one
+   toast on screen and focus on the **frontmost** toast — which is now the only
+   toast the rescue can land on:
+
+   | Keys | Where focus lands |
+   |---|---|
+   | `Shift+Tab` | the toast **container** (it is focusable) — still in the region |
+   | `Shift+Tab` ×2 | **back into the list**, on the last row's `Delete` |
+   | `F6` / `Shift+F6` / `Escape` | nothing moves; still on `Undo` |
+   | `Tab` | the toast's `Close` button |
+   | `Tab` ×2 | out of the document |
+   | `Tab` ×3 onward | round through the top of the page (theme toggle) → `Account menu` → the quick-add input |
+
+   So **`Shift+Tab` does work**, and this table used to say it did not.
+   `Escape` and `F6` still do nothing. Backwards is now the cheap route: two
+   presses to the list against six or more forward.
+
+   **Why the earlier readings disagreed, and QA's differed again.** Only the
+   *frontmost* toast's container is in the tab order — HeroUI sets
+   `tabIndex = -1` on every other one — so `Shift+Tab` from a **non**-frontmost
+   toast's `Undo` skips that container and lands on the toast in front of it,
+   which is the `Undo`↔`Close` cycle QA reported (`docs/QA-REPORT.md` DEF-27).
+   That was measured from the state DEF-25 put focus in. It is no longer
+   reachable through the rescue.
+
+   **The forward counts are dev-mode readings.** `next dev` renders a
+   `NEXTJS-PORTAL` element that takes a tab stop of its own, and it does not
+   take one on every run — it is the entire difference between this table and
+   QA's, which otherwise agree stop for stop. So the *order* of stops above is
+   the contract and the absolute counts are not; expect production to differ by
+   one. Nothing here is trapped either way.
+
+   **One cost the count hides.** With a stack of toasts on screen — the
+   ordinary case, since `UNDO_WINDOW_MS` is 12s — `Tab` ×2 from the toggle's
+   `Undo` is the *next toast's* `Undo`, and if that toast is an `added` one its
+   action is a `DELETE`. The rescue no longer puts a destructive control under
+   the user's first keypress (DEF-25), but two forward presses still reach one.
+   That is a property of stacking Undos in a tab-ordered region, not of the
+   rescue, and it is the next thing to look at if this area is revisited.
+
+   **Each Undo is now named for what it reverses** (§7.13): the accessible name
+   is `Undo — {toast title}`, so `Undo — Todo “keepme” added` announces itself
+   as a `DELETE` of `keepme` before it is pressed. That was the half of the
+   hazard that fell only on screen-reader users, who previously heard "Undo,
+   button" for all of them; a sighted user could always read the toast the
+   focus ring was sitting in. **The hazard itself is unchanged and still
+   deferred.** Two forward presses still reach a destructive control, the
+   distance is still two, and nothing about naming makes it further away — a
+   name is heard on arrival, not before the second `Tab`. Fixing it properly
+   means a roving tabindex over the region or dropping `Undo` from `added`
+   toasts, and both change what a toast stack is.
+
+   Two consequences worth knowing before touching this:
+
+   - **A toast with focus on it does not expire.** react-aria pauses the
+     timeout while focus is inside the region, so parking on `Undo` keeps the
+     toast alive indefinitely rather than handing focus back after 12s.
+   - The affordance's own exit is `Enter` — which undoes the toggle. That is
+     the right behaviour for Undo and the wrong one for "let me carry on", so
+     it is not an escape route.
+
+   We take the trade because the alternative is an Undo that cannot be reached
+   at all, and because the row just completed is the one most likely to need
+   undoing. But it is a real cost, not a rounding error, and it is the first
+   thing to revisit if burst capture becomes a complaint — the shape of a fix
+   would be a route back to the list from the toast, not a retreat on the
+   rescue.
+
+   **Keyboard only.** react-aria does not focus a control on pointer press, and
+   a mouse user who has a row focused from earlier must not have Undo armed
+   under a Space press they meant for that row. Gate on modality
+   (`useFocusVisible`), not on whether focus happens to be in the list.
+
+   **An emptied list still gets the rescue.** Toggling the only row leaves step
+   1 with nowhere to land, so the guard on step 2 admits focus on `<body>` as
+   well as focus on the row step 1 chose. Requiring an element would make the
+   rescue decline in the one state where nothing else can catch focus.
+   Implementation and the frame-timing trap are in `src/lib/rowFocus.ts`.
+
+   **The guard names the row, not the kind of thing a row is
+   (`docs/QA-REPORT.md` DEF-28).** It asked whether the active element was *a*
+   row checkbox, which every row on screen satisfies — so a user who tabbed
+   from the rescued row to the row beside it, during a write slow enough to
+   leave time for it, read as a user who had not moved and had focus taken off
+   the row they had chosen. Their next `Space` then reverted the completion
+   they had just made instead of making the one they were standing on. It
+   compares against the element step 1 actually focused, which is the same
+   correction DEF-25 forced one level up: identity, not a category that happens
+   to contain the right answer. Focus that leaves the list was always declined
+   correctly, which is why the suite was green through it.
 9. **Motion.** The only animations are HeroUI's own (skeleton shimmer, dialog
    entry, toast slide). Add `motion-reduce:transition-none` to the row action
    opacity transition.
@@ -1191,8 +1378,25 @@ reports its own outcome with the §7.11 toast for the flipped state.
 | Slot | String |
 |---|---|
 | Toggle toast action | `Undo` |
+| Toast action `aria-label` (all Undo toasts) | `Undo — {toast title}` |
 | Undo failure toast | `Couldn’t undo that. Try again.` |
 | Sign out failure toast | `Couldn’t sign you out. Try again.` |
+
+**Why the action has an `aria-label` at all, when its visible word is already
+its name.** `UNDO_WINDOW_MS` is 12s so that several Undo toasts stand at once,
+and every one of their buttons reads `Undo`. A sighted user tabbing forward
+sees which toast they are in; a screen-reader user hears "Undo, button" three
+times with no way to tell a completion-revert from an `added` toast's `Undo`,
+which is a `DELETE` (`docs/QA-REPORT.md` §8, raised against the `Tab` ×2 hazard
+in §6.8). The name is built from the toast's own title — `Undo — Todo “keepme”
+added` — so the subject is the record and the action is the one §7.11 already
+names, rather than a second wording that could drift from it. The visible word
+stays `Undo`; `aria-label` overrides the child text for assistive technology
+only.
+
+This does **not** close the `Tab` ×2 hazard, and §6.8 is where that is
+recorded. It makes the destination audible before it is activated, which is the
+half a name can carry.
 
 ### 7.15 Create and edit Undo
 
@@ -1210,6 +1414,7 @@ review (M-3) for naming nothing.
 | Create toast | `Todo “{title}” added` |
 | Edit toast | `Todo “{title}” updated` |
 | Toast action | `Undo` |
+| Toast action `aria-label` | `Undo — {toast title}` (shared with §7.13) |
 | Create Undo succeeded | `Todo “{title}” removed` |
 | Edit Undo succeeded | `Todo “{title}” restored` |
 | Undo failure | `Couldn’t undo that. Try again.` (shared with §7.13) |
@@ -1470,6 +1675,15 @@ still re-runs the scoped endpoint. This is what §1 already promised. The row's
 current `opacity-60 pointer-events-none` pending treatment should then apply
 only to *delete*, where the row is about to vanish and a stable, dimmed row is
 honest; on a toggle it is now visible latency for its own sake.
+
+> **MI-6, settled: this paragraph is the design, and §4.8 has been corrected to
+> match it.** One amendment, from measurement rather than from taste: the
+> `opacity-60` is dropped for the delete too, and only `pointer-events-none`
+> remains. A row-level `opacity` dims the title with everything else, and on an
+> already-completed row — whose title is `text-muted line-through` — that lands
+> at **2.32:1**, the same number the toggle produced. "A stable, dimmed row is
+> honest" survives as intent; the disabled controls and `aria-busy` carry it,
+> and the title keeps its contrast. See §4.8 for the full reasoning.
 
 *Accessibility:* `aria-checked` flips with the visual state instead of lagging
 behind it, which is strictly more correct for a screen reader. §6.4's "checkbox
