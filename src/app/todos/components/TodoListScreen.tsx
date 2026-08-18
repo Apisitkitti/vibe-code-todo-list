@@ -194,6 +194,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    * armed for the length of that round trip. Unreachable today only because
    * the modal's backdrop covers the toast region and traps focus; a top-placed
    * toast or a non-modal editor would expose it (review r-2).
+   *
+   * **`added` receipts are deliberately not in here** (`docs/DESIGN.md`
+   * §7.15). Everything this map protects is a property of an *armed* toast:
+   * that it can still be pressed, and that what it would do describes a state
+   * the row has since left. A receipt with no action has neither property, so
+   * registering one would buy no protection and would keep the cost — two
+   * toasts alive under one todo id while HeroUI's serialized view transition
+   * works through the close and the add, which is the frame window DEF-25 and
+   * DEF-26 both lived in. The receipt now simply expires on its own.
    */
   const undoToastKeys = useRef(new Map<string, string>());
 
@@ -224,7 +233,33 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
   };
 
   /**
+   * A toast that reports and stops — no action, no token, no bookkeeping.
+   *
+   * This is what an `added` toast is now (`docs/DESIGN.md` §7.15). It is a
+   * separate function rather than a flag on `showUndoableSuccess` because
+   * almost nothing that helper does applies: there is no action to mint a
+   * token for, nothing for the focus rescue to wait on, and no armed control
+   * that a later write has to disarm. Threading a `withUndo: false` through it
+   * would leave every one of those branches to read past.
+   *
+   * **The 12s life is kept**, and that is the one thing it does borrow. The
+   * decision was to remove the action, not the receipt: a create's toast that
+   * suddenly outlived — or died before — the Undo toasts stacked beside it
+   * would be a second change nobody asked for, and §7.17's `hidden by your
+   * filters` sentence is the only account the user ever gets of a row the
+   * filter swallowed, so it is the last one that should get shorter.
+   */
+  const showReceipt = (message: string) => {
+    toast.success(message, { timeout: UNDO_WINDOW_MS });
+  };
+
+  /**
    * Raises the Undo toast and returns the token that names **this** one.
+   *
+   * Two callers remain, and they are the two reversals that put a value back:
+   * a toggle (§7.13) and an edit (§7.15). A create reports through
+   * `showReceipt` instead — its Undo was a `DELETE`, which is the hazard
+   * §6.8 records and this change closes.
    *
    * The token is what the focus rescue waits for (`src/lib/rowFocus.ts`). It
    * has to come back from here rather than be looked up afterwards, because
@@ -332,6 +367,11 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    * `todoMatchesFilters` only ever claims "hidden" when it is certain, and
    * that asymmetry is deliberate: being wrong in this direction costs a
    * missing sentence, being wrong in the other costs a sentence that is a lie.
+   *
+   * Both readings are receipts and neither carries an Undo (§7.15). The
+   * hidden one is the reason the sentence matters more here than anywhere
+   * else: it is the only evidence the user gets that the write happened at
+   * all, since the row it describes is not on screen to speak for itself.
    */
   const createdMessage = (saved: TodoItemData) =>
     todoMatchesFilters(saved, filters)
@@ -349,12 +389,17 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    * The refetch still happens; it is just quiet. The row arrives in its §2
    * place when the data lands, which is the same guarantee the skeleton gave.
    */
+  /*
+    No Undo. The bar's create used to raise one, and pressing it deleted the
+    todo that had just been made (`docs/DESIGN.md` §7.15) — a `DELETE` behind a
+    button reading `Undo`, stacked among reversals that put things back. The
+    receipt still says what happened; the row it names is on screen, and its
+    own Delete button is one press behind a confirm dialog.
+  */
   const handleQuickAdded = (saved: TodoItemData) => {
     reloadSilently();
 
-    showUndoableSuccess(saved.id, createdMessage(saved), () => {
-      void undoSave(saved, null);
-    });
+    showReceipt(createdMessage(saved));
   };
 
   /**
@@ -378,32 +423,46 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     */
     moreOptionsHandoff.current.answer(!isEdit);
 
-    showUndoableSuccess(
-      saved.id,
-      isEdit ? `Todo “${saved.title}” updated` : createdMessage(saved),
-      () => {
-        void undoSave(saved, previous);
-      },
-    );
+    /*
+      The modal serves both writes, and only one of them offers a reversal.
+      An edit's Undo restores the values the form opened on; a create's would
+      have deleted the record, which is the action §7.15 withdrew — so the
+      create reports and stops, exactly as the bar's does.
+
+      Branched on `previous` rather than on `isEdit` so the narrowing is the
+      compiler's: `undoEdit` requires the values it writes back, and reading
+      them off a boolean would need a non-null assertion to say something the
+      type already knows.
+    */
+    if (previous !== null) {
+      showUndoableSuccess(saved.id, `Todo “${saved.title}” updated`, () => {
+        void undoEdit(saved, previous);
+      });
+
+      return;
+    }
+
+    showReceipt(createdMessage(saved));
   };
 
   /**
-   * Undo runs the same endpoints with the same authorization as the write it
-   * reverses. A created todo is deleted; an edited one is written back to the
-   * values it held when the form opened.
+   * Undo runs the same endpoint with the same authorization as the write it
+   * reverses: the edited todo is written back to the values it held when the
+   * form opened.
+   *
+   * **Edit-only since §7.15.** This used to take `previous: … | null` and
+   * branch, with the `null` arm issuing a `DELETE` to reverse a create. That
+   * arm is gone with the create's Undo rather than left unreachable — a
+   * delete path still wired to an Undo helper is the thing a future caller
+   * would find and reuse, and it is precisely the mutation this change exists
+   * to keep out of the toast region.
    */
-  const undoSave = async (saved: TodoItemData, previous: TodoFormValues | null) => {
+  const undoEdit = async (saved: TodoItemData, previous: TodoFormValues) => {
     markPending(saved.id);
 
     try {
-      if (previous) {
-        await updateTodo(saved.id, previous);
-        toast.success(`Todo “${previous.title}” restored`);
-      } else {
-        await deleteTodo(saved.id);
-        toast.success(`Todo “${saved.title}” removed`);
-        removeTodoLocally(saved.id, saved.completed);
-      }
+      await updateTodo(saved.id, previous);
+      toast.success(`Todo “${previous.title}” restored`);
 
       reloadSilently();
     } catch (error) {

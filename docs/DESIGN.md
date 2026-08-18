@@ -1010,8 +1010,9 @@ Do not introduce them without updating this document.
    **When a mutation destroys the control that had focus, focus is moved —
    first back into the list, then onto the action of the toast *that mutation
    raised*.** Which toast is not a detail: the region holds several at once,
-   their action buttons are identical in shape, and an `added` toast's `Undo`
-   is a `DELETE`. Selecting one by stack position rather than by identity cost
+   their action buttons are identical in shape, and at the time this was
+   written an `added` toast's `Undo` was a `DELETE` (it no longer carries one —
+   see the hazard below). Selecting one by stack position rather than by identity cost
    a user an unrelated todo to a single keypress (`docs/QA-REPORT.md` DEF-25),
    and cost focus altogether when react-aria re-homed it off the doomed toast
    the position had named (DEF-26). The implementation carries a per-toast
@@ -1070,25 +1071,53 @@ Do not introduce them without updating this document.
    the contract and the absolute counts are not; expect production to differ by
    one. Nothing here is trapped either way.
 
-   **One cost the count hides.** With a stack of toasts on screen — the
-   ordinary case, since `UNDO_WINDOW_MS` is 12s — `Tab` ×2 from the toggle's
-   `Undo` is the *next toast's* `Undo`, and if that toast is an `added` one its
-   action is a `DELETE`. The rescue no longer puts a destructive control under
-   the user's first keypress (DEF-25), but two forward presses still reach one.
-   That is a property of stacking Undos in a tab-ordered region, not of the
-   rescue, and it is the next thing to look at if this area is revisited.
+   **One cost the count used to hide, and how it was paid.** With a stack of
+   toasts on screen — the ordinary case, since `UNDO_WINDOW_MS` is 12s —
+   `Tab` ×2 from the toggle's `Undo` is the *next toast's* `Undo`. When an
+   `added` toast still carried one, that next `Undo` was a `DELETE`: the stack
+   put a destructive, unconfirmed mutation two deliberate presses from a
+   control the app itself had moved focus to. The rescue had already stopped
+   putting it under the *first* keypress (DEF-25); two forward presses still
+   reached it, and that distance is a property of stacking Undos in a
+   tab-ordered region rather than of the rescue.
 
-   **Each Undo is now named for what it reverses** (§7.13): the accessible name
-   is `Undo — {toast title}`, so `Undo — Todo “keepme” added` announces itself
-   as a `DELETE` of `keepme` before it is pressed. That was the half of the
-   hazard that fell only on screen-reader users, who previously heard "Undo,
-   button" for all of them; a sighted user could always read the toast the
-   focus ring was sitting in. **The hazard itself is unchanged and still
-   deferred.** Two forward presses still reach a destructive control, the
-   distance is still two, and nothing about naming makes it further away — a
-   name is heard on arrival, not before the second `Tab`. Fixing it properly
-   means a roving tabindex over the region or dropping `Undo` from `added`
-   toasts, and both change what a toast stack is.
+   **`added` toasts no longer offer Undo, and that is what closed it** (§7.15).
+   The receipt stays — a create still reports itself, and §7.17's
+   `hidden by your filters` sentence is still the only thing that explains a
+   row the filter swallowed — but the action is gone, so there is no
+   destructive target in the region for two presses to arrive at. The Undos
+   that remain — the toggle's (§7.13) and the edit's (§7.15), which are the
+   only two the app has ever raised — are unchanged: same accessible names,
+   same 12s window. Every one of them now writes a value back rather than
+   removing a record, so `Tab` ×2 reaches a reversal whatever it lands on.
+
+   **Why this rather than a roving tabindex.** Roving was the other candidate,
+   and it addresses the count: it collapses the whole region to one tab stop,
+   so a neighbour's action is no longer two presses away. What it leaves
+   behind is the ambiguity, because the control is still there and still has
+   to be understood — `Undo — Todo “x” added` asks the user to work out that
+   undoing an add is a delete, and it asks that of them at the moment they are
+   deciding whether to press. Removing the control removes the target
+   outright, which is a smaller thing to reason about than a new focus model
+   for the toast region.
+
+   **And it was the least valuable Undo in the app.** What it reverses is a
+   row that was created seconds ago and is on screen; deleting it from the row
+   is one press, behind the confirm dialog §7.6 already requires, with its own
+   receipt. The Undo it replaced offered the same outcome with no confirm and
+   no way back. The two remaining Undos have no such equivalent — a toggle's
+   previous state and an edit's previous values are both things the user
+   cannot reconstruct from what is in front of them — which is why they stay.
+   (A delete has never carried an Undo at all: it is the one mutation that
+   confirms first, precisely because nothing restores it.)
+
+   **Each remaining Undo is still named for what it reverses** (§7.13): the
+   accessible name is `Undo — {toast title}`, so a screen-reader user hears
+   which write a button belongs to rather than "Undo, button" three times.
+   That naming was filed as the half of the hazard a name could carry while
+   the structural question was open; it is still worth having with the hazard
+   closed, because a stack of toggle and edit Undos is still a stack of
+   identical visible words.
 
    Two consequences worth knowing before touching this:
 
@@ -1313,6 +1342,11 @@ Any toast here that carries an action (the Undo toasts, §7.13 and §7.15) is
 subject to §4.10: **the action does not respond to a pointer for the first
 ~400ms.** Read §4.10 before adding another one.
 
+**Not every toast in this table carries one.** `Todo “{title}” added` is a
+receipt and nothing else — it has no action at all (§7.15), and neither do the
+toasts an Undo raises when it succeeds. Only the toggle and the edit offer
+Undo.
+
 | Slot | String |
 |---|---|
 | Confirm cancel (all) | `Cancel` |
@@ -1385,44 +1419,73 @@ reports its own outcome with the §7.11 toast for the flipped state.
 **Why the action has an `aria-label` at all, when its visible word is already
 its name.** `UNDO_WINDOW_MS` is 12s so that several Undo toasts stand at once,
 and every one of their buttons reads `Undo`. A sighted user tabbing forward
-sees which toast they are in; a screen-reader user hears "Undo, button" three
-times with no way to tell a completion-revert from an `added` toast's `Undo`,
-which is a `DELETE` (`docs/QA-REPORT.md` §8, raised against the `Tab` ×2 hazard
-in §6.8). The name is built from the toast's own title — `Undo — Todo “keepme”
-added` — so the subject is the record and the action is the one §7.11 already
-names, rather than a second wording that could drift from it. The visible word
-stays `Undo`; `aria-label` overrides the child text for assistive technology
-only.
+sees which toast they are in; a screen-reader user hears "Undo, button" for
+every one of them with no way to tell a completion-revert from an edit-revert
+(`docs/QA-REPORT.md` §8, written when the worst case in that stack was an
+`added` toast's `Undo`, which was a `DELETE`). The name is built from the
+toast's own title — `Undo — Todo “keepme” updated` — so the subject is the
+record and the action is the one §7.11 already names, rather than a second
+wording that could drift from it. The visible word stays `Undo`; `aria-label`
+overrides the child text for assistive technology only.
 
-This does **not** close the `Tab` ×2 hazard, and §6.8 is where that is
-recorded. It makes the destination audible before it is activated, which is the
-half a name can carry.
+The `Tab` ×2 hazard this was first written against is now closed, by dropping
+the `added` toast's Undo rather than by naming it (§6.8, §7.15). **The naming
+stays**, and not out of sentiment: the remaining Undos still stack, still read
+`Undo` on every button, and a name is still the only thing separating them.
+What changed is that none of the things a name has to describe is destructive
+any more.
 
-### 7.15 Create and edit Undo
+### 7.15 Edit Undo, and why the create has none
 
 Added when the Mutation UX rule became "confirm what cannot be undone": create
-and edit lost their confirm dialogs, so their toasts carry the reversal
-instead. Undo runs the same scoped endpoints as the write it reverses — a
-created todo is deleted, an edited one is written back to the values it held
-when the form opened.
+and edit lost their confirm dialogs, so their toasts carried the reversal
+instead. **The create's half of that has since been withdrawn.** An edit still
+offers Undo, which writes the record back to the values it held when the form
+opened, through the same scoped endpoint as the write it reverses. A create
+reports itself and stops there.
 
 Every string names the record. `Todo removed` on its own was rejected in
 review (M-3) for naming nothing.
 
 | Slot | String |
 |---|---|
-| Create toast | `Todo “{title}” added` |
+| Create toast | `Todo “{title}” added` — **receipt only, no action** |
 | Edit toast | `Todo “{title}” updated` |
-| Toast action | `Undo` |
+| Toast action (edit only) | `Undo` |
 | Toast action `aria-label` | `Undo — {toast title}` (shared with §7.13) |
-| Create Undo succeeded | `Todo “{title}” removed` |
 | Edit Undo succeeded | `Todo “{title}” restored` |
 | Undo failure | `Couldn’t undo that. Try again.` (shared with §7.13) |
+
+**Why the create's Undo went.** It was a `DELETE` wearing the same word, and
+the same shape, as three reversals that put things back. `UNDO_WINDOW_MS` is
+12s precisely so several of these toasts stand at once, in one tab-ordered
+region — so two forward `Tab`s from the toast the app had just moved focus to
+reached a neighbour's Undo, and if that neighbour was an `added` toast the
+press destroyed a record with no confirm and nothing behind it (§6.8, and QA's
+§8 against DEF-25). Naming the buttons made the destination audible on arrival
+but left the distance at two.
+
+The alternative fix was a roving tabindex over the toast region. It shortens
+the walk, and leaves the control — and the control is the part that has to be
+understood: `Undo — Todo “x” added` still asks the reader to infer that
+undoing an add is a delete. Removing it removes the target instead of moving
+it further away, and it costs the user least here of anywhere: the row an
+`added` Undo would delete was created seconds ago and is on screen, so
+deleting it from the row is one press, behind §7.6's confirm, with its own
+receipt. That is a better version of the same escape hatch than the toast was.
+
+Nothing else changed. The toggle's Undo (§7.13) and the edit's keep their
+action, their accessible names and their 12s window — and they are the only
+two, since a delete confirms instead of offering one (§7.6). The distinction
+that decided this is what the action *does*: those two write a value back,
+where the create's removed a record.
 
 An Undo is offered for one write only. A later write to the same todo dismisses
 the earlier toast, so an Undo can never restore a record past a change the user
 made after it. A toggle and a delete dismiss before they start; a save dismisses
 when its write resolves, since it runs behind a modal that covers the toast.
+An `added` receipt is not part of that bookkeeping: it arms nothing, so there
+is nothing about it that can outlive the write it describes.
 
 ### 7.14 Malformed request
 
@@ -1558,7 +1621,9 @@ vocabulary for the same day, exactly as §7.16's `Today` heading does.
 **When the new todo does not match the current filter or search.** It is not
 inserted, and no filter is cleared on the user's behalf — a filtered list must
 always match what a reload of the same URL would show (`docs/PRD.md` US-10).
-The receipt says so instead, and keeps its Undo:
+The receipt says so instead. Like every other `added` toast it carries no
+action (§7.15) — it is the sentence that explains the absence, not a control
+for correcting it:
 
 | Slot | String |
 |---|---|
