@@ -122,9 +122,15 @@ export const TodoFormModal = ({
     // the `try` would report the list's own failures as a failed save
     // (review r-4).
     try {
+      /*
+        `form` regardless of how the modal was reached (backlog #5). `More
+        options` opens it from the quick-add bar, but the todo is still
+        captured through the full form — the measurement is of the surface the
+        user filled in, not of the button they arrived by.
+      */
       saved = isEdit
         ? await updateTodo(todo.id, values)
-        : await createTodo(values);
+        : await createTodo(values, "form");
     } catch (error) {
       const fieldErrors = readFieldErrors(error);
 

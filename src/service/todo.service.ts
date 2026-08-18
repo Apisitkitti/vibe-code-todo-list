@@ -1,6 +1,11 @@
 import type { TodoFormValues } from "@/app/todos/components/form";
 import { http } from "@/lib/http";
-import type { TodoItemData, TodoListFilters, TodoListResult } from "@/lib/todo";
+import type {
+  TodoCreatedVia,
+  TodoItemData,
+  TodoListFilters,
+  TodoListResult,
+} from "@/lib/todo";
 
 /**
  * Transport only (`docs/CONVENTIONS.md` → Services): each function calls the
@@ -23,8 +28,21 @@ export const getTodoList = async (filters: TodoListFilters): Promise<TodoListRes
   return response.data;
 };
 
-export const createTodo = async (values: TodoFormValues): Promise<TodoItemData> => {
-  const response = await http.post<TodoItemData>(TODOS_ENDPOINT, values);
+/**
+ * `createdVia` is required here and optional on the wire, which is the right
+ * way round: the API stays usable by a caller that does not participate in the
+ * measurement, while every caller *in this app* is made to say which surface
+ * it is. A default here would let a new capture surface be added and quietly
+ * counted as an existing one.
+ */
+export const createTodo = async (
+  values: TodoFormValues,
+  createdVia: TodoCreatedVia,
+): Promise<TodoItemData> => {
+  const response = await http.post<TodoItemData>(TODOS_ENDPOINT, {
+    ...values,
+    createdVia,
+  });
 
   return response.data;
 };

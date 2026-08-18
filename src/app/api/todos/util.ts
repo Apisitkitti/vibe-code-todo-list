@@ -1,7 +1,12 @@
 import type { Prisma, Todo } from "@/generated/prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import type { TodoItemData, TodoListResult } from "@/lib/todo";
+import {
+  CREATED_VIA_VALUES,
+  type TodoCreatedVia,
+  type TodoItemData,
+  type TodoListResult,
+} from "@/lib/todo";
 
 /**
  * Everything the `/api/todos` handlers share: turning rows into the response
@@ -93,6 +98,44 @@ export const mentionsCompleted = (body: unknown): boolean => {
 /** `request.json()` throws on a malformed body; the caller gets `null`. */
 export const readJsonBody = async (request: Request): Promise<unknown> => {
   return await request.json().catch(() => null);
+};
+
+/**
+ * The body's `createdVia`, if it carried one.
+ *
+ * Parsed on its own rather than added to `todoFormSchema`, because it is not a
+ * field of the todo: it records the act of creating one. Putting it in the
+ * form schema would hand it to `TodoForm`, to `TODO_FIELD_NAMES` and to the
+ * field-error mapping, none of which should ever see it — and a field error
+ * against a key with no input to attach to is an error the user cannot act on.
+ *
+ * Three answers, deliberately distinct, because two of them are not the same
+ * mistake:
+ *
+ *  - a member → record it;
+ *  - **absent** → `undefined`, and the row stores `NULL`. A caller that does
+ *    not participate still gets its todo saved; this is a measurement, and a
+ *    measurement is never a good enough reason to refuse somebody's write;
+ *  - **present and not a member** → `"invalid"`, and the route answers `400`.
+ *    Dropping it silently would be the half-applied write
+ *    `docs/CONVENTIONS.md` rules out — a `201` that looks like it recorded
+ *    what it was told and did not.
+ *
+ * The `"invalid"` sentinel rather than a thrown error or a `null` mirrors
+ * `parseDueDate` in `@/lib/todo`, which distinguishes the same three cases for
+ * the same reason.
+ */
+export const readCreatedVia = (
+  body: unknown,
+): TodoCreatedVia | undefined | "invalid" => {
+  if (typeof body !== "object" || body === null) return undefined;
+  if (!("createdVia" in body)) return undefined;
+
+  const value = (body as { createdVia: unknown }).createdVia;
+
+  return (CREATED_VIA_VALUES as readonly unknown[]).includes(value)
+    ? (value as TodoCreatedVia)
+    : "invalid";
 };
 
 /**

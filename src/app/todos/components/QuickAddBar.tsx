@@ -68,7 +68,9 @@ export const QuickAddBar = ({
     // Only the write is inside the `try`. Handing the result upward from in
     // here would report the list's own failures as a failed create (r-4).
     try {
-      saved = await createTodo(values);
+      // The bar is the quick-add surface by definition; nothing about a
+      // request can be inferred back to it, so it says so (backlog #5).
+      saved = await createTodo(values, "quickAdd");
     } catch (error) {
       const fieldErrors = readFieldErrors(error);
 
