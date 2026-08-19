@@ -27,6 +27,7 @@ A personal todo web app with individual accounts. A user signs up with a name, e
 
   Priority sits *below* the due date deliberately: a low-priority todo due today outranks a high-priority one due next month. Ranking priority first would return the due date to being decoration, which is the defect this order exists to remove. There is no user-facing control over this order (§4).
 - **User's today** — the calendar day of the user's own device clock. Which side of "today" a due date falls on is decided against that day, not against the server's.
+- **Next week** — the user's today plus **seven days**: the same weekday, one week on. Not "the start of next week", which cannot be computed from anything this app knows — a week's first day is a locale fact (Sunday in the US, Monday under ISO, Saturday in much of the Gulf) and this app has no locale setting, only a clock. It is also ambiguous on the day it matters: pressing it *on* the first day of the week either means today or means seven days away. `+7` is the same arithmetic as *tomorrow* with a different number, lands on a weekday the user can name unaided, and never resolves to today.
 - **Due-date section** — one of five named runs of the default list order. A todo belongs to exactly one:
 
   | Section | Heading | Contains |
@@ -287,6 +288,46 @@ Not yet built. It is the follow-up to US-06's sections and ships as its own chan
 - Given I have zero todos, When the empty state (US-11) renders, Then the line shows the date alone and does not imply missing data.
 - Given the line renders, When it is inspected with assistive technology, Then it is plain text, not a heading and not a control — it summarises the sections, and the sections (US-06) remain the place overdue work is actually conveyed.
 
+### US-13 — Reschedule from the row
+
+As a signed-in user, I want to move a todo's due date from the row itself, so that keeping my dates honest costs one press instead of a modal.
+
+Changing only the due date is the most common single edit in daily use, and today it costs the full edit modal, a segmented date picker and a dialog. So people don't, and their due dates go stale — and a stale due date is worse than none (`docs/PM-PROPOSAL.md` §3 #5).
+
+**Acceptance criteria — the control**
+
+- Given a todo row, When I look at its actions, Then a third icon-only control sits beside Edit and Delete, named `Reschedule "{title}"`, and it opens a menu of `Today`, `Tomorrow`, `Next week`, `Pick a date…` and `Clear due date`.
+- Given the menu is open, When I read the three quick days, Then each shows the calendar date it resolves to, so `Next week` states its meaning before I press it rather than after.
+- Given a todo with no due date, When the menu opens, Then `Clear due date` is present but unavailable — the menu is the same shape on every row.
+- Given I choose `Pick a date…`, When the menu closes, Then the existing edit modal (US-08) opens on that todo. There is no second date picker.
+
+**Acceptance criteria — the dates**
+
+- Given I choose `Today`, When the write succeeds, Then `dueAt` is the user's today (§2) and the row reads `Today`, wherever in the world I am — including east of UTC, where the local day is ahead of the server's.
+- Given I choose `Tomorrow` or `Next week`, When the write succeeds, Then `dueAt` is the user's today plus one or plus seven days (§2), and the row reads `Tomorrow` or that date.
+- Given I choose `Clear due date`, When the write succeeds, Then `dueAt` is `null` and the row shows no date at all.
+- Given any of these, When the list re-renders, Then the todo sits in the due-date section (§2) its new date puts it in, in its default-order place — which means the change is read back from the server rather than guessed locally.
+- Given I reload the page, When the list renders, Then the new date is still there.
+
+**Acceptance criteria — the write**
+
+- Given a reschedule, When the request is sent, Then it goes to its own route, `PATCH /api/todos/[id]/due`, whose body is `{ dueAt: string | null }` and nothing else — a reschedule can never carry a title, a note, a priority or a completion, and a body that tries is rejected with nothing written.
+- Given a reschedule, When the write runs, Then it is scoped by both `id` and my `userId` in the same statement, and an id belonging to another user returns not-found with that user's row unchanged (NFR-01) — including when the value being written is `null`.
+- Given the date is not a real day (`2026-02-31`), When the request is validated, Then it is rejected and nothing is written; the date is never rolled forward into a day I did not choose.
+
+**Acceptance criteria — reversal**
+
+- Given a reschedule, When it succeeds, Then no confirmation was asked for and the success toast carries `Undo` (`docs/CONVENTIONS.md` → Mutation UX: confirm what cannot be undone).
+- Given I press `Undo`, When the write succeeds, Then the todo holds **the exact date it held before that press** — including no date at all, when it had none — and a toast reports the restored value with no further Undo. Undo goes through the same route with the same authorization as the write it reverses.
+- Given I press `Undo` and the write fails, When the error returns, Then the todo keeps the date the reschedule gave it and the toast reads "Couldn’t undo that. Try again."
+- Given a later write to the same todo, When it starts, Then the outstanding reschedule Undo is dismissed, so an Undo can never reach past a change I made after it.
+
+**Acceptance criteria — keyboard and target size**
+
+- Given I am driving from the keyboard, When I reach the reschedule control, Then Enter, Space or ArrowDown open the menu, arrows and typeahead move through it, Escape closes it without writing, and focus returns to the control.
+- Given a reschedule moves the row into a different due-date section, When the list re-renders, Then focus is on that same row's reschedule control — not lost to the page, and not moved into the toast. The row is still on screen, so there is nothing to rescue me from.
+- Given a 320px viewport (NFR-05), When a row renders, Then all three actions are at least 44×44 with at least 8px between them, the page does not scroll horizontally, and the title is still legible rather than crushed. The actions cluster takes a line of its own when the row is too narrow to hold everything on one.
+
 ---
 
 ## 4. Scope boundaries
@@ -298,6 +339,7 @@ Not yet built. It is the follow-up to US-06's sections and ships as its own chan
 - Create, read, update, delete todos, scoped to the session user.
 - Todo fields exactly as in the schema: title, note, priority, completed, dueAt.
 - Toggle complete/incomplete.
+- Reschedule a todo's due date from the row (US-13), through its own scoped route.
 - Delete with a confirmation dialog.
 - Filter by status (all/active/completed) and by priority (all/low/medium/high), combinable, reflected in the URL.
 - Due-date-aware default list order, with the list cut into `Overdue` / `Today` /
@@ -394,6 +436,7 @@ Not yet built. It is the follow-up to US-06's sections and ships as its own chan
 | US-10 | Filter by status and priority | Should |
 | US-11 | Empty state | Should |
 | US-12 | Dated list header | Should |
+| US-13 | Reschedule from the row | Should |
 
 Non-functional priorities: NFR-01, NFR-02, NFR-03, NFR-07, NFR-10 are **Must**. NFR-04, NFR-05, NFR-08 are **Must**. NFR-06 (dark mode) and NFR-09 (performance) are **Should**.
 
