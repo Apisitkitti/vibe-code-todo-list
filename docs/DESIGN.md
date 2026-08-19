@@ -1593,6 +1593,35 @@ polish:
 | Section heading: due later | `Upcoming` |
 | Section heading: no due date | `No date` |
 | Section heading: completed | `Completed` |
+| Section heading, rendered | `{heading} · {count}` — e.g. `Overdue · 3`, `Completed · 214` |
+
+**The heading has a voice and a count.** It keeps the `<h2>` and the `body-sm`
+size, and drops `color="muted"`, so it sits at `--foreground` with
+`typography--h2`'s semibold weight. It had to: at `body-sm` *and* `--muted` it
+was the same size and the same token as the due dates in the rows beneath it —
+measured identical, pixel for pixel, at **5.60:1 light / 6.75:1 dark** on the
+Card — so a section name was indistinguishable from row metadata. After:
+**17.72:1 light / 17.27:1 dark**. Contrast rises, so nothing in §6.6 is at
+risk; it is measured in `e2e/a11y-contrast.spec.ts` anyway, and measured
+*against the due date* rather than against a floor, because a floor would have
+passed on the defect too.
+
+(4.83:1 is the figure §8.4 and §4.8 quote for this token. It is stale: DEF-15's
+`--muted` correction moved light to 5.60:1. Nothing about the argument changes —
+the two were equal, which was the whole complaint.)
+
+The count uses `·`, per §7.18's punctuation note, and is rendered
+**`aria-hidden`, so the accessible name stays exactly the bare string above**.
+The `<ul>` under each heading already reports its own size to assistive
+technology — "list, 3 items" — natively and more precisely than a numeral
+behind a middle dot, which a screen reader may voice as punctuation or swallow
+depending on verbosity. Putting it in the name buys a duplicate of something AT
+already has and pays for it in heading-to-heading navigation noise. The count
+is a sighted scanning aid; the list semantics are the AT answer, and the two
+cannot drift because both are read from the same array.
+
+Both halves are pinned in `e2e/grouping.spec.ts` — the visible text *and* the
+accessible name — because either assertion alone passes on the wrong markup.
 
 ### 7.17 Quick-add bar
 

@@ -16,6 +16,24 @@ import { TodoRow } from "./TodoRow";
  */
 const GROUP_HEADING_CLASS = "px-2 pt-1 text-sm leading-6";
 
+/**
+ * The count clause appended to each heading — `Overdue · 3`, `Completed · 214`
+ * (`docs/DESIGN.md` §7.16). `·` per §7.18's punctuation note.
+ *
+ * **`aria-hidden`, deliberately, so the accessible name stays exactly the
+ * §7.16 string.** The `<ul>` under each heading already reports its own size
+ * to assistive technology — "list, 3 items" — natively and more precisely than
+ * a numeral behind a middle dot, which a screen reader may read out as
+ * punctuation or swallow depending on its verbosity setting. Putting it in the
+ * name buys a duplicate reading of something AT already has, and pays for it
+ * by making heading-to-heading navigation noisier. The count is a sighted
+ * scanning aid; the list semantics are the AT answer, and they cannot drift
+ * apart because both come from the same array.
+ */
+const GroupCount = ({ count }: { count: number }) => {
+  return <span aria-hidden="true">{` · ${count}`}</span>;
+};
+
 export interface TodoGroupedListProps {
   todos: TodoItemData[];
   pendingTodoIds: ReadonlySet<string>;
@@ -63,12 +81,17 @@ export const TodoGroupedList = ({
             <>
               {/* Between sections only — never above the first. */}
               {index > 0 ? <Separator className="my-1" /> : null}
-              <Typography.Heading
-                level={2}
-                color="muted"
-                className={GROUP_HEADING_CLASS}
-              >
+              {/*
+                No `color="muted"`. The heading was the same `body-sm` size
+                *and* the same token as the due dates in the rows beneath it —
+                both 4.83:1 on the Card — so a section name was visually
+                indistinguishable from row metadata. At `--foreground` the
+                `typography--h2` semibold weight finally has something to sit
+                against. Contrast rises, so there is no a11y exposure here.
+              */}
+              <Typography.Heading level={2} className={GROUP_HEADING_CLASS}>
                 {group.heading}
+                <GroupCount count={group.todos.length} />
               </Typography.Heading>
             </>
           ) : null}

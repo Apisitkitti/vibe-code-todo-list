@@ -166,6 +166,83 @@ test.describe("§8.4.2 — the priority chip label stays readable at every level
   });
 });
 
+/**
+ * §7.16 — the section heading has a voice of its own.
+ *
+ * It used to be `body-sm` at `color="muted"`, which is the same size *and* the
+ * same token as the due dates in the rows beneath it — both 4.83:1 on the
+ * Card — so a heading was visually indistinguishable from row metadata.
+ * Dropping `color="muted"` puts it at `--foreground`.
+ *
+ * Contrast rises, so there is no a11y exposure; it is measured anyway, and
+ * against the due date rather than only against a floor. A floor alone would
+ * pass just as happily on the state this change exists to leave behind — the
+ * defect was never that the heading was unreadable, it was that it read as the
+ * same kind of thing as the text below it.
+ */
+test.describe("§7.16 — the section heading is not the same ink as a due date", () => {
+  test("the heading outreads the due date it stands over, in both themes", async ({
+    signedIn,
+    todos,
+  }) => {
+    const day = (offset: number) => {
+      const date = new Date();
+
+      date.setDate(date.getDate() + offset);
+
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    };
+
+    for (const [title, dueAt] of [
+      ["upcoming heading row", day(7)],
+      ["undated heading row", ""],
+    ] as const) {
+      const response = await signedIn.request.post("/api/todos", {
+        data: { title, note: "", priority: "medium", dueAt },
+      });
+
+      expect(response.status()).toBe(201);
+    }
+
+    await signedIn.reload();
+
+    const heading = signedIn
+      .locator("main")
+      .getByRole("heading", { level: 2, name: "Upcoming", exact: true });
+    /*
+      The `Typography` **inside** the `<time>`, not the `<time>` itself. The
+      wrapper carries no `color` of its own and inherits `--foreground`, so
+      measuring it reads the heading's ink twice and reports the two as equal —
+      which is exactly the false pass this comparison exists to avoid, and it
+      is the reading this test produced before the locator was scoped down.
+    */
+    const dueDate = todos.row("upcoming heading row").locator("time > *");
+
+    await expect(heading).toBeVisible();
+    await expect(dueDate).toBeVisible();
+
+    for (const theme of THEMES) {
+      await setTheme(signedIn, theme);
+
+      const headingReading = await measureContrast(heading);
+      const dateReading = await measureContrast(dueDate);
+
+      await expectReadable(heading, "section heading", theme);
+
+      /*
+        The claim, stated as a comparison rather than as a floor: the heading
+        is no longer the muted token the row metadata beneath it uses.
+      */
+      expect
+        .soft(
+          headingReading.ratio,
+          `section heading [${theme}] ${headingReading.ratio.toFixed(2)}:1 vs due date ${dateReading.ratio.toFixed(2)}:1 — ${formatRgb(headingReading.foreground)} on ${formatRgb(headingReading.background)}`,
+        )
+        .toBeGreaterThan(dateReading.ratio + 1);
+    }
+  });
+});
+
 test.describe("the row a mutation is working on stays readable", () => {
   /**
    * QA §A4: completing a row applied `text-muted line-through` optimistically

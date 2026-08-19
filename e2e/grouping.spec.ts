@@ -9,6 +9,7 @@ import {
   TOGGLE_FAILURE,
   UPCOMING_HEADING,
   markedCompleteToast,
+  sectionHeadingText,
 } from "./support/copy";
 import {
   TODO_STATUS_URL,
@@ -94,10 +95,10 @@ test.describe("due-date sections", () => {
 
     // Real `<h2>`s, not styled text — the navigable structure §8.4.3 asked for.
     await expect(groupHeadings(page)).toHaveText([
-      OVERDUE_HEADING,
-      TODAY_HEADING,
-      UPCOMING_HEADING,
-      NO_DATE_HEADING,
+      sectionHeadingText(OVERDUE_HEADING, 1),
+      sectionHeadingText(TODAY_HEADING, 1),
+      sectionHeadingText(UPCOMING_HEADING, 1),
+      sectionHeadingText(NO_DATE_HEADING, 1),
     ]);
 
     await expect(
@@ -112,6 +113,58 @@ test.describe("due-date sections", () => {
     await expect(
       section(page, NO_DATE_HEADING).getByRole("listitem"),
     ).toHaveText([/No date at all/]);
+  });
+
+  /**
+   * §7.16 — the heading's count clause, and the one decision behind it.
+   *
+   * The count is rendered `aria-hidden`, so a heading's **accessible name** is
+   * still the bare §7.16 string while its **text** carries `· N`. Both halves
+   * are asserted here, because each one alone would pass on the wrong markup:
+   * the text assertion alone would pass with the count in the name, and the
+   * name assertion alone would pass with no count rendered at all.
+   *
+   * The reasoning: the `<ul>` under each heading already reports its own size
+   * to assistive technology, natively and more precisely than a numeral behind
+   * a middle dot. So the list count is asserted too — it is the thing the
+   * aria-hidden decision leans on, and if it ever stopped matching the visible
+   * number, the decision would be wrong rather than merely undocumented.
+   */
+  test("a section heading counts its rows without putting the count in its name", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await seedTodos(page, [
+      { title: "First overdue", dueAt: localDay(-3) },
+      { title: "Second overdue", dueAt: localDay(-2) },
+      { title: "Third overdue", dueAt: localDay(-1) },
+      { title: "Undated chore" },
+    ]);
+
+    await expect(todos.row("Third overdue")).toBeVisible();
+
+    // Visible text: the name, the separator and the size of the section.
+    await expect(groupHeadings(page)).toHaveText([
+      sectionHeadingText(OVERDUE_HEADING, 3),
+      sectionHeadingText(NO_DATE_HEADING, 1),
+    ]);
+
+    /*
+      Accessible name: the bare string. `getByRole` computes the name, and an
+      `aria-hidden` subtree is excluded from it — so this locator resolving at
+      all is the assertion.
+    */
+    await expect(
+      page.getByRole("heading", { name: OVERDUE_HEADING, exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("heading", { name: sectionHeadingText(OVERDUE_HEADING, 3) }),
+    ).toHaveCount(0);
+
+    // What the count duplicates, and the reason it may stay out of the name.
+    await expect(
+      section(page, OVERDUE_HEADING).getByRole("listitem"),
+    ).toHaveCount(3);
   });
 
   /**
@@ -166,8 +219,8 @@ test.describe("due-date sections", () => {
     // Done work leaves the urgency sections entirely — an overdue todo that is
     // finished has nothing left to be urgent about.
     await expect(groupHeadings(page)).toHaveText([
-      NO_DATE_HEADING,
-      COMPLETED_HEADING,
+      sectionHeadingText(NO_DATE_HEADING, 1),
+      sectionHeadingText(COMPLETED_HEADING, 1),
     ]);
     await expect(
       section(page, COMPLETED_HEADING).getByRole("listitem"),
@@ -194,7 +247,10 @@ test.describe("due-date sections", () => {
       { title: "Undated chore" },
     ]);
 
-    const headingsBefore = [OVERDUE_HEADING, NO_DATE_HEADING];
+    const headingsBefore = [
+      sectionHeadingText(OVERDUE_HEADING, 1),
+      sectionHeadingText(NO_DATE_HEADING, 1),
+    ];
 
     await expect(groupHeadings(page)).toHaveText(headingsBefore);
 

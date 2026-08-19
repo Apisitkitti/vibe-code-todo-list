@@ -170,6 +170,19 @@ export const TODAY_HEADING = "Today";
 export const UPCOMING_HEADING = "Upcoming";
 export const NO_DATE_HEADING = "No date";
 export const COMPLETED_HEADING = "Completed";
+/**
+ * §7.16 — a heading's **rendered text**, which carries the section count:
+ * `Overdue · 3`. Separator is `·` per §7.18's punctuation note.
+ *
+ * Deliberately separate from the constants above, and both are needed. The
+ * count is `aria-hidden`, so a heading's *accessible name* is still the bare
+ * string — `getByRole("heading", { name: OVERDUE_HEADING })` keeps matching —
+ * while `toHaveText` reads the text content and sees the count. Asserting the
+ * wrong one of the two would pass for the wrong reason.
+ */
+export const sectionHeadingText = (heading: string, count: number) =>
+  `${heading} · ${count}`;
+
 export const GROUP_HEADINGS_IN_ORDER = [
   OVERDUE_HEADING,
   TODAY_HEADING,
