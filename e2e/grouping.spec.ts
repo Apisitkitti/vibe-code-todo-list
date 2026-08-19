@@ -230,6 +230,95 @@ test.describe("due-date sections", () => {
     await expectNoFalseSuccess(todos.toasts, markedCompleteToast("Overdue chore"));
   });
 
+  /**
+   * §8.5 and `src/lib/todoGroups.ts` — a completed row goes quiet.
+   *
+   * The grouping module already says a completed todo's date "has nothing left
+   * to say", and the row used to render it anyway, so a finished task sat
+   * under `Completed` still announcing a day. Its priority is history for the
+   * same reason. Both go; the checkbox, the struck-through title, the `✎` note
+   * marker and the actions all stay.
+   *
+   * An overdue row is the case worth using: its date was the loudest thing on
+   * the row (`⚠` plus the warning tint) right up until it was finished.
+   */
+  test("a completed row drops its priority chip and its due date", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await seedTodos(page, [
+      { title: "Overdue chore", dueAt: localDay(-3), priority: "high" },
+      { title: "Undated chore" },
+    ]);
+
+    const row = todos.row("Overdue chore");
+
+    // Active: chip and date both on the row, the date flagged overdue.
+    await expect(row.locator('[data-slot="chip"]')).toHaveCount(1);
+    await expect(row.locator("time")).toHaveCount(1);
+    await expect(row).toContainText("High");
+
+    await todos.toggle("Overdue chore", true);
+
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast("Overdue chore") }),
+    ).toBeVisible();
+    await expect(
+      section(page, COMPLETED_HEADING).getByRole("listitem"),
+    ).toHaveText([/Overdue chore/]);
+
+    // Quiet: no chip, no `<time>`, and no `Overdue —` left anywhere on it.
+    await expect(row.locator('[data-slot="chip"]')).toHaveCount(0);
+    await expect(row.locator("time")).toHaveCount(0);
+    await expect(row).not.toContainText("High");
+    await expect(row).not.toContainText("Overdue —");
+
+    /*
+      What must NOT go with them. Completion is carried by `aria-checked` and
+      `line-through` (§6.4), and the note marker and the actions are how the
+      row is still usable — a quiet row is not a disabled one.
+    */
+    await expect(todos.checkbox("Overdue chore")).toBeChecked();
+    await expect(row.getByText("Overdue chore")).toHaveCSS(
+      "text-decoration-line",
+      "line-through",
+    );
+    await expect(todos.editButton("Overdue chore")).toBeAttached();
+    await expect(todos.deleteButton("Overdue chore")).toBeAttached();
+  });
+
+  /** The `✎` marker is the one piece of row metadata a completion keeps. */
+  test("a completed row keeps its note marker", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    const response = await page.request.post("/api/todos", {
+      data: {
+        title: "Noted chore",
+        note: "the detail that outlives the due date",
+        priority: "medium",
+        dueAt: localDay(2),
+      },
+    });
+
+    expect(response.status()).toBe(201);
+    await page.reload();
+
+    const row = todos.row("Noted chore");
+
+    await expect(row.getByText("Has a note")).toBeAttached();
+
+    await todos.toggle("Noted chore", true);
+
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast("Noted chore") }),
+    ).toBeVisible();
+
+    await expect(row.locator("time")).toHaveCount(0);
+    await expect(row.locator('[data-slot="chip"]')).toHaveCount(0);
+    await expect(row.getByText("Has a note")).toBeAttached();
+  });
+
   test("priority breaks the tie inside a section, high first", async ({
     signedIn: page,
     todos,

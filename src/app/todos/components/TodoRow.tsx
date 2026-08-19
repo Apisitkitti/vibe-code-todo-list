@@ -196,10 +196,27 @@ export const TodoRow = ({
           {todo.title}
         </Typography>
         <div className="flex shrink-0 items-center gap-2">
-          <PriorityChip priority={todo.priority} />
-          {todo.dueAt ? (
-            <TodoDueDate dueAt={todo.dueAt} completed={todo.completed} />
-          ) : null}
+          {/*
+            A completed row goes quiet: no priority chip and no due date.
+            `src/lib/todoGroups.ts` already argues the date half — "a completed
+            todo is done, so its date has nothing left to say" — and this is
+            the row finally agreeing with it, instead of filing a finished task
+            under `Completed` while it announces `Aug 12`. The priority half is
+            §8.5: once a todo is done its priority is history and it is
+            competing for attention with the active rows above it.
+
+            §6.4 is unaffected. Completion is carried by the checkbox's
+            `aria-checked` and by `line-through` on the title, never by the
+            chip or the date, so nothing that carried meaning has been removed.
+            The `✎` note marker stays — a note is still there to read — and so
+            do the actions.
+          */}
+          {todo.completed ? null : (
+            <>
+              <PriorityChip priority={todo.priority} />
+              {todo.dueAt ? <TodoDueDate dueAt={todo.dueAt} /> : null}
+            </>
+          )}
           {todo.note ? (
             <>
               <span aria-hidden="true" className="text-muted">

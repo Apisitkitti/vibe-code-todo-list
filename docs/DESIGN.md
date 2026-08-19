@@ -576,10 +576,30 @@ break up.
 ```
 
 Format: `Today`, `Tomorrow`, `Yesterday`, otherwise `MMM d` (same year) or
-`MMM d, yyyy`. **Overdue and not completed:** prefix with `⚠` (aria-hidden) and
+`MMM d, yyyy`. **Overdue:** prefix with `⚠` (aria-hidden) and
 use `className="text-[var(--warning-soft-foreground)]"` on the `Typography`,
 plus a visually-hidden `Overdue —` before the date. If `dueAt` is null render
 nothing — no "No due date" placeholder, which is noise.
+
+**A completed row goes quiet: no priority chip and no due date** (§8.5, taken,
+and widened from the chip to the date). `src/lib/todoGroups.ts` already argues
+the date half — *"a completed todo is done, so its date has nothing left to
+say"* — and the row rendered it anyway, so a finished task sat under
+`Completed` announcing `Aug 12`. The priority goes for the same reason: once a
+todo is done its level is history and it is competing for attention with the
+active rows above it.
+
+The overdue treatment therefore no longer needs a "and not completed" clause,
+and `TodoDueDate` no longer takes a `completed` prop: a date that is not drawn
+cannot be drawn as overdue, and keeping the prop would leave a second, weaker
+answer to the same question in the code.
+
+**Kept, deliberately:** the checkbox, the struck-through muted title, the `✎`
+note marker (a note is still there to read) and both actions. §6.4 is
+unaffected — completion is carried by `aria-checked` and `line-through`, never
+by the chip or the date, so nothing that carried meaning was removed. Pinned in
+`e2e/grouping.spec.ts`, which asserts the absences *and* every one of the
+retentions.
 
 **Actions.** Two icon-only buttons. HeroUI ships no pencil or trash icon
 (the icon set is `IconChevronDown/Up/Left/Right`, `IconPlus`, `IconMinus`,
@@ -1915,6 +1935,11 @@ priority is history and it is competing for attention with the active rows above
 it. Hiding it on completed rows only removes a chip from an already-struck-out
 title, and §6.4 is unaffected because completion is carried by the checkbox
 state and the `line-through`, not by the chip.
+
+> **Done, and widened by one field: the due date goes with it.** The argument
+> given here for the chip was already written down for the date, in
+> `src/lib/todoGroups.ts` — "a completed todo is done, so its date has nothing
+> left to say" — and the row rendered the date anyway. §4.4 is the spec.
 
 ### 8.6 What I would ask PM and QA
 
