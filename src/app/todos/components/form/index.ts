@@ -1,6 +1,21 @@
-export { TodoForm, type TodoFormProps } from "./TodoForm";
-export { QuickAddForm, type QuickAddFormProps } from "./QuickAddForm";
-export { readFieldErrors } from "./fieldErrors";
+/**
+ * The forms' one public entry point. Each form owns a folder; this barrel is
+ * what lets the rest of the app import from `./form` without knowing that
+ * layout, so a form can gain a file — a schema, a parser, a sub-component —
+ * without every consumer being edited.
+ *
+ * There is deliberately no barrel *inside* each form folder. This file is the
+ * only consumer of those paths, so an inner `index.ts` would re-export two or
+ * three names for exactly one reader — ceremony, and a second place a name can
+ * go missing from.
+ */
+export { TodoForm, type TodoFormProps } from "./TodoForm/TodoForm";
+export { readFieldErrors } from "./TodoForm/fieldErrors";
+
+export {
+  QuickAddForm,
+  type QuickAddFormProps,
+} from "./QuickAddForm/QuickAddForm";
 
 /**
  * Re-exported, not re-declared: the schema itself lives at
