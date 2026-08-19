@@ -1,4 +1,13 @@
-import { test as base, expect, type Locator, type Page } from "@playwright/test";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
+
+import {
+  test as base,
+  expect,
+  type Locator,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 
 import { deleteTestAccount, disconnectDatabase } from "./database";
 import {
@@ -43,6 +52,90 @@ const PASSWORD = "e2e-playwright-pw";
 const RUN_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 let accountIndex = 0;
+
+/**
+ * Header naming the test that owns the page, stamped on every request the
+ * browser makes.
+ *
+ * Deliberately *not* paired with a logging hook inside the app. Adding one
+ * would mean matching `/api/:path*` in `src/proxy.ts`, which runs the proxy on
+ * every API request in production for the rest of its life to serve a test
+ * concern — instrumentation that ships to users needs a better reason than
+ * this. It is not needed: Playwright records request headers in the trace, and
+ * `trace: "retain-on-failure"` means every request around a failure already
+ * carries the name of the test that issued it. `requestLog` below is the
+ * cross-test view, which the trace (one file per test) cannot give.
+ */
+const E2E_TEST_HEADER = "x-e2e-test";
+
+/**
+ * One chronological line per API response, across the whole run, each naming
+ * the test that owns it.
+ *
+ * This is the artefact the 2026-08-18 investigation did not have. The server
+ * log carried `PATCH /api/todos/<id>/status 404` inside a test that only ever
+ * edits, and with nothing but timestamps to go on, "which test issued it" was
+ * a guess about a window. Here the owner is on the line.
+ *
+ * Appended rather than buffered so a run that is killed, or one that hangs,
+ * still leaves everything up to that moment on disk.
+ */
+const REQUEST_LOG_PATH = resolve(process.cwd(), "test-results", "e2e-requests.log");
+
+const recordRequest = (line: string) => {
+  mkdirSync(dirname(REQUEST_LOG_PATH), { recursive: true });
+  appendFileSync(REQUEST_LOG_PATH, `${line}\n`);
+};
+
+/**
+ * Watches API traffic only. Page and asset requests are the overwhelming bulk
+ * of a run and would bury the handful of lines that ever matter.
+ */
+const attachRequestLog = (page: Page, testName: string) => {
+  const isApi = (url: string) => new URL(url).pathname.startsWith("/api/");
+
+  page.on("response", (response) => {
+    const url = response.url();
+
+    if (!isApi(url)) return;
+
+    const { pathname, search } = new URL(url);
+
+    recordRequest(
+      `${new Date().toISOString()} ${response.status()} ${response.request().method()} ${pathname}${search} <- ${testName}`,
+    );
+  });
+
+  /*
+    A request that never gets a response is the interesting one: it is the
+    shape a page torn down mid-write makes, and it is invisible to the
+    `response` handler above.
+  */
+  page.on("requestfailed", (request) => {
+    const url = request.url();
+
+    if (!isApi(url)) return;
+
+    const { pathname, search } = new URL(url);
+
+    recordRequest(
+      `${new Date().toISOString()} FAILED ${request.method()} ${pathname}${search} <- ${testName} (${request.failure()?.errorText ?? "unknown"})`,
+    );
+  });
+};
+
+/**
+ * `undo-semantics.spec.ts:332 [chromium-desktop] three Undos standing …`
+ *
+ * File and line first, because that is the form a Playwright failure is
+ * reported in, so a log line pastes straight into a `--grep` or a bug report.
+ * Header values must be ASCII and the copy deck uses curly quotes (`“ ”`), so
+ * anything outside that range becomes `?` rather than breaking the request.
+ */
+const attributionName = (testInfo: TestInfo): string =>
+  `${basename(testInfo.file)}:${testInfo.line} [${testInfo.project.name}] ${testInfo.title}`
+    .replace(/[^\x20-\x7e]/g, "?")
+    .slice(0, 200);
 
 export interface TestAccount {
   name: string;
@@ -404,6 +497,20 @@ export interface AppFixtures {
   of loosening the shared ESLint config, which this branch does not own.
 */
 export const test = base.extend<AppFixtures>({
+  /*
+    Wraps Playwright's own `page` rather than adding a fixture beside it, so
+    the attribution header is on every page in the suite — including the specs
+    that take `page` directly and never ask for `signedIn`.
+  */
+  page: async ({ page }, provide, testInfo) => {
+    const testName = attributionName(testInfo);
+
+    await page.setExtraHTTPHeaders({ [E2E_TEST_HEADER]: testName });
+    attachRequestLog(page, testName);
+
+    await provide(page);
+  },
+
   account: async ({}, provide) => {
     const account = createAccountDetails();
 
@@ -417,6 +524,26 @@ export const test = base.extend<AppFixtures>({
     await signUp(page, account);
 
     await provide(page);
+
+    /*
+      Close the page before the account fixture tears down, not after.
+
+      Fixtures tear down in reverse order of setup, and this one is set up
+      after `page` — so without this line the order is: delete the account's
+      rows, then close the page. A page closing at the end of a test can still
+      have a write in flight (a toggle whose PATCH left the browser as the
+      assertion failed), and that write arrives after its row is gone. The
+      handler scopes by `userId` and answers a missing row with 404, so the
+      dev-server log gains a `PATCH /api/todos/<id>/status 404` attributed —
+      by time window, the only tool there was — to whichever test was running
+      *next*. That is the unexplained 404 in `docs/QA-REPORT.md`'s 2026-08-18
+      observation: a real request from a finished test, read as a stray from an
+      innocent one.
+
+      Closing here drops those requests while the account still exists, so a
+      404 in the log is once again a fact about the code under test.
+    */
+    await page.close();
   },
 
   /*
