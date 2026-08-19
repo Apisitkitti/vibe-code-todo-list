@@ -17,6 +17,7 @@ import { useFocusVisible } from "react-aria";
 import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
 import { useTodoList } from "@/app/todos/hooks/useTodoList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { formatDueDate } from "@/lib/date";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { createHandoff } from "@/lib/handoff";
 import {
@@ -25,16 +26,26 @@ import {
   focusUndoAction,
   nextUndoToken,
   readFocusedRow,
+  restoreRescheduleFocus,
   undoTokenProps,
 } from "@/lib/rowFocus";
-import type { TodoItemData, TodoListFilters } from "@/lib/todo";
+import {
+  toDueDateInputValue,
+  type TodoItemData,
+  type TodoListFilters,
+} from "@/lib/todo";
 import {
   applyCompletion,
   replaceTodo,
   todoMatchesFilters,
   todoMatchesStatusFilter,
 } from "@/lib/todoListState";
-import { deleteTodo, toggleTodo, updateTodo } from "@/service/todo.service";
+import {
+  deleteTodo,
+  rescheduleTodo,
+  toggleTodo,
+  updateTodo,
+} from "@/service/todo.service";
 
 import type { TodoFormValues } from "./form";
 import { QuickAddBar } from "./QuickAddBar";
@@ -75,6 +86,7 @@ const ADD_TODO_LABEL = "Add a todo";
  * Undo share one code path, and both kinds of Undo report the same wording.
  */
 const TOGGLE_FAILURE_MESSAGE = "Couldn’t update the todo. Try again.";
+const RESCHEDULE_FAILURE_MESSAGE = "Couldn’t change the due date. Try again.";
 const UNDO_FAILURE_MESSAGE = "Couldn’t undo that. Try again.";
 
 /** The word on the button (`docs/DESIGN.md` §7.13, §7.15). */
@@ -109,6 +121,12 @@ interface ToggleOutcome {
    * choose the §2 position it returns to.
    */
   reloadOnSuccess: boolean;
+}
+
+/** What a reschedule and its Undo do differently; everything else is shared. */
+interface RescheduleOutcome {
+  onSuccess: (saved: TodoItemData) => void;
+  failureMessage: string;
 }
 
 interface EmptyStateCopy {
@@ -764,6 +782,133 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     await running;
   };
 
+  /**
+   * What the toast says a reschedule did, in the row's own words.
+   *
+   * Built from `formatDueDate` — the same function the row's label uses — so
+   * the toast and the row can never describe one date two ways, and `Today`
+   * means the viewer's today in both places rather than in one of them
+   * (`src/lib/date.ts`). §7.11's pattern holds: it names the record and says
+   * what happened to it.
+   */
+  const rescheduledMessage = (title: string, dueAt: string | null) =>
+    dueAt === null
+      ? `Todo “${title}” due date cleared`
+      : `Todo “${title}” due ${formatDueDate(dueAt).label}`;
+
+  /**
+   * The one path a reschedule and its Undo both take. Undo is a reschedule —
+   * same endpoint, same authorization, a different value written to the same
+   * column — so it gets the same code rather than a parallel copy that can
+   * drift (`docs/CONVENTIONS.md` → Mutation UX). What differs is passed in.
+   *
+   * **Deliberately not optimistic, unlike the toggle.** A completion flip
+   * changes a boolean on a row that stays where it is; a due date changes the
+   * row's place in the §2 sequence, and local state is forbidden from
+   * re-sequencing (`src/lib/todoListState.ts`, invariants 1 and 2) because the
+   * server owns the order. So an optimistic reschedule could only ever move the
+   * row into the right *section* at the wrong position, and then correct itself
+   * — a second visible move for a press that happens a few times a day, not
+   * fifty. The row says it is busy through `aria-busy` and its disabled
+   * controls, and the change appears once, where it belongs, when the refetch
+   * lands.
+   */
+  const runReschedule = async (
+    todo: TodoItemData,
+    dueAt: string | null,
+    { onSuccess, failureMessage }: RescheduleOutcome,
+  ) => {
+    markPending(todo.id);
+
+    try {
+      const saved = await rescheduleTodo(todo.id, dueAt);
+
+      onSuccess(saved);
+      // Only the server can say where the row goes now, so this is the same
+      // refetch a restored row gets — see `runToggle`'s note on §2 position.
+      reloadSilently();
+    } catch (error) {
+      toast.danger(getErrorMessage(error, failureMessage));
+    } finally {
+      clearPending(todo.id);
+    }
+  };
+
+  /** Reports the restored date with the same §7.19 toast, and arms no further Undo. */
+  const undoReschedule = async (
+    todo: TodoItemData,
+    previousDueAt: string | null,
+  ) => {
+    await runReschedule(todo, previousDueAt, {
+      onSuccess: (saved) => {
+        toast.success(rescheduledMessage(saved.title, saved.dueAt));
+      },
+      failureMessage: UNDO_FAILURE_MESSAGE,
+    });
+  };
+
+  /**
+   * A due date is trivially reversible, so it fires immediately and offers Undo
+   * rather than opening a confirm dialog (`docs/CONVENTIONS.md` → Mutation UX:
+   * confirm what cannot be undone).
+   */
+  const handleReschedule = async (todo: TodoItemData, dueAt: string | null) => {
+    // Before the write, like the toggle's: the row's outstanding Undo describes
+    // a date it is leaving (review M-1, M-2).
+    dismissUndo(todo.id);
+
+    /*
+      The value Undo puts back, read from the row **before** the write and never
+      recomputed afterwards — recomputing "the date it used to have" is the same
+      class of mistake as computing "next week" from the wrong anchor.
+
+      `toDueDateInputValue` takes the calendar day off the stored instant by
+      slicing the ISO string, so this is the *UTC* day the column already holds
+      and no local conversion happens on this path. That is correct and it is
+      the only place on this feature where local time must not be consulted: the
+      previous value is a fact about the record, not about the viewer.
+    */
+    const previousDueAt =
+      todo.dueAt === null ? null : toDueDateInputValue(todo.dueAt);
+
+    await runReschedule(todo, dueAt, {
+      onSuccess: (saved) => {
+        showUndoableSuccess(
+          saved.id,
+          rescheduledMessage(saved.title, saved.dueAt),
+          () => {
+            void undoReschedule(saved, previousDueAt);
+          },
+        );
+      },
+      failureMessage: RESCHEDULE_FAILURE_MESSAGE,
+    });
+
+    /*
+      Focus, and the decision is to **restore rather than redirect**
+      (`src/lib/rowFocus.ts` → `restoreRescheduleFocus`).
+
+      A reschedule can move the row into a different section, and sections are
+      different `<section>` subtrees, so React rebuilds the row rather than
+      moving it — taking the trigger the user is standing on with it, and
+      dropping focus to `<body>` with nothing on screen to show for it. The
+      toggle's answer to that is to move focus to the toast's Undo, and it is
+      the right answer *there*, where the row is gone and the toast is the only
+      route back. Here the row is still on screen and still the user's, so the
+      right place for focus is the button they pressed — moving them to a toast
+      instead would arm an Undo under their next `Space` and cost them the §6.8
+      surprise for nothing.
+
+      Keyboard only, on the same reasoning §6.8 gives: a pointer user's focus is
+      not a place they are standing. Awaited after the write so the refetch that
+      moves the row has been asked for; the helper itself waits for the row to
+      actually be rebuilt and declines unless focus is on the floor, so a row
+      that did not change section leaves focus exactly where react-aria's menu
+      put it.
+    */
+    if (isFocusVisible) await restoreRescheduleFocus(todo.id);
+  };
+
   const handleDelete = async () => {
     if (!pendingDelete) return;
 
@@ -919,6 +1064,9 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
           void handleToggle(target, nextCompleted);
         }}
         onEdit={openEdit}
+        onReschedule={(target, dueAt) => {
+          void handleReschedule(target, dueAt);
+        }}
         onDelete={setPendingDelete}
       />
     );
