@@ -1,3 +1,21 @@
+/**
+ * The todo write contract: the one schema both producers of a todo payload
+ * validate with, and the one the route handlers re-parse with.
+ *
+ * **It lives in `src/lib` because the API depends on it** (`docs/REVIEW.md`
+ * §1.3 / E-3). It used to live in `src/app/todos/components/form/`, which made
+ * `src/app/api/todos/route.ts` import its trust boundary out of a screen's
+ * presentation folder — the dependency arrow pointing UI → API backwards. That
+ * was survivable while the form was the only producer of this payload. It
+ * stopped being survivable when the quick-add bar became a second one, because
+ * "the form's schema" and "the API's contract" were then two ideas sharing one
+ * file, three directories inside a route, where nobody looks for a
+ * security-relevant module.
+ *
+ * The form barrel at `src/app/todos/components/form/index.ts` still re-exports
+ * everything here, so components keep importing from `./form` and none of them
+ * had to change. Server code imports this path directly.
+ */
 import { z } from "zod";
 
 import {
@@ -34,7 +52,13 @@ const DUE_DATE_INVALID_MESSAGE = `Enter a valid date (${DUE_DATE_FORMAT}).`;
  * The single description of a todo form's shape. The client validates with it
  * for fast feedback and the route handlers under `src/app/api/todos` re-parse
  * with the very same schema, which is the only copy that is trusted
- * (`docs/CONVENTIONS.md` → Forms, `docs/PRD.md` NFR-08).
+ * (`docs/CONVENTIONS.md` → Route handlers are the trust boundary, step 2;
+ * `docs/PRD.md` NFR-08).
+ *
+ * Not the Forms section's wording, which says this schema is "re-validated
+ * inside the server action". There are no server actions in this app and there
+ * never have been. The re-parse happens in the route handler, and that is the
+ * boundary — see `.claude/skills/todo-app-structure/SKILL.md`.
  *
  * Limits live in `@/lib/todo` so the schema, the inputs' `maxLength` and the
  * database rules all read the same constant.

@@ -1,6 +1,6 @@
 import { isAxiosError } from "axios";
 
-import { TODO_FIELD_NAMES, type TodoFieldErrors } from "./schema";
+import { TODO_FIELD_NAMES, type TodoFieldErrors } from "@/lib/todo.schema";
 
 const BAD_REQUEST_STATUS = 400;
 

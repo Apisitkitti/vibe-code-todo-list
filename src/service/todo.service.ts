@@ -1,4 +1,3 @@
-import type { TodoFormValues } from "@/app/todos/components/form";
 import { http } from "@/lib/http";
 import type {
   TodoCreatedVia,
@@ -6,6 +5,7 @@ import type {
   TodoListFilters,
   TodoListResult,
 } from "@/lib/todo";
+import type { TodoFormValues } from "@/lib/todo.schema";
 
 /**
  * Transport only (`docs/CONVENTIONS.md` → Services): each function calls the

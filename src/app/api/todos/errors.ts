@@ -1,17 +1,14 @@
 import type { ZodError } from "zod";
 
-import {
-  isTodoFieldName,
-  type TodoFieldErrors,
-} from "@/app/todos/components/form";
 import { ApiErrorCode, apiError } from "@/lib/apiError";
 import { CREATED_VIA_VALUES, TODO_NOT_FOUND_MESSAGE } from "@/lib/todo";
+import { isTodoFieldName, type TodoFieldErrors } from "@/lib/todo.schema";
 
 /**
  * The todo-specific error wording. The body shape, the status codes and the
  * default messages all come from `@/lib/apiError`, which is the single source
  * of truth — these are thin wrappers that only supply domain wording.
- * Success shapes live in `./model.ts`.
+ * Success shapes live in `./util.ts`.
  *
  * Named `errors.ts`, not `error.ts`: anything called `error.*` under `app/`
  * is Next's error-boundary convention and has to be a Client Component.
