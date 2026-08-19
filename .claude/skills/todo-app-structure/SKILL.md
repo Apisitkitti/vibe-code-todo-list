@@ -47,7 +47,7 @@ front of it is trusted. Moving a *call* to the client does not move the
 | Copy used by more than one file | `src/app/<route>/constants/` | Single-use copy stays inline |
 | Framework plumbing (prisma, auth, session, http) | `src/lib/` | |
 | A test of a pure function | `tests/unit/name.test.ts` | |
-| A test of an API contract | `tests/api/name.test.ts` | Real HTTP, real Postgres |
+| A test of an API contract | `tests/api/name.test.ts` | The real handler, real Postgres, real cookie |
 | A test of a user journey | `e2e/name.spec.ts` | Real browser |
 | A decision you had to argue for | `docs/decisions/` | Dated and immutable; do not edit a spec in place to record an argument |
 

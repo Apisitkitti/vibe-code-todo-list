@@ -65,10 +65,13 @@ thing a new contributor reads.
 
 - **§7 numbering.** §7.15 physically precedes §7.14. Cite section numbers from
   the deck by name as well as number.
-- **Superseded copy.** §7.3 and §7.7 still describe a `New todo` toolbar button.
-  §7.18 replaced it with the quick-add bar. When two sections disagree, the
-  later-written one usually wins — but check the code, which is the only
-  arbiter.
+- **Superseded copy.** §4.7, §7.3 and §7.7 still describe a `New todo` toolbar
+  button, §4.7 with a code sample rendering one. §7.17 and §7.18 replaced it
+  with the quick-add bar, and §7.17 says so in as many words. The button does
+  not exist: `TodoListScreen` renders `QuickAddBar`, ungated, and the empty
+  state's call to action focuses that bar rather than opening a modal. When two
+  sections disagree the later-written one usually wins — but check the code,
+  which is the only arbiter.
 - **§4.8 vs §8.3.2** on the pending row treatment were reconciled in favour of
   §8.3.2: the row-level dim applies to a confirmed **delete** only. It was
   removed elsewhere because `opacity` is a group multiplier and dimmed the
