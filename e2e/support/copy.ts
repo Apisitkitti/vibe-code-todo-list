@@ -110,6 +110,29 @@ export const markNotCompleteLabel = (title: string) =>
 export const EDIT_TOOLTIP = "Edit";
 export const DELETE_TOOLTIP = "Delete";
 
+/**
+ * §7.19 — the reschedule menu (backlog #5).
+ *
+ * The trigger's name is built the same way Edit's and Delete's are — straight
+ * quotes, because it is an `aria-label` — and the menu borrows it, so a screen
+ * reader hears which todo the open menu belongs to rather than five unlabelled
+ * items.
+ */
+export const rescheduleLabel = (title: string) => `Reschedule ${ariaQuoted(title)}`;
+export const RESCHEDULE_TOOLTIP = "Reschedule";
+export const TODAY_ITEM_LABEL = "Today";
+export const TOMORROW_ITEM_LABEL = "Tomorrow";
+export const NEXT_WEEK_ITEM_LABEL = "Next week";
+export const PICK_A_DATE_ITEM_LABEL = "Pick a date…";
+export const CLEAR_DUE_DATE_ITEM_LABEL = "Clear due date";
+
+/** §7.19 — what a reschedule reports, and what its Undo reports when it lands. */
+export const dueToast = (title: string, dayLabel: string) =>
+  `Todo ${quoted(title)} due ${dayLabel}`;
+export const dueClearedToast = (title: string) =>
+  `Todo ${quoted(title)} due date cleared`;
+export const RESCHEDULE_FAILURE = "Couldn’t change the due date. Try again.";
+
 /** §7.11 / §7.15 — success toasts. All name the record. */
 export const addedToast = (title: string) => `Todo ${quoted(title)} added`;
 export const updatedToast = (title: string) => `Todo ${quoted(title)} updated`;

@@ -49,6 +49,8 @@ export interface TodoGroupedListProps {
   showTooltips: boolean;
   onToggle: (todo: TodoItemData, nextCompleted: boolean) => void;
   onEdit: (todo: TodoItemData) => void;
+  /** `dueAt` is the `YYYY-MM-DD` wire day, or `null` to clear it. */
+  onReschedule: (todo: TodoItemData, dueAt: string | null) => void;
   onDelete: (todo: TodoItemData) => void;
 }
 
@@ -71,6 +73,7 @@ export const TodoGroupedList = ({
   showTooltips,
   onToggle,
   onEdit,
+  onReschedule,
   onDelete,
 }: TodoGroupedListProps) => {
   const showHeadings = groups.length > 1;
@@ -112,6 +115,7 @@ export const TodoGroupedList = ({
                 showTooltips={showTooltips}
                 onToggle={onToggle}
                 onEdit={onEdit}
+                onReschedule={onReschedule}
                 onDelete={onDelete}
               />
             ))}

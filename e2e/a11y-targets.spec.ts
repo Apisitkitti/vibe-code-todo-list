@@ -109,30 +109,55 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
       contains one (24×√2 = 33.9 < 36). A 20px circle contains no such region
       at all, which is what makes this fail on the unfixed control.
     */
-    const box = await boxOf(clear);
-    const centreX = box.x + box.width / 2;
-    const centreY = box.y + box.height / 2;
-    const half = WCAG_MIN / 2;
+    /*
+      Measured and probed inside **one** evaluation, deliberately.
 
-    const probes = [
-      ["centre", centreX, centreY],
-      ["top-left", centreX - half, centreY - half],
-      ["top-right", centreX + half, centreY - half],
-      ["bottom-left", centreX - half, centreY + half],
-      ["bottom-right", centreX + half, centreY + half],
-    ] as const;
-
-    for (const [name, x, y] of probes) {
-      const hitsClearButton = await signedIn.evaluate(
-        ([px, py]) =>
-          document
-            .elementFromPoint(px as number, py as number)
-            ?.closest('[data-slot="search-field-clear-button"]') !== null &&
-          document.elementFromPoint(px as number, py as number) !== null,
-        [x, y],
+      An earlier version read the box over one round trip and then hit-tested
+      over five more. The search field is debounced and writes the query to the
+      URL, so a re-render can land inside that window — and when it does, the
+      probe is aimed at coordinates that described the control a moment ago and
+      reports a miss that says nothing about the control's shape. That is a
+      false red, which is the one kind of failure worse than none here. Reading
+      `getBoundingClientRect` beside `elementFromPoint` closes the window
+      without weakening anything: the probes are still the corners of a centred
+      24×24 square of the real, rendered control.
+    */
+    const results = await signedIn.evaluate((minSize) => {
+      const target = document.querySelector(
+        '[data-slot="search-field-clear-button"]',
       );
 
-      expect.soft(hitsClearButton, `probe ${name} lands on the clear button`).toBe(
+      if (target === null) return null;
+
+      const rect = target.getBoundingClientRect();
+      const centreX = rect.x + rect.width / 2;
+      const centreY = rect.y + rect.height / 2;
+      const half = minSize / 2;
+
+      const probes: [string, number, number][] = [
+        ["centre", centreX, centreY],
+        ["top-left", centreX - half, centreY - half],
+        ["top-right", centreX + half, centreY - half],
+        ["bottom-left", centreX - half, centreY + half],
+        ["bottom-right", centreX + half, centreY + half],
+      ];
+
+      return probes.map(([name, x, y]) => {
+        const hit = document.elementFromPoint(x, y);
+
+        return {
+          name,
+          hits:
+            hit !== null &&
+            hit.closest('[data-slot="search-field-clear-button"]') !== null,
+        };
+      });
+    }, WCAG_MIN);
+
+    expect(results, "the clear button is not rendered").not.toBeNull();
+
+    for (const probe of results ?? []) {
+      expect.soft(probe.hits, `probe ${probe.name} lands on the clear button`).toBe(
         true,
       );
     }

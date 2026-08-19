@@ -473,7 +473,14 @@ border.
 
 ### 4.4 Todo item row
 
-Fixed left-to-right order: **checkbox → title (+ note) → priority → due date → edit → delete.**
+Fixed left-to-right order: **checkbox → title (+ note) → priority → due date →
+reschedule → edit → delete.** Reschedule sits first in the actions cluster
+because it belongs with the due date it changes, and Delete stays last because
+it is the destructive one.
+
+**Below 457px the actions cluster takes a line of its own** — which is every
+phone width the app supports. See *Three targets and 320px* below: this is a
+layout decision taken to keep three 44×44 targets, not a fallback.
 
 **The row is an outlined pill.** `rounded-2xl border border-border-secondary
 px-4 py-3.5`, with `hover:bg-surface-hover` as a hover *state* layered on top —
@@ -608,7 +615,8 @@ by the chip or the date, so nothing that carried meaning was removed. Pinned in
 `e2e/grouping.spec.ts`, which asserts the absences *and* every one of the
 retentions.
 
-**Actions.** Two icon-only buttons. HeroUI ships no pencil or trash icon
+**Actions.** Three icon-only buttons — reschedule, edit, delete. HeroUI ships
+no pencil or trash icon
 (the icon set is `IconChevronDown/Up/Left/Right`, `IconPlus`, `IconMinus`,
 `IconSearch`, `IconCalendar`, `CloseIcon`, `InfoIcon`, `WarningIcon`,
 `DangerIcon`, `SuccessIcon`, `CircleDashedIcon`, `ExternalLinkIcon` —
@@ -616,6 +624,7 @@ verified in `dist/components/icons.d.ts`). Use inline `<svg>` with
 `stroke="currentColor"`, `width={16} height={16}`, `aria-hidden="true"`.
 
 ```tsx
+<Button variant="ghost" size="sm" isIconOnly aria-label={`Reschedule "${todo.title}"`}>…</Button>
 <Button variant="ghost" size="sm" isIconOnly aria-label={`Edit "${todo.title}"`} onPress={…}>…</Button>
 <Button variant="ghost" size="sm" isIconOnly aria-label={`Delete "${todo.title}"`} onPress={…}>…</Button>
 ```
@@ -645,10 +654,96 @@ test that sees one side of it checks half of it. It measures the cluster's
 **right** edge — with the title taking the slack, that is the fixed edge, and a
 row carrying less metadata is legitimately narrower on the left.
 
+The cluster uses `gap-2`, not `gap-1`. §6.3 asks for ≥8px between adjacent
+targets and this cluster shipped with 4px — survivable while it held two
+controls, and the thing that makes a mis-tap likely once it holds three.
+
+**Reschedule — the third action.** An icon-only `Button` opening a `Dropdown`,
+so the most common single edit does not cost the modal (`docs/PM-PROPOSAL.md`
+§3 #5, `docs/PRD.md` US-13). Five items in two sections:
+
+| Item | Effect |
+|---|---|
+| `Today` | `dueAt` = the viewer's today |
+| `Tomorrow` | the viewer's today + 1 day |
+| `Next week` | the viewer's today + **7** days |
+| `Pick a date…` | opens the existing edit modal (§4.5) — not a second picker |
+| `Clear due date` | `dueAt` = `null`; **disabled** when the todo has no date |
+
+The three quick days render their resolved date beside the label — `Next week`
+`Aug 26` — so the reading is visible at the moment of the decision rather than
+discoverable after it. §7.19 has the copy and §2 of `docs/PRD.md` has why
+`Next week` is `+7` rather than "the start of next week".
+
+Two implementation constraints, both learned the hard way on this branch:
+
+- **The trigger is a plain `Button`, not `Dropdown.Trigger`.** `Dropdown.Trigger`
+  is the bare react-aria `Button` with none of the `button--ghost` /
+  `button--icon-only` styling, so it cannot match the two controls beside it
+  without hand-rebuilding them. `Dropdown`'s root is react-aria's `MenuTrigger`,
+  which publishes its trigger props through a `PressResponder` exactly as
+  `Tooltip` does, so a `Button` anywhere beneath it registers — and nested
+  `PressResponder`s merge, so the `Tooltip` in between is harmless and DEF-02's
+  warning does not return.
+- **The date preview must not be a `Typography`.** react-aria's `MenuItem`
+  publishes a `TextContext` whose `label` slot carries the id its
+  `aria-labelledby` points at, and `Typography` consumes it — so the preview
+  became the item's *entire* accessible name and `Today` was announced as
+  `Aug 19`. Use a plain `<span>`; the name is then the item's full text.
+
+**Three targets and 320px — the decision.** Three 44×44 buttons, a 44×44
+checkbox and a readable title do not fit on one line at 320px:
+`32 (px-4) + 44 + 12 + 148 (3×44 + 2×gap-2) + 12 = 248`, leaving 72px for a
+title, a priority chip and a date. Shrinking the targets was not available —
+§6.3's 44×44 is a defect the team has already fixed once — and hiding an action
+behind a "more" menu would demote Edit or Delete to pay for Reschedule.
+
+So the row is `flex-wrap` and the content column carries `min-w-32`: the title
+may be squeezed to 128px and no further, and flexbox breaks the line rather
+than going below it. The actions cluster then takes a line of its own,
+right-aligned by `ml-auto`, and the row is one line taller.
+
+**Nothing in the CSS names a width**, and the threshold is a consequence of the
+floors rather than a breakpoint to keep in step with this document:
+
+```
+surrounding padding = 32 (main px-4) + 32 (Card px-4) + 16 (list p-2) + 32 (row px-4)
+                    = 112                     ← measured, not assumed
+row content         = viewport − 112
+needed              = 44 (checkbox) + 12 + 128 (title floor) + 12 + 148 (3×44 + 2×8)
+                    = 344
+```
+
+so the line breaks below **457px** (`112 + 344 = 456`, and 456 wraps while 458
+does not). Swept at 2px steps from 440 to 476, and at 320 / 360 / 390 / 412 /
+480 / 560 / 639 / 640 / 768: no horizontal overflow at any width, and the title
+never below 128px — at 458 it is exactly 128px, which is `min-w-32` binding as
+designed.
+
+**The `Card`'s own `px-4` is the term that is easy to miss** — `Card.Content`
+is `p-0` here, which reads like the Card contributes nothing, but the padding
+sits on the `.card` root. An earlier draft of this section omitted it and
+published 424px, a number 33px wrong that no test could contradict because
+both user-facing claims below it happened to survive. If this arithmetic is
+edited, re-measure rather than re-derive.
+
+**That means the actions wrap on every phone, and that is the outcome, not a
+regression.** The alternative — a lower title floor, so a 412px phone keeps one
+line — buys a shorter row by handing the title about 84px, roughly nine
+characters before the ellipsis. A feature whose entire purpose is to stop due
+dates going stale should not pay for itself by making the todo unreadable.
+Above 640px the targets relax to 36px and the question does not arise.
+
+Pinned by `e2e/reschedule.spec.ts`, which at a 320px viewport measures all
+three targets, the gaps between them, `document.scrollWidth` against
+`clientWidth`, and the rendered width of the title — because a layout that
+fits by crushing the title to nothing is not a layout that fits.
+
 **Responsive.** Mobile: the title and the priority/date cluster stack (`flex-col`),
-actions column stays on the right, always at full opacity. Tablet+: one line
-(`sm:flex-row sm:items-center`), with the reserved column above. Desktop:
-actions hidden until hover/focus-within.
+the actions cluster wraps below them once the row is too narrow to hold it
+(below 457px, so on every phone), always at full opacity. Tablet+: one line
+(`sm:flex-row sm:items-center`), with the reserved column above and targets relaxed to 36px. Desktop: actions hidden
+until hover/focus-within.
 
 ---
 
@@ -1037,6 +1132,7 @@ relative to `node_modules/@heroui/react/dist/components/`.
 | todo row | `Checkbox` (`.Root .Content .Control .Indicator`) | `@heroui/react` | yes — `checkbox/index.d.ts`, `checkbox/checkbox.d.ts` |
 | todo row | `Chip` (`.Root .Label`) | `@heroui/react` | yes — `chip/index.d.ts`, `chip/chip.d.ts` |
 | todo row | `Tooltip` (`.Root .Trigger .Content .Arrow`) | `@heroui/react` | yes — `tooltip/index.d.ts` |
+| todo row | `Dropdown` (`.Root .Trigger .Popover .Menu .Section .Item`) — the reschedule menu, §4.4 | `@heroui/react` | yes — `dropdown/index.d.ts`, `dropdown/dropdown.d.ts` |
 | create/edit | `Modal` (`.Root .Trigger .Backdrop .Container .Dialog .Header .Icon .Heading .Body .Footer .CloseTrigger`) | `@heroui/react` | yes — `modal/index.d.ts`, `modal/modal.d.ts` |
 | create/edit | `TextArea` (`.Root`) | `@heroui/react` | yes — `textarea/index.d.ts`, `textarea/textarea.d.ts` |
 | create/edit | `Select` (`.Root .Trigger .Value .Indicator .Popover`) | `@heroui/react` | yes — `select/index.d.ts`, `select/select.d.ts` |
@@ -1236,6 +1332,22 @@ Do not introduce them without updating this document.
    would be a route back to the list from the toast, not a retreat on the
    rescue.
 
+   **A reschedule restores focus instead of redirecting it, and that is a
+   different answer to a different question** (`docs/PRD.md` US-13,
+   `src/lib/rowFocus.ts` → `restoreRescheduleFocus`). Changing a due date moves
+   the row between sections, and sections are separate `<section>` subtrees, so
+   React rebuilds the row rather than moving the DOM node — the trigger the user
+   pressed is destroyed and rebuilt a few pixels away, and focus falls to
+   `<body>` with nothing on screen to show for it. The rescue above does not
+   apply: the row is still on screen and still theirs, so moving them into the
+   toast would arm an Undo under their next `Space` and charge them the surprise
+   above for nothing. Focus goes back onto the same row's own trigger, found by
+   the todo's id (`data-reschedule-for`) rather than by position — position is
+   exactly what a reschedule changes. It fires only when focus is already on
+   `<body>`, so a row that did not change section is left alone and a user who
+   has moved focus themselves keeps it. Same modality gate, same reasoning.
+   Pinned in `e2e/reschedule.spec.ts` and `tests/unit/rowFocus.test.ts`.
+
    **Keyboard only.** react-aria does not focus a control on pointer press, and
    a mouse user who has a row focused from earlier must not have Undo armed
    under a Space press they meant for that row. Gate on modality
@@ -1348,6 +1460,8 @@ a period.
 | Edit tooltip | `Edit` |
 | Delete button `aria-label` | `Delete "{title}"` |
 | Delete tooltip | `Delete` |
+| Reschedule button `aria-label` | `Reschedule "{title}"` |
+| Reschedule tooltip | `Reschedule` |
 
 ### 7.5 Create / edit modal
 
@@ -1835,6 +1949,69 @@ change's `GET` open and asserts the line against exactly that window.
 Punctuation notes: use the typographic apostrophe (`'`) in contractions
 (`don't`, `can't`, `Couldn't`) and curly double quotes around interpolated
 titles in prose. Use the ellipsis character `…`.
+
+---
+
+### 7.19 Reschedule from the row
+
+Added for backlog #5 (`docs/PM-PROPOSAL.md` §3, `docs/PRD.md` US-13). The row
+gets a third action: a `Dropdown` that moves the due date without opening the
+modal. A due date is trivially reversible, so it fires immediately and reports
+with an Undo toast — no confirm dialog (`docs/CONVENTIONS.md` → Mutation UX).
+
+| Slot | String |
+|---|---|
+| Trigger `aria-label` | `Reschedule "{title}"` |
+| Trigger tooltip (`sm:` and up) | `Reschedule` |
+| Menu `aria-label` | `Reschedule "{title}"` — the trigger's name, reused |
+| Item 1 | `Today` |
+| Item 2 | `Tomorrow` |
+| Item 3 | `Next week` |
+| Quick-day date preview | the resolved day, `MMM d` (`MMM d, yyyy` in another year) |
+| Item 4 | `Pick a date…` |
+| Item 5 | `Clear due date` |
+| Success toast (a date was set) | `Todo “{title}” due {Today\|Tomorrow\|MMM d\|MMM d, yyyy}` |
+| Success toast (the date was cleared) | `Todo “{title}” due date cleared` |
+| Toast action | `Undo` |
+| Toast action `aria-label` | `Undo — {toast title}` (shared with §7.13) |
+| Undo succeeded | the same two toasts above, for the value it restored |
+| Failure toast | `Couldn’t change the due date. Try again.` |
+| Undo failure | `Couldn’t undo that. Try again.` (shared with §7.13) |
+
+**The day words are the row's own.** The toast reads its label out of
+`formatDueDate` — the same function that writes the date on the row — so a
+reschedule to today says `due Today` in both places and cannot drift into
+saying one thing in the toast and another two lines above it. It also means
+`Today` is the *viewer's* today in the toast for the same reason it is on the
+row (`src/lib/date.ts`).
+
+**Why the menu shows a date next to three of the items.** `Today` and
+`Tomorrow` need no gloss. `Next week` does: it means the same weekday seven days
+on, and nothing about the words says so. Printing `Next week` `Aug 26` states
+the decision where the decision is made, which is cheaper than a tooltip and
+truer than a convention nobody was told. The preview is decoration for the two
+obvious items and load-bearing for the third, so all three carry it — an option
+list where one row looks different reads as one row *meaning* something
+different.
+
+The preview is a plain `<span>`, never a `Typography`: react-aria's `MenuItem`
+labels itself from the `TextContext` `label` slot, `Typography` claims that
+slot, and the effect was that `Today` announced itself to a screen reader as
+`Aug 19`. §4.4 has the mechanism.
+
+**Both accessible names carry the todo's title**, the trigger's and the menu's.
+This is the lesson §7.13 records about Undo, applied before it could be
+re-learned: a screen of twenty rows is a screen of twenty `Reschedule` buttons,
+and `Reschedule, button` twenty times over is not a list a user can navigate.
+The menu borrows the trigger's name rather than inventing a second one.
+
+**The reschedule's Undo restores the value the row held before the press**,
+read off the row at the moment of the press and never recomputed. That is the
+same rule §7.15 states for an edit, and the reason is the same: a reversal that
+derives what to put back is guessing, and "the date it used to have" is exactly
+the kind of thing that can be derived wrongly. A later write to the same todo
+dismisses the toast (`dismissUndo`, keyed per todo id) so an Undo can never
+reach past a change the user made after it.
 
 ---
 
