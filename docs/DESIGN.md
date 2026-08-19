@@ -472,7 +472,7 @@ reschedule → edit → delete.** Reschedule sits first in the actions cluster
 because it belongs with the due date it changes, and Delete stays last because
 it is the destructive one.
 
-**Below 424px the actions cluster takes a line of its own** — which is every
+**Below 457px the actions cluster takes a line of its own** — which is every
 phone width the app supports. See *Three targets and 320px* below: this is a
 layout decision taken to keep three 44×44 targets, not a fallback.
 
@@ -627,18 +627,29 @@ right-aligned by `ml-auto`, and the row is one line taller.
 floors rather than a breakpoint to keep in step with this document:
 
 ```
-row content = viewport − 32 (page px-4) − 16 (list p-2) − 32 (row px-4)
-needed      = 44 (checkbox) + 12 + 128 (title floor) + 12 + 148 (3×44 + 2×8)
-            = 344
+surrounding padding = 32 (main px-4) + 32 (Card px-4) + 16 (list p-2) + 32 (row px-4)
+                    = 112                     ← measured, not assumed
+row content         = viewport − 112
+needed              = 44 (checkbox) + 12 + 128 (title floor) + 12 + 148 (3×44 + 2×8)
+                    = 344
 ```
 
-so the line breaks below **424px**. Measured across 320 / 360 / 390 / 412 /
-480 / 560 / 639 / 640 / 768: wrapped at and below 412, one line from 480 up, no
-horizontal overflow at any of them, and the title never below 150px.
+so the line breaks below **457px** (`112 + 344 = 456`, and 456 wraps while 458
+does not). Swept at 2px steps from 440 to 476, and at 320 / 360 / 390 / 412 /
+480 / 560 / 639 / 640 / 768: no horizontal overflow at any width, and the title
+never below 128px — at 458 it is exactly 128px, which is `min-w-32` binding as
+designed.
+
+**The `Card`'s own `px-4` is the term that is easy to miss** — `Card.Content`
+is `p-0` here, which reads like the Card contributes nothing, but the padding
+sits on the `.card` root. An earlier draft of this section omitted it and
+published 424px, a number 33px wrong that no test could contradict because
+both user-facing claims below it happened to survive. If this arithmetic is
+edited, re-measure rather than re-derive.
 
 **That means the actions wrap on every phone, and that is the outcome, not a
 regression.** The alternative — a lower title floor, so a 412px phone keeps one
-line — buys a shorter row by handing the title about 116px, roughly thirteen
+line — buys a shorter row by handing the title about 84px, roughly nine
 characters before the ellipsis. A feature whose entire purpose is to stop due
 dates going stale should not pay for itself by making the todo unreadable.
 Above 640px the targets relax to 36px and the question does not arise.
@@ -650,7 +661,7 @@ fits by crushing the title to nothing is not a layout that fits.
 
 **Responsive.** Mobile: the title and the priority/date cluster stack (`flex-col`),
 the actions cluster wraps below them once the row is too narrow to hold it
-(below 424px, so on every phone), always at full opacity. Tablet+: one line
+(below 457px, so on every phone), always at full opacity. Tablet+: one line
 (`sm:flex-row sm:items-center`), targets relax to 36px. Desktop: actions hidden
 until hover/focus-within.
 

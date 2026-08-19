@@ -424,6 +424,16 @@ const browserRestoreDeps: RestoreFocusDeps = {
  * Bounded by `MAX_WAIT_FRAMES` for the same reason step 2 is: the list refetch
  * has to land first, and waiting on the condition rather than the clock is what
  * makes that safe on a slow machine.
+ *
+ * **It waits for the trigger to be *focusable*, not merely to exist** (review
+ * F1, the latent half). An earlier version focused the first trigger it found
+ * and reported failure if the focus was refused — which reads as a reasonable
+ * "it did not work" until you notice what refuses focus: a control that is
+ * momentarily unavailable. A restore landing one frame before React flushed
+ * the end of the pending state would give up permanently and leave focus on the
+ * floor, and the give-up path was pinned by a unit test, so it would have
+ * survived review. Existence and focusability are different conditions and only
+ * one of them is the one worth waiting for.
  */
 export const restoreRescheduleFocus = async (
   todoId: string,
@@ -438,7 +448,7 @@ export const restoreRescheduleFocus = async (
       if (trigger !== null) {
         trigger.focus();
 
-        return deps.getActiveElement() === trigger;
+        if (deps.getActiveElement() === trigger) return true;
       }
     }
 

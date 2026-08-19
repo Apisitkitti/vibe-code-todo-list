@@ -76,10 +76,15 @@ export const PATCH = async (
   /*
     `parseDueDate` is the app's one date parser and it is strict, so
     `2026-02-31` is refused rather than rolled forward into March. Its third
-    answer — `null` for an empty or whitespace-only string — is refused here
-    too: clearing is spelled `null` on this route, and accepting `""` as a
-    second spelling would let a caller clear a date while believing it had sent
-    one.
+    answer — `null`, which it gives for a string that is empty **or contains
+    nothing but whitespace** — is refused here too: clearing is spelled `null`
+    on this route, and accepting `""` as a second spelling would let a caller
+    clear a date while believing it had sent one.
+
+    Note this is about a string with no date in it, not about stray spaces
+    around one: `parseDueDate` trims first, so `" 2026-08-23 "` parses and is
+    accepted, exactly as the form schema accepts it. Only a value that trims
+    away to nothing reaches the 400.
   */
   const dueAt = parsed.data.dueAt;
   const parsedDueAt = dueAt === null ? null : parseDueDate(dueAt);

@@ -47,7 +47,12 @@ import {
   updateTodo,
 } from "@/service/todo.service";
 
-import type { TodoFormValues } from "./form";
+/*
+  The schema's real home, not the form barrel. `TodoFormValues` is the write
+  contract — the route handlers re-parse with it — and this screen wants the
+  contract, not a form component, so it says so.
+*/
+import type { TodoFormValues } from "@/lib/todo.schema";
 import { QuickAddBar } from "./QuickAddBar";
 import { TodoEmptyState } from "./TodoEmptyState";
 import { TodoFilters } from "./TodoFilters";
@@ -853,6 +858,26 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    * confirm what cannot be undone).
    */
   const handleReschedule = async (todo: TodoItemData, dueAt: string | null) => {
+    /*
+      The lock, and it lives here now rather than on the control (review F1).
+
+      `pendingTodoIds` has always been the lock — `useTodoList` says so — but
+      what *enforced* it was `isDisabled` on the row's buttons, and the
+      reschedule trigger no longer carries that: a disabled control is blurred
+      by the browser, which is the whole of F1. So the refusal moves to the one
+      place that can see the pending set.
+
+      It is not redundant with the menu's own open guard, and the difference is
+      measurable. react-aria closes the menu *asynchronously* after an item is
+      actioned — measured at more than 28ms in `next dev` — so `Enter` pressed
+      twice in quick succession re-activates the item on a menu that is still
+      open and never asks to open anything. Two `PATCH`es to the same column,
+      free to land in either order. The open guard cannot see that press; this
+      one can. Pinned by `e2e/reschedule.spec.ts`, which presses both inside
+      that window and after it.
+    */
+    if (pendingTodoIds.has(todo.id)) return;
+
     // Before the write, like the toggle's: the row's outstanding Undo describes
     // a date it is leaving (review M-1, M-2).
     dismissUndo(todo.id);
@@ -868,8 +893,17 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       the only place on this feature where local time must not be consulted: the
       previous value is a fact about the record, not about the viewer.
     */
-    const previousDueAt =
-      todo.dueAt === null ? null : toDueDateInputValue(todo.dueAt);
+    const previousDay = toDueDateInputValue(todo.dueAt);
+    /*
+      `""` is `toDueDateInputValue`'s answer for "no date", and it is the one
+      spelling this route refuses — folding it to `null` here is what keeps the
+      client from ever being the caller that sends it. Written as a check on
+      the *value* rather than on `todo.dueAt` being `null`, because the value is
+      what goes on the wire: guarding the input leaves any other falsy reading
+      (an empty ISO string from a future response shape) to fall through as
+      `""` and come back a 400 the user cannot act on.
+    */
+    const previousDueAt = previousDay === "" ? null : previousDay;
 
     await runReschedule(todo, dueAt, {
       onSuccess: (saved) => {

@@ -11,6 +11,35 @@ import {
 import { parseDueDate, toDueDateInputValue } from "@/lib/todo";
 
 /**
+ * Puts `TZ` back the way it was found, **including when it was not set at
+ * all** — which is the normal state on macOS and on most developer machines.
+ *
+ * `process.env.TZ = undefined` assigns the *string* `"undefined"`, which Node
+ * cannot parse as a zone and silently treats as UTC. UTC is the one timezone
+ * in which every bug this file exists to catch disappears, so a test that
+ * "restored" `TZ` that way would leave the process in the exact state that
+ * makes its neighbours pass for the wrong reason. Nothing is affected today —
+ * the two tests that set `TZ` are declared last and Vitest runs in declaration
+ * order — but that is an ordering accident, not a guarantee, and the next date
+ * test added below them would inherit it.
+ */
+/**
+ * The process's real offset, read at import time — before any test in this file
+ * has touched `process.env.TZ`. The guard at the bottom compares against it.
+ */
+const OFFSET_AT_IMPORT = new Date(2026, 7, 16, 12, 0, 0).getTimezoneOffset();
+
+const restoreTimezone = (previous: string | undefined) => {
+  if (previous === undefined) {
+    delete process.env.TZ;
+
+    return;
+  }
+
+  process.env.TZ = previous;
+};
+
+/**
  * The two halves of the due-date round trip. `parseDueDate` turns the wire
  * format into a UTC instant; `formatDueDate` turns it back into the words the
  * row shows.
@@ -301,7 +330,7 @@ describe("rescheduleDay", () => {
         "2026-03-08",
       );
     } finally {
-      process.env.TZ = previousTz;
+      restoreTimezone(previousTz);
     }
   });
 });
@@ -320,7 +349,7 @@ describe("rescheduleDay at UTC+14", () => {
   const previousTz = process.env.TZ;
 
   afterAll(() => {
-    process.env.TZ = previousTz;
+    restoreTimezone(previousTz);
   });
 
   test("Today is the user's day, not UTC's, on the far side of the date line", () => {
@@ -347,5 +376,27 @@ describe("rescheduleDay at UTC+14", () => {
     expect(dueDayOffset(stored, localMorning)).toBe(0);
     expect(formatDueDate(stored, localMorning).label).toBe("Today");
     expect(formatDueDate(stored, localMorning).isOverdue).toBe(false);
+  });
+});
+
+/**
+ * Declared last, so it runs last (Vitest runs a file in declaration order).
+ *
+ * Two tests above change `process.env.TZ`, and the failure mode of restoring it
+ * badly is silent and contagious: `process.env.TZ = undefined` assigns the
+ * string `"undefined"`, Node cannot parse it, and the process falls back to
+ * **UTC** — the one timezone in which every bug this file exists to catch
+ * disappears. Nothing here would go red; the next date test added below would
+ * simply start passing for the wrong reason.
+ *
+ * So the file checks its own housekeeping rather than trusting it. This is the
+ * test that would have caught review F4, and it costs one comparison.
+ */
+describe("the file leaves the process timezone as it found it", () => {
+  test("TZ is not the string \"undefined\", and the offset is unchanged", () => {
+    expect(process.env.TZ).not.toBe("undefined");
+    expect(new Date(2026, 7, 16, 12, 0, 0).getTimezoneOffset()).toBe(
+      OFFSET_AT_IMPORT,
+    );
   });
 });

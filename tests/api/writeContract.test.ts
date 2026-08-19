@@ -465,6 +465,25 @@ describe("PATCH /api/todos/[id]/due takes a due date and nothing else", () => {
     },
   );
 
+  /**
+   * Stray spaces around a real date are *not* the same thing as a string with
+   * no date in it. `parseDueDate` trims before parsing, exactly as the form
+   * schema does, so this is accepted — and it is asserted because the route's
+   * own comment says so, and a comment about parsing behaviour with no test
+   * behind it is the thing this project keeps having to correct.
+   */
+  test("surrounding whitespace around a real date is accepted", async () => {
+    const response = await patchDue(
+      dueRequest({ dueAt: "  2026-08-23  " }),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(200);
+    expect((await readTodo(todo.id))?.dueAt?.toISOString()).toBe(
+      "2026-08-23T00:00:00.000Z",
+    );
+  });
+
   /** Undo is an ordinary reschedule: the previous value, written back. */
   test("writing the previous value back restores it exactly", async () => {
     await patchDue(dueRequest({ dueAt: "2026-08-16" }), idContext(todo.id));

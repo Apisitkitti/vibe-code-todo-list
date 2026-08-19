@@ -473,20 +473,64 @@ describe("restoreRescheduleFocus", () => {
     expect(frames).toBe(MAX_WAIT_FRAMES);
   });
 
-  it("reports failure when the trigger refuses the focus", async () => {
-    const world = { active: null as unknown, body: {} };
-    const refuses = { name: "disabled", focus: () => {} };
+  /**
+   * The latent half of review F1. What refuses focus is a control that is
+   * momentarily unavailable, so giving up the first time it does is giving up
+   * on the one condition worth waiting for — a restore landing a frame before
+   * React flushes the end of the pending state would leave focus on the floor
+   * permanently. The earlier version returned `false` here, and a test pinned
+   * that, which is how it would have survived review.
+   */
+  it("keeps trying while the trigger refuses focus, and takes it when it stops", async () => {
+    const world: { active: unknown; body: unknown } = { active: null, body: {} };
 
     world.active = world.body;
+
+    let frames = 0;
+    const BECOMES_FOCUSABLE_ON_FRAME = 5;
+
+    const trigger = {
+      name: "pending-then-ready",
+      focus: () => {
+        if (frames < BECOMES_FOCUSABLE_ON_FRAME) return;
+
+        world.active = trigger;
+      },
+    };
+
+    const restored = await restoreRescheduleFocus("todo-1", {
+      findTrigger: () => trigger,
+      getActiveElement: () => world.active,
+      getBody: () => world.body,
+      waitFrame: async () => {
+        frames += 1;
+      },
+    });
+
+    expect(restored).toBe(true);
+    expect(frames).toBe(BECOMES_FOCUSABLE_ON_FRAME);
+    expect(world.active).toBe(trigger);
+  });
+
+  it("still gives up eventually when the trigger never accepts focus", async () => {
+    const world = { active: null as unknown, body: {} };
+    const refuses = { name: "never-focusable", focus: () => {} };
+
+    world.active = world.body;
+
+    let frames = 0;
 
     const restored = await restoreRescheduleFocus("todo-1", {
       findTrigger: () => refuses,
       getActiveElement: () => world.active,
       getBody: () => world.body,
-      waitFrame: async () => {},
+      waitFrame: async () => {
+        frames += 1;
+      },
     });
 
     expect(restored).toBe(false);
+    expect(frames).toBe(MAX_WAIT_FRAMES);
   });
 
   /** The identity the DOM carries, so a row can be found after it has moved. */

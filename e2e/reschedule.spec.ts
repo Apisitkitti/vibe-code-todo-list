@@ -41,6 +41,27 @@ const daysFromToday = (days: number) => {
 /** The row's `<time>` element, or nothing when the todo has no due date. */
 const rowDate = (row: Locator) => row.locator("time");
 
+/**
+ * Whether a menu is open *now*, after giving react-aria two frames to open one.
+ *
+ * Deliberately not `expect(menu).toHaveCount(0)`. That assertion retries for
+ * fifteen seconds, so a menu that opens and then closes on its own — which is
+ * exactly what happens when the write lands and the row re-renders — satisfies
+ * it retroactively. Removing the guard this is meant to pin left the suite
+ * green precisely that way. A settled, non-retrying read is the only shape that
+ * can say "it did not open" rather than "it is not open any more".
+ */
+const menuOpenedAfterSettling = async (page: Page, menu: Locator) => {
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(null)));
+      }),
+  );
+
+  return (await menu.count()) > 0;
+};
+
 const boxOf = async (locator: Locator) => {
   const box = await locator.boundingBox();
 
@@ -242,6 +263,141 @@ test.describe("the toast reverses exactly what the press changed", () => {
   });
 });
 
+/**
+ * The in-flight window, and what the row does to the user's focus while it is
+ * open (review F1).
+ *
+ * The reschedule is not optimistic, so there is a real interval — a whole
+ * round trip — where the row is busy and nothing on screen has moved. What
+ * happens to focus during *that* interval is invisible to every assertion
+ * about the end state, which is exactly why it went unnoticed: the row is
+ * rebuilt afterwards and focus is put back, so the final frame looks correct
+ * however badly the middle behaved.
+ *
+ * The write is held open deliberately rather than raced, because the defect is
+ * proportional to latency and a local server has none.
+ */
+test.describe("a slow write does not park the user at the top of the document", () => {
+  const HOLD_MS = 2000;
+
+  /** Holds `PATCH /api/todos/[id]/due` open, and reports how many were sent. */
+  const holdDueWrites = async (page: Page) => {
+    const sent: string[] = [];
+
+    await page.route(/\/api\/todos\/[^/?]+\/due$/, async (route) => {
+      sent.push(route.request().url());
+
+      await new Promise((resolve) => setTimeout(resolve, HOLD_MS));
+      await route.continue();
+    });
+
+    return { count: () => sent.length };
+  };
+
+  test("focus stays on the control the user pressed for the whole request", async ({
+    signedIn,
+    todos,
+  }) => {
+    await todos.quickAdd("slow one");
+    await expect(todos.row("slow one")).toBeVisible();
+
+    await holdDueWrites(signedIn);
+
+    await todos.rescheduleButton("slow one").focus();
+    await signedIn.keyboard.press("Enter");
+    await expect(todos.rescheduleMenu("slow one")).toBeVisible();
+    // `Today` is already focused; commit it and leave the write in flight.
+    await signedIn.keyboard.press("Enter");
+
+    // Mid-flight: the row says it is busy and the new date has not landed.
+    await expect(todos.row("slow one")).toHaveAttribute("aria-busy", "true");
+    await expect(rowDate(todos.row("slow one"))).toHaveCount(0);
+
+    /*
+      The assertion this describe block exists for. A disabled control is
+      blurred by the browser, so marking the trigger `disabled` while the write
+      was in flight dropped focus to `<body>` — leaving a keyboard user at the
+      top of the document for the length of the request, with no way back into
+      the list except tabbing through everything above it. It is the same
+      failure `src/lib/rowFocus.ts` exists to prevent for the toggle, and it
+      lasted exactly as long as the user's connection was slow.
+    */
+    await expect(todos.rescheduleButton("slow one")).toBeFocused();
+
+    /*
+      And it is refused *visibly* rather than silently: `aria-disabled` carries
+      the same unavailable state to assistive technology, and HeroUI dims it
+      from the same rule as `:disabled`, so nothing about the appearance or the
+      announcement changed — only whether the user is still standing on it.
+    */
+    await expect(todos.rescheduleButton("slow one")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    // And the write still lands.
+    await expect(rowDate(todos.row("slow one"))).toHaveText("Today");
+    await expect(todos.rescheduleButton("slow one")).toBeFocused();
+  });
+
+  test("a second press mid-flight is refused, not queued behind the first", async ({
+    signedIn,
+    todos,
+  }) => {
+    await todos.quickAdd("slow two");
+    await expect(todos.row("slow two")).toBeVisible();
+
+    const writes = await holdDueWrites(signedIn);
+
+    await todos.rescheduleButton("slow two").focus();
+    await signedIn.keyboard.press("Enter");
+    await expect(todos.rescheduleMenu("slow two")).toBeVisible();
+    await signedIn.keyboard.press("Enter");
+
+    await expect(todos.row("slow two")).toHaveAttribute("aria-busy", "true");
+
+    /*
+      Pressed twice, in the two windows that behave differently.
+
+      **Immediately**, while react-aria is still closing the menu — measured at
+      more than 28ms in `next dev`, which is long enough for a real second
+      press and far longer than it looks. The item is still there and still
+      focused, so this press re-activates it and never asks the trigger to open
+      anything: only the handler's own pending guard can refuse it.
+    */
+    await signedIn.keyboard.press("Enter");
+
+    /*
+      **And again once the menu has gone**, which is the press a user actually
+      makes when nothing seems to be happening. This one reaches the trigger,
+      and the trigger declines to open while the row is busy — visibly, on a
+      control the user can still see they are standing on.
+    */
+    /*
+      That press lands while the menu is still on screen, so there is nothing to
+      assert about the menu here — what it must not do is produce a second
+      write, which the count at the end of this test is what says.
+
+      Then wait for the menu to actually go. react-aria closes it
+      asynchronously, and the difference between "has not closed yet" and
+      "reopened" is invisible to a retrying assertion, which is what let the
+      earlier version of this test pass with the trigger's guard deleted.
+    */
+    await expect(todos.rescheduleMenu("slow two")).toHaveCount(0);
+
+    // Now the press reaches the trigger, and the trigger must decline to open.
+    await signedIn.keyboard.press("Enter");
+
+    expect(
+      await menuOpenedAfterSettling(signedIn, todos.rescheduleMenu("slow two")),
+      "the trigger opened the menu while the row was busy",
+    ).toBe(false);
+
+    await expect(rowDate(todos.row("slow two"))).toHaveText("Today");
+    expect(writes.count(), "exactly one due write was sent").toBe(1);
+  });
+});
+
 test.describe("keyboard operation, end to end", () => {
   test("the menu opens, moves and commits from the keyboard alone", async ({
     signedIn,
@@ -315,6 +471,58 @@ test.describe("keyboard operation, end to end", () => {
     await expect(rowDate(todos.row("second thing"))).toHaveText("Today");
     // The row moved out of `No date` and into `Today`; focus came with it.
     await expect(todos.rescheduleButton("second thing")).toBeFocused();
+  });
+
+  /**
+   * Review F3 — the constraint the comment in `TodoRow` claims, made checkable.
+   *
+   * The comment says the trigger is a plain HeroUI `Button` rather than
+   * `Dropdown.Trigger` so it matches the two controls beside it. Nothing held
+   * that: swapping `Dropdown.Trigger` back in while keeping the sizing class
+   * left all eighteen tests green, so what was pinned was the 44×44 target and
+   * not the styling rationale at all. A comment that says "learned the hard
+   * way" about something no test holds is how documentation outlives its truth.
+   *
+   * `data-slot` is the discriminator, and it is the library's own contract
+   * attribute rather than a styling hook: HeroUI's `Button` stamps `button`,
+   * `Dropdown.Trigger` stamps `dropdown-trigger` and carries none of the
+   * `button--ghost` / `button--icon-only` treatment. The computed comparison
+   * against Edit is what makes this about the *treatment* rather than about the
+   * attribute — a `Dropdown.Trigger` given the same sizing class would still
+   * have square corners and no ghost background.
+   */
+  test("the trigger is styled as one of the row's icon buttons, not a bare menu trigger", async ({
+    todos,
+  }) => {
+    await todos.quickAdd("styled like its neighbours");
+    await expect(todos.row("styled like its neighbours")).toBeVisible();
+
+    const trigger = todos.rescheduleButton("styled like its neighbours");
+
+    await expect(trigger).toHaveAttribute("data-slot", "button");
+
+    /*
+      Read through the locators rather than by building a selector string: the
+      row's `aria-label`s carry straight double quotes around the title
+      (§7.4), which are not escapable inside an attribute selector without
+      `CSS.escape` — and a selector that throws is a test that fails for a
+      reason unrelated to what it is checking.
+    */
+    const readTreatment = (control: Locator) =>
+      control.evaluate((element) => {
+        const style = getComputedStyle(element);
+
+        return {
+          radius: style.borderTopLeftRadius,
+          display: style.display,
+          justify: style.justifyContent,
+          padding: style.paddingLeft,
+        };
+      });
+
+    expect(await readTreatment(trigger)).toEqual(
+      await readTreatment(todos.editButton("styled like its neighbours")),
+    );
   });
 
   test("the trigger and its menu both name the todo they belong to", async ({

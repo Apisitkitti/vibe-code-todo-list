@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { Button, Checkbox, Dropdown, Tooltip, Typography } from "@heroui/react";
 
@@ -153,6 +153,30 @@ interface RescheduleMenuProps {
  * server render and there is no hydration mismatch to suppress — unlike the
  * row's own due-date label, which does render on the server and carries
  * `suppressHydrationWarning` for it (`TodoDueDate`).
+ *
+ * **While a write is in flight the trigger is `aria-disabled`, never
+ * `disabled`, and that is a focus decision rather than a styling one**
+ * (review F1). The browser blurs a control the moment it acquires the
+ * `disabled` attribute, so marking this one disabled on `markPending` dropped
+ * focus to `<body>` for the length of the request — a keyboard user parked at
+ * the top of the document for as long as their connection was slow, which is
+ * precisely the failure `src/lib/rowFocus.ts` exists to prevent for the toggle.
+ * Measured with the `PATCH` held open for 2s: `document.activeElement` was
+ * `<body>` for the whole window.
+ *
+ * Nothing about the appearance or the announcement changes. HeroUI dims
+ * `[aria-disabled="true"]` from the same rule as `:disabled`
+ * (`@heroui/styles/dist/components/button.css`), and `aria-disabled` is what
+ * assistive technology reads either way. What changes is that the control stays
+ * focusable, so the user is still standing where they pressed.
+ *
+ * **The refusal moves to the open handler, and it had to.** `disabled` was not
+ * actually preventing the second write it was there for: with the trigger
+ * disabled mid-flight, a second `Enter` still reached the menu and sent a
+ * second `PATCH` — two writes to the same column, free to land in either order.
+ * Controlling `isOpen` and declining to open while pending refuses it at the
+ * one place that can see the pending state, and it is refused visibly, on a
+ * control the user can still see they are on.
  */
 const RescheduleMenu = ({
   todo,
@@ -161,17 +185,41 @@ const RescheduleMenu = ({
   onReschedule,
   onPickDate,
 }: RescheduleMenuProps) => {
+  const [isOpen, setIsOpen] = useState(false);
+
   const menuLabel = `Reschedule "${todo.title}"`;
 
+  /**
+   * The pending guard. `MenuTrigger` asks to open on press, on `Enter`, on
+   * `Space` and on `ArrowDown`; refusing here covers all four with one rule,
+   * where the trigger's own `disabled` attribute covered them by making the
+   * control unreachable — and, as it turned out, did not actually cover them.
+   *
+   * Only *opening* is refused. A close is always honoured, so nothing can
+   * strand the menu open.
+   */
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen && isDisabled) return;
+
+    setIsOpen(nextOpen);
+  };
+
   return (
-    <Dropdown>
+    <Dropdown isOpen={isOpen} onOpenChange={handleOpenChange}>
       <ActionTooltip label={RESCHEDULE_TOOLTIP} isEnabled={showTooltip}>
         <Button
           variant="ghost"
           size="sm"
           isIconOnly
           className={ICON_BUTTON_SIZING}
-          isDisabled={isDisabled}
+          /*
+            `aria-disabled`, not `isDisabled` — see the note on this component.
+            The state it announces is identical and HeroUI dims it identically;
+            what it does not do is take focus off the control the user is
+            standing on. `undefined` rather than `false` so the attribute is
+            absent rather than present-and-false.
+          */
+          aria-disabled={isDisabled || undefined}
           /*
             Names the record, not the control. Three rows of `Reschedule`
             buttons are indistinguishable to a screen reader otherwise — the
@@ -347,9 +395,11 @@ export const TodoRow = ({
       // its own when the row cannot hold everything on one. The content
       // column's `min-w-32` is what decides *when*: it is the narrowest a
       // truncated title may be squeezed to, so flexbox breaks the line rather
-      // than going below it. Measured, that is a wrap below 424px — every phone
-      // — and one line from 480px up, with no breakpoint named anywhere in the
-      // CSS to keep in step with the design.
+      // than going below it. Measured, that is a wrap below 457px — every
+      // phone — with no breakpoint named anywhere in the CSS to keep in step
+      // with the design. §4.4 carries the arithmetic; note that 112px of it is
+      // surrounding padding, a third of which is the Card's own `px-4` and is
+      // the term the first draft of that arithmetic left out.
       className={`group flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-border-secondary px-4 py-3.5 hover:bg-surface-hover ${
         isVanishing ? "pointer-events-none" : ""
       }`}
