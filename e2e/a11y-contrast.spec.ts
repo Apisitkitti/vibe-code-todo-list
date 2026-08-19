@@ -383,6 +383,17 @@ test.describe("DEF-15 — the muted token clears 4.5:1 on every surface", () => 
       await expectReadable(todos.doneCounter, "done counter", theme);
       // Same token, same surface — QA noted it travels with the count.
       await expectReadable(accountMenu, "account menu label", theme);
+      /*
+        US-12's header line is the third thing on this token and this surface,
+        and it is the one a user reads first. Measured here rather than in its
+        own describe, because "the fix is to the token and a token fix has to
+        hold everywhere" is this block's whole argument.
+      */
+      await expectReadable(
+        signedIn.locator("main").getByText(/^\w+day, \d{1,2} [A-Z][a-z]+/),
+        "dated header line",
+        theme,
+      );
     }
   });
 

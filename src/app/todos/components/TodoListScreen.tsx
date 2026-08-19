@@ -28,6 +28,7 @@ import {
   undoTokenProps,
 } from "@/lib/rowFocus";
 import type { TodoItemData, TodoListFilters } from "@/lib/todo";
+import { groupTodos, type TodoGroup } from "@/lib/todoGroups";
 import {
   applyCompletion,
   replaceTodo,
@@ -42,6 +43,7 @@ import { TodoEmptyState } from "./TodoEmptyState";
 import { TodoFilters } from "./TodoFilters";
 import { TodoFormModal } from "./TodoFormModal";
 import { TodoGroupedList } from "./TodoGroupedList";
+import { TodoListHeaderLine } from "./TodoListHeaderLine";
 import { TodoListSkeleton } from "./TodoListSkeleton";
 
 const TODOS_PATH = "/todos";
@@ -855,6 +857,25 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     return noMatchingFilters();
   };
 
+  /**
+   * The sections, cut once per render and shared by the list and the header
+   * line above it (US-12).
+   *
+   * `null` while the list has not loaded and while it is showing a load
+   * failure. Both are cases where `result.todos` is not what is on screen — a
+   * filter change keeps the previous rows in `result` until the new ones land,
+   * so counting them would report the old filter's numbers under the new
+   * filter's heading — and US-12 asks for the date alone in the first case
+   * anyway, so the counts never render as zero and then change.
+   */
+  const visibleGroups = (): TodoGroup[] | null => {
+    if (isLoading || loadError !== null) return null;
+
+    return groupTodos(result.todos);
+  };
+
+  const groups = visibleGroups();
+
   const renderList = () => {
     if (isLoading) return <TodoListSkeleton />;
 
@@ -905,7 +926,18 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     */
     return (
       <TodoGroupedList
-        todos={result.todos}
+        /*
+          The same array the header line above is counting — one `groupTodos`
+          call per render feeding both, which is what makes "the line and the
+          list can never disagree" (US-12) a property of the code rather than
+          something a test has to keep catching.
+
+          Non-null by the time this line runs: `groups` is `null` only while
+          loading or while showing a load failure, and both of those branches
+          have already returned above. The `?? []` is the type narrowing, not a
+          fallback anybody expects to take.
+        */
+        groups={groups ?? []}
         pendingTodoIds={rowPendingIds()}
         /*
           The one row §8.3.2 still gives a row-level pending treatment to: a
@@ -964,6 +996,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
           </Typography>
         ) : null}
       </div>
+
+      {/*
+        US-12. One plain-text line, below the app bar and above the list,
+        reporting the viewer's today and the sizes of the two sections that
+        answer "what now?". It is not gated on `hasTodos`: the date alone is
+        the specified state for an empty list and for a list still loading, and
+        a line that came and went would be a fourth thing moving on the page.
+      */}
+      <TodoListHeaderLine groups={groups} />
 
       {/*
         Never gated on `hasTodos`, unlike the filter bar below it and unlike

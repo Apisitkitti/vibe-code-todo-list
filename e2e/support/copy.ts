@@ -192,6 +192,52 @@ export const GROUP_HEADINGS_IN_ORDER = [
 ];
 
 /**
+ * US-12 / §7.19 — the dated header line above the list.
+ *
+ * The date is built here from `Date`'s own parts rather than through dayjs,
+ * which is what the app formats it with. That is deliberate: a helper sharing
+ * the app's formatter would agree with it by construction and could not catch
+ * the app formatting the wrong day. Clauses are joined with `·` per §7.18.
+ */
+const WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** `Saturday, 16 August`, in the runner's own local day. */
+export const headerDate = (now: Date = new Date()) =>
+  `${WEEKDAYS[now.getDay()]}, ${now.getDate()} ${MONTHS[now.getMonth()]}`;
+
+export const headerLine = (...clauses: string[]) =>
+  [headerDate(), ...clauses].join(" · ");
+
+export const dueTodayClause = (count: number) => `${count} due today`;
+export const overdueClause = (count: number) => `${count} overdue`;
+
+/** Matches the line whatever its clauses, for locating it before reading it. */
+export const HEADER_LINE_PATTERN = /^\w+day, \d{1,2} [A-Z][a-z]+/;
+
+/**
  * Raw transport text that must NEVER reach the user. `getErrorMessage`
  * deliberately prefers the copy deck over axios's own `message`, and these are
  * the strings that prove it is still doing so.

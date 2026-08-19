@@ -306,11 +306,17 @@ Identical structure to `/sign-in`. Differences only:
 <Header>                         ← app bar, full-bleed, sticky
 <main className="flex-1 w-full max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8 flex flex-col gap-6">
   ├─ Page heading + count
-  ├─ Add-todo affordance
-  ├─ Filter bar
-  └─ Card (the list)
+  ├─ Dated header line          ← US-12, §7.19; plain text, always present
+  ├─ Quick-add bar              ← §7.17; always present, never gated on hasTodos
+  ├─ Filter bar                 ← only once the account has todos
+  └─ Card (the list, cut into urgency sections — §7.16)
 </main>
 ```
+
+*Amended twice while it was being worked in: the "Add-todo affordance" row is
+the quick-add bar of §7.17, not the retired `New todo` button, and the list
+inside the Card is the sectioned list of §7.16 rather than one flat `<ul>`.
+Both were already true in the code; this diagram had not been told.*
 
 **App bar.** Use `Header` — note it is **not** compound: the exported `Header`
 has no `.Root`, `.Title` etc. It is a single element that renders RAC's
@@ -1312,7 +1318,8 @@ a period.
 | Page heading | `Your todos` |
 | Count | `{done} of {total} done` |
 | Count (zero todos) | *(render nothing)* |
-| Add button | `New todo` |
+| Dated header line | see §7.19 |
+| ~~Add button~~ | ~~`New todo`~~ — **struck.** There is no such button; §7.17's quick-add bar replaced it and §7.18 renamed the empty state's action. |
 | Filter: all | `All` |
 | Filter: active | `Active` |
 | Filter: completed | `Completed` |
@@ -1769,6 +1776,61 @@ a modal that is no longer what the button does. This row supersedes the
 A row reading `Today` inside a section headed `Today` is a repetition, not a
 contradiction, and the alternative — inventing a second word for the same day —
 is worse.
+
+### 7.19 The dated header line
+
+Added for `docs/PRD.md` US-12: one plain-text line above the list and below the
+app bar, telling the user what day it is and how much is due before they read a
+single row.
+
+| Slot | String |
+|---|---|
+| Date | `dddd, D MMMM` — e.g. `Saturday, 16 August` |
+| Due-today clause | ` · {n} due today` |
+| Overdue clause | ` · {n} overdue` |
+| Both, in order | `Saturday, 16 August · 3 due today · 1 overdue` |
+| A clause whose count is zero | *(omitted entirely — never `0 due today`)* |
+| Loading, load failure, or nothing due | *(the date alone)* |
+
+Separator is `·` per §7.18's punctuation note. One wording for one and for
+many: `1 due today`, `3 due today` — no plural switch, and nothing that could
+produce `1 todos`.
+
+**Not a heading and not a control.** It summarises the sections, and the
+sections (§7.16, US-06) remain the place overdue work is actually conveyed.
+Rendered as `<Typography type="body-sm" color="muted">`, which is the same
+token and surface as the `{done} of {total} done` counter beside the page
+heading and is measured with it in `e2e/a11y-contrast.spec.ts`.
+
+**The counts are the sizes of the `Today` and `Overdue` sections, read from the
+sections themselves.** `TodoListScreen` calls `groupTodos` once per render and
+hands the one array to `TodoGroupedList` and to `formatListHeaderLine`
+(`src/lib/listHeaderLine.ts`). US-12 requires that the line and the list can
+never disagree, and one array shared by both is what makes that a property of
+the structure rather than something a test has to keep catching. A second pass
+over `todos` would be a second answer, and two answers computed from one input
+at two moments can differ — over a midnight boundary, or across an optimistic
+write that moved a row between the calls.
+
+Three things fall out of that rather than needing rules of their own:
+
+- **Completed todos are never counted.** `todoGroupId` puts completion first,
+  so a finished todo is in `Completed` whatever its date reads.
+- **A filter or a search is simply a shorter array** by the time it reaches
+  here, so the counts describe what is on screen with no filter logic in this
+  file at all.
+- **"Today" is decided once.** `groupTodos` goes through `dueDayOffset`
+  (`src/lib/date.ts`), the single place a UTC-midnight `dueAt` is reconciled
+  against the viewer's local calendar day. CI runs with `TZ=Pacific/Kiritimati`
+  to catch a second answer.
+
+**The date is shown alone while the list is loading and while a load has
+failed** — `groups` is `null` in both — so the counts never render as zero, or
+as the previous filter's numbers, and then change under the user. The loading
+case has teeth only on a *filter change*: `useTodoList` keeps the previous
+filter's rows in `result` until the new ones land, so a first load would look
+correct with no gate at all. `e2e/list-header.spec.ts` holds the filter
+change's `GET` open and asserts the line against exactly that window.
 
 Punctuation notes: use the typographic apostrophe (`'`) in contractions
 (`don't`, `can't`, `Couldn't`) and curly double quotes around interpolated

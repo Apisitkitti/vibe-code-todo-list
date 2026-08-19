@@ -3,7 +3,7 @@
 import { Separator, Typography } from "@heroui/react";
 
 import type { TodoItemData } from "@/lib/todo";
-import { groupTodos } from "@/lib/todoGroups";
+import type { TodoGroup } from "@/lib/todoGroups";
 
 import { TodoRow } from "./TodoRow";
 
@@ -35,7 +35,14 @@ const GroupCount = ({ count }: { count: number }) => {
 };
 
 export interface TodoGroupedListProps {
-  todos: TodoItemData[];
+  /**
+   * The sections, already cut. Passed in rather than computed here since
+   * US-12: the header line above the list reports the sizes of the `Today` and
+   * `Overdue` sections, and the only way the line and the list cannot disagree
+   * is for both to be drawing the same array. `TodoListScreen` calls
+   * `groupTodos` once and gives it to both.
+   */
+  groups: TodoGroup[];
   pendingTodoIds: ReadonlySet<string>;
   /** The row a confirmed delete is running against, if any (§8.3.2). */
   vanishingTodoId: string | null;
@@ -58,7 +65,7 @@ export interface TodoGroupedListProps {
  * to what shipped before this change — one `<ul>` of rows.
  */
 export const TodoGroupedList = ({
-  todos,
+  groups,
   pendingTodoIds,
   vanishingTodoId,
   showTooltips,
@@ -66,7 +73,6 @@ export const TodoGroupedList = ({
   onEdit,
   onDelete,
 }: TodoGroupedListProps) => {
-  const groups = groupTodos(todos);
   const showHeadings = groups.length > 1;
 
   return (
