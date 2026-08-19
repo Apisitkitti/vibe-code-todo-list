@@ -57,9 +57,9 @@ Reference them in Tailwind v4 arbitrary-value syntax, e.g.
 | Accent tint | `--accent-soft` / `--accent-soft-foreground` | Selected filter chip. |
 | Danger | `--danger` / `--danger-foreground` | Delete confirm button. |
 | Danger tint | `--danger-soft` / `--danger-soft-foreground` | High-priority chip, error text. |
-| Warning tint | `--warning-soft` / `--warning-soft-foreground` | Medium-priority chip, overdue date. |
+| Warning tint | `--warning-soft` / `--warning-soft-foreground` | Overdue date. **No longer the medium-priority chip** — see §4.4. |
 | Success tint | `--success-soft` / `--success-soft-foreground` | Completed-state affordances. |
-| Neutral tint | `--default-soft` / `--default-soft-foreground` | Low-priority chip. |
+| Neutral tint | `--default-soft` / `--default-soft-foreground` | Unused since §4.4 took the low/medium chips to `tertiary`, which has no fill. |
 | Overlay (modal/menu) | `--overlay` / `--overlay-foreground` | Handled by HeroUI. |
 | Backdrop | `--backdrop` | Handled by `Modal.Backdrop`. |
 | Focus ring | `--focus` | Aliased to `--accent`. Do not restyle. |
@@ -524,8 +524,8 @@ pass `aria-label`.
 | `priority` | Chip props | Glyph prefix | Label |
 |---|---|---|---|
 | `high` | `color="danger" variant="soft" size="sm"` | `▲` | `High` |
-| `medium` | `color="warning" variant="soft" size="sm"` | `■` | `Medium` |
-| `low` | `color="default" variant="soft" size="sm"` | `▼` | `Low` |
+| `medium` | `color="default" variant="tertiary" size="sm"` | `■` | `Medium` |
+| `low` | `color="default" variant="tertiary" size="sm"` | `▼` | `Low` |
 
 ```tsx
 <Chip color="danger" variant="soft" size="sm">
@@ -535,6 +535,37 @@ pass `aria-label`.
 
 The glyph is decorative (`aria-hidden`); the word carries the meaning for
 screen readers and for colour-blind sighted users alike.
+
+**Only `High` is loud** (§8.4.2, taken). This table used to give all three
+`variant="soft"`, and `medium` is the schema default, so a real list was a
+column of near-identical warning-tinted chips with nothing for `High` to stand
+out against. `low` and `medium` are now `tertiary`.
+
+`medium` loses `color="warning"` along with the variant, and that is forced by
+the CSS rather than chosen: `chip--tertiary` sets only
+`--chip-bg: transparent` (`@heroui/styles/dist/components/chip.css`) while
+`--chip-fg` still comes from the *colour* class, so
+`variant="tertiary" color="warning"` is orange text with the fill taken away —
+louder against a quiet row, not quieter. `default` is the pairing that makes
+the chip recede.
+
+**§6.4 is untouched**: the word and the shape glyph are unchanged, so colour is
+still not carrying the meaning. No token is overridden, so §3's exception is
+not engaged. Measured through the browser's parser, label against the composited
+backdrop:
+
+| Level | Light, before → after | Dark, before → after |
+|---|---|---|
+| `high` | 5.49 : 1 → **5.49 : 1** (unchanged) | 5.51 : 1 → **5.51 : 1** (unchanged) |
+| `medium` | 5.16 : 1 → **17.72 : 1** | 9.21 : 1 → **17.27 : 1** |
+| `low` | 16.25 : 1 → **17.72 : 1** | 15.86 : 1 → **17.27 : 1** |
+
+Contrast rises on both levels that moved, because a tertiary chip's label is
+`--default-foreground` on the row rather than a soft-tint foreground on a soft
+fill. Pinned in `e2e/a11y-contrast.spec.ts`, which measures all three levels in
+both themes **and** asserts the fill itself — a ratio alone would have passed
+just as happily on the column of identical soft chips this change exists to
+break up.
 
 **Due date.** `<Typography type="body-sm" color="muted">` inside a `<time>`:
 
@@ -1822,6 +1853,14 @@ word and the shape glyph (`▲`/`■`/`▼`) are untouched, so **§6.4 holds exa
 written** — this changes only how loud the tint is. Cheapest single change that
 makes the list look considered, and it is the direct fix for "everything looks
 the same".
+
+> **Done — §4.4 is the spec, with one correction this note could not have
+> known.** `medium` had to give up `color="warning"` as well as the variant.
+> `chip--tertiary` sets only `--chip-bg: transparent`; the colour class still
+> supplies `--chip-fg`, so `tertiary` + `warning` is orange text with the fill
+> removed rather than a quieter chip. Both moved levels went *up* in contrast
+> (medium 5.16 → 17.72 light, 9.21 → 17.27 dark); the before/after table is in
+> §4.4 and the measurements are pinned in `e2e/a11y-contrast.spec.ts`.
 
 **3 — Give the list a shape: a completed section, with a real heading.**
 With `status=all`, completed rows simply appear below the active ones and a
