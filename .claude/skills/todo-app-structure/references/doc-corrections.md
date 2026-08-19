@@ -14,6 +14,11 @@ rules the code had quietly outgrown.
 description; the documents still say what they say. Fixing them is the team
 lead's call, and `docs/REVIEW.md` §4.2 already asked for it.
 
+Line numbers below are as of `49492e2` and will drift the moment anyone edits
+those files — which is the same failure this file documents, so treat them as a
+hint and search for the quoted text. When a correction here stops matching, the
+document was fixed: delete the entry rather than updating the number.
+
 ## `docs/CONVENTIONS.md` — server actions
 
 This is the important one, because the sentence it gets wrong is the
