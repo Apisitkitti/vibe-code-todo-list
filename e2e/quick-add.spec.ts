@@ -415,8 +415,10 @@ test.describe("quick-add bar", () => {
     // eaten off it.
     await expect(todos.row(CORRECTED_LINE)).toBeVisible();
     await expect(todos.row(CORRECTED_LINE).locator("time")).toHaveCount(0);
-    // `PriorityChip` always renders, so this reads the saved priority rather
-    // than the absence of a chip: the refused word did not become High.
+    // The row is active, and an active row always carries its chip — so this
+    // reads the saved priority rather than the absence of one: the refused
+    // word did not become High. (Completed rows drop the chip; that is why
+    // this reasoning names the row's state rather than the component.)
     await expect(todos.row(CORRECTED_LINE)).toContainText("Medium");
     await expect(todos.row(CORRECTED_LINE)).not.toContainText("High");
   });

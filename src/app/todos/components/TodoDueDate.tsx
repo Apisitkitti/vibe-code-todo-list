@@ -19,8 +19,6 @@ export const TodoDueDate = ({ dueAt }: TodoDueDateProps) => {
 
   if (label === "") return null;
 
-  const showOverdue = isOverdue;
-
   return (
     // The label is relative to "now", so server and client can disagree by a
     // day across a timezone boundary; the value itself is identical.
@@ -28,9 +26,9 @@ export const TodoDueDate = ({ dueAt }: TodoDueDateProps) => {
       <Typography
         type="body-sm"
         color="muted"
-        className={showOverdue ? "text-warning-soft-foreground" : undefined}
+        className={isOverdue ? "text-warning-soft-foreground" : undefined}
       >
-        {showOverdue ? (
+        {isOverdue ? (
           <>
             <span aria-hidden="true" className="mr-1">
               ⚠
