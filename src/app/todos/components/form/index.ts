@@ -18,9 +18,18 @@ export {
 } from "./QuickAddForm/QuickAddForm";
 
 /**
- * Re-exported, not re-declared: the schema itself lives at
+ * The quick-add bar's own schema, colocated with the only thing that uses it.
+ * It validates that something was typed and nothing more; no route handler
+ * parses it.
+ */
+export { quickAddSchema, type QuickAddValues } from "./QuickAddForm/schema";
+
+/**
+ * Re-exported, not re-declared: the todo write contract lives at
  * `@/lib/todo.schema` because the route handlers re-parse with it and server
  * code must not import out of a route's UI folder (`docs/REVIEW.md` §1.3).
+ * That is the whole split — a schema the server parses with stays in
+ * `src/lib`; a schema only its form uses moves in with the form.
  *
  * It stays in this barrel so components keep importing everything a form needs
  * from one path. Server code imports `@/lib/todo.schema` directly.
@@ -29,9 +38,7 @@ export {
   DEFAULT_TODO_FORM_VALUES,
   TODO_FIELD_NAMES,
   isTodoFieldName,
-  quickAddSchema,
   todoFormSchema,
-  type QuickAddValues,
   type TodoFieldErrors,
   type TodoFormValues,
 } from "@/lib/todo.schema";
