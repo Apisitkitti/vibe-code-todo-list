@@ -170,6 +170,19 @@ export const TODAY_HEADING = "Today";
 export const UPCOMING_HEADING = "Upcoming";
 export const NO_DATE_HEADING = "No date";
 export const COMPLETED_HEADING = "Completed";
+/**
+ * §7.16 — a heading's **rendered text**, which carries the section count:
+ * `Overdue · 3`. Separator is `·` per §7.18's punctuation note.
+ *
+ * Deliberately separate from the constants above, and both are needed. The
+ * count is `aria-hidden`, so a heading's *accessible name* is still the bare
+ * string — `getByRole("heading", { name: OVERDUE_HEADING })` keeps matching —
+ * while `toHaveText` reads the text content and sees the count. Asserting the
+ * wrong one of the two would pass for the wrong reason.
+ */
+export const sectionHeadingText = (heading: string, count: number) =>
+  `${heading} · ${count}`;
+
 export const GROUP_HEADINGS_IN_ORDER = [
   OVERDUE_HEADING,
   TODAY_HEADING,
@@ -177,6 +190,52 @@ export const GROUP_HEADINGS_IN_ORDER = [
   NO_DATE_HEADING,
   COMPLETED_HEADING,
 ];
+
+/**
+ * US-12 / §7.19 — the dated header line above the list.
+ *
+ * The date is built here from `Date`'s own parts rather than through dayjs,
+ * which is what the app formats it with. That is deliberate: a helper sharing
+ * the app's formatter would agree with it by construction and could not catch
+ * the app formatting the wrong day. Clauses are joined with `·` per §7.18.
+ */
+const WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** `Saturday, 16 August`, in the runner's own local day. */
+export const headerDate = (now: Date = new Date()) =>
+  `${WEEKDAYS[now.getDay()]}, ${now.getDate()} ${MONTHS[now.getMonth()]}`;
+
+export const headerLine = (...clauses: string[]) =>
+  [headerDate(), ...clauses].join(" · ");
+
+export const dueTodayClause = (count: number) => `${count} due today`;
+export const overdueClause = (count: number) => `${count} overdue`;
+
+/** Matches the line whatever its clauses, for locating it before reading it. */
+export const HEADER_LINE_PATTERN = /^\w+day, \d{1,2} [A-Z][a-z]+/;
 
 /**
  * Raw transport text that must NEVER reach the user. `getErrorMessage`

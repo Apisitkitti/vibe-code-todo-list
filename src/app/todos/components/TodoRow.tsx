@@ -11,6 +11,26 @@ import { TodoDueDate } from "./TodoDueDate";
 
 const ICON_BUTTON_SIZING = "min-h-11 min-w-11 sm:min-h-9 sm:min-w-9";
 
+/**
+ * The title takes the slack at `sm:` and up, which is what reserves the
+ * metadata column (`docs/DESIGN.md` §1: *"Nothing reflows between rows; a row
+ * with no due date leaves the slot empty rather than shifting"*).
+ *
+ * Without `flex-1` the title is sized by its own content, so the chip/date/note
+ * cluster hugged the end of each title and landed somewhere different on every
+ * row — the list had no column to scan down. With it, the cluster is pushed to
+ * a consistent right edge and a row missing a date leaves the gap rather than
+ * sliding everything left.
+ *
+ * `min-w-0` alongside it, or the flex item refuses to shrink below its content
+ * width and `truncate` never fires. The trade is that long titles truncate
+ * sooner, which is the trade §1 already made.
+ *
+ * `sm:` only: below that the row is `flex-col`, where `flex-1` would stretch
+ * the title vertically instead and there is no column to reserve.
+ */
+const TITLE_SIZING = "sm:min-w-0 sm:flex-1";
+
 const EditIcon = () => {
   return (
     <svg
@@ -191,15 +211,36 @@ export const TodoRow = ({
           type="body"
           weight="medium"
           truncate
-          className={todo.completed ? "text-muted line-through" : undefined}
+          className={
+            todo.completed
+              ? `${TITLE_SIZING} text-muted line-through`
+              : TITLE_SIZING
+          }
         >
           {todo.title}
         </Typography>
         <div className="flex shrink-0 items-center gap-2">
-          <PriorityChip priority={todo.priority} />
-          {todo.dueAt ? (
-            <TodoDueDate dueAt={todo.dueAt} completed={todo.completed} />
-          ) : null}
+          {/*
+            A completed row goes quiet: no priority chip and no due date.
+            `src/lib/todoGroups.ts` already argues the date half — "a completed
+            todo is done, so its date has nothing left to say" — and this is
+            the row finally agreeing with it, instead of filing a finished task
+            under `Completed` while it announces `Aug 12`. The priority half is
+            §8.5: once a todo is done its priority is history and it is
+            competing for attention with the active rows above it.
+
+            §6.4 is unaffected. Completion is carried by the checkbox's
+            `aria-checked` and by `line-through` on the title, never by the
+            chip or the date, so nothing that carried meaning has been removed.
+            The `✎` note marker stays — a note is still there to read — and so
+            do the actions.
+          */}
+          {todo.completed ? null : (
+            <>
+              <PriorityChip priority={todo.priority} />
+              {todo.dueAt ? <TodoDueDate dueAt={todo.dueAt} /> : null}
+            </>
+          )}
           {todo.note ? (
             <>
               <span aria-hidden="true" className="text-muted">
