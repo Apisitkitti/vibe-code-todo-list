@@ -12,18 +12,17 @@ import {
   FormTextField,
 } from "@/components/ui";
 import { PRIORITY_VALUES } from "@/lib/todo";
-
-const PRIORITY_OPTIONS = PRIORITY_VALUES.map((priority) => ({
-  id: priority,
-  label: PRIORITY_FILTER_LABELS[priority],
-}));
-
 import {
   todoFormSchema,
   type TodoFieldErrors,
   type TodoFormInput,
   type TodoFormValues,
-} from "./schema";
+} from "@/lib/todo.schema";
+
+const PRIORITY_OPTIONS = PRIORITY_VALUES.map((priority) => ({
+  id: priority,
+  label: PRIORITY_FILTER_LABELS[priority],
+}));
 
 export interface TodoFormProps {
   /** Ties the form to a submit button rendered outside it, in the modal footer. */

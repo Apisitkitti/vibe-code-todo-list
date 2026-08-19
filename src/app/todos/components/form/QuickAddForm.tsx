@@ -21,13 +21,12 @@ import {
   type QuickAddRelease,
   type QuickAddTokenKind,
 } from "@/lib/quickAdd";
-
 import {
   quickAddSchema,
   todoFormSchema,
   type QuickAddValues,
   type TodoFormValues,
-} from "./schema";
+} from "@/lib/todo.schema";
 
 /** Copy deck, `docs/DESIGN.md` §7.17. */
 const FIELD_LABEL = "Add a todo";

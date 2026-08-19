@@ -1,11 +1,8 @@
 import type { ZodError } from "zod";
 
-import {
-  isTodoFieldName,
-  type TodoFieldErrors,
-} from "@/app/todos/components/form";
 import { ApiErrorCode, apiError } from "@/lib/apiError";
 import { CREATED_VIA_VALUES, TODO_NOT_FOUND_MESSAGE } from "@/lib/todo";
+import { isTodoFieldName, type TodoFieldErrors } from "@/lib/todo.schema";
 
 /**
  * The todo-specific error wording. The body shape, the status codes and the
