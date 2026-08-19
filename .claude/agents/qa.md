@@ -41,6 +41,33 @@ while the data disagrees.
 assume there is a fourth and go looking for it in the same shape. On this
 project there always was.
 
+**Do the strange thing.** Every serious defect here was found off the happy
+path, by someone doing what a tired or confused or unusual person does — and
+none of them were found by the suite. So go looking deliberately:
+
+- *Out of order.* Press the second thing first. Cancel halfway. Open the
+  modal, walk away, come back. Undo something that has already been changed
+  by something else.
+- *Too fast, and too slow.* Double-press everything. Hold a write open for
+  fifteen seconds and use the app while it hangs. Two tabs on one account,
+  acting on the same row.
+- *Not with a mouse.* Keyboard only, all the way through. Then a virtual
+  click — the kind a screen reader, voice control or `element.click()`
+  produces, with no pointer event behind it. That path found a defect that a
+  real double-click provably could not reach, and it was the assistive path
+  that silently lost the user's text.
+- *Input nobody would type.* A term that is all punctuation. `%`, `_`, `\`.
+  Text that is entirely vocabulary words. A title in Thai, Chinese, Hebrew,
+  emoji. Something 300 characters long. Something pasted rather than typed —
+  a paste has no keystrokes, so anything watching for edits never sees it.
+- *States the code forgot.* An empty list. One item. A hundred. A session
+  that expired while the tab sat open. A filter that hides the row you just
+  created. The last item on screen removed while focus is on it.
+
+You are not trying to be clever. You are trying to be the user who does not
+know the intended sequence — because that user exists and the suite was
+written by someone who does.
+
 **Judge the trade, not just the rule.** If a fix is worse than what it
 replaced, say so with the reasoning — that is a finding, not a matter of
 taste. And withdraw an objection when the evidence turns; you have done both
