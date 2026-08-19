@@ -358,6 +358,97 @@ export const focusRowAfterRemoval = async (
 };
 
 /**
+ * Names a row's reschedule trigger by the todo it belongs to (backlog #5).
+ *
+ * The same shape of answer as `UNDO_TOKEN_ATTRIBUTE` above, for a different
+ * question: not "which toast did I raise" but "which row did I act on". A
+ * positional selector would be wrong for the same reason it was wrong there —
+ * the row's position is exactly what a reschedule changes.
+ */
+export const RESCHEDULE_TRIGGER_ATTRIBUTE = "data-reschedule-for";
+
+/** The attribute as a spreadable prop; see `undoTokenProps` for why. */
+export const rescheduleTriggerProps = (
+  todoId: string,
+): Record<string, string> => ({
+  [RESCHEDULE_TRIGGER_ATTRIBUTE]: todoId,
+});
+
+const rescheduleTriggerSelector = (todoId: string) =>
+  `main [${RESCHEDULE_TRIGGER_ATTRIBUTE}="${CSS.escape(todoId)}"]`;
+
+/** What `restoreRescheduleFocus` reads the world through. */
+export interface RestoreFocusDeps {
+  findTrigger: (todoId: string) => FocusTarget | null;
+  getActiveElement: () => unknown;
+  getBody: () => unknown;
+  waitFrame: () => Promise<void>;
+}
+
+const browserRestoreDeps: RestoreFocusDeps = {
+  findTrigger: (todoId) =>
+    document.querySelector<HTMLElement>(rescheduleTriggerSelector(todoId)),
+  getActiveElement: () => document.activeElement,
+  getBody: () => document.body,
+  waitFrame: nextFrame,
+};
+
+/**
+ * Puts focus back on the control the user pressed, after the row it lives on
+ * has been rebuilt somewhere else in the list.
+ *
+ * **This is a restoration, not the redirection the toggle needs, and the
+ * difference is the whole reason it is a separate function.** A toggle under a
+ * status filter destroys the row: there is nothing to go back to, so focus is
+ * moved to the toast's Undo and the user pays the surprise §6.8 describes. A
+ * reschedule destroys nothing — the row is still on screen, still the user's,
+ * just under a different heading — so the right place for focus is the button
+ * they pressed, and moving them to a toast instead would arm an Undo under
+ * their next `Space` for no reason at all.
+ *
+ * The focus is lost in the first place because the list is cut into sections
+ * (`TodoGroupedList`): a todo moving from `Upcoming` to `Today` is rendered
+ * under a different `<section>`, so React unmounts the row and builds a new
+ * one rather than moving the DOM node, and the trigger goes with it. Nothing
+ * about that is visible on screen — the row appears to slide — which is
+ * exactly the kind of focus loss that only shows up in keyboard use.
+ *
+ * **It only ever acts on focus that is already on the floor.** `<body>` (or
+ * `null`) is what an unmounted focused element leaves behind; a row that did
+ * *not* change section leaves focus on the trigger, and this declines and
+ * expires quietly. So it cannot take focus the user has moved themselves, and
+ * it cannot fire on the common case where nothing was lost — which also means
+ * there is no version of this that fights react-aria's own restore-focus-to-
+ * trigger on menu close.
+ *
+ * Bounded by `MAX_WAIT_FRAMES` for the same reason step 2 is: the list refetch
+ * has to land first, and waiting on the condition rather than the clock is what
+ * makes that safe on a slow machine.
+ */
+export const restoreRescheduleFocus = async (
+  todoId: string,
+  deps: RestoreFocusDeps = browserRestoreDeps,
+): Promise<boolean> => {
+  for (let frame = 0; frame < MAX_WAIT_FRAMES; frame += 1) {
+    const active = deps.getActiveElement();
+
+    if (active === null || active === deps.getBody()) {
+      const trigger = deps.findTrigger(todoId);
+
+      if (trigger !== null) {
+        trigger.focus();
+
+        return deps.getActiveElement() === trigger;
+      }
+    }
+
+    await deps.waitFrame();
+  }
+
+  return false;
+};
+
+/**
  * What `focusUndoAction` reads the world through.
  *
  * Injectable for the same reason `RowFocusDeps` is, and for one more: the

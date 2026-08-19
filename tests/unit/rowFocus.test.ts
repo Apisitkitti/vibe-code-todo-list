@@ -7,6 +7,9 @@ import {
   MAX_WAIT_FRAMES,
   nextFocusIndex,
   nextUndoToken,
+  RESCHEDULE_TRIGGER_ATTRIBUTE,
+  rescheduleTriggerProps,
+  restoreRescheduleFocus,
   UNDO_TOKEN_ATTRIBUTE,
   undoTokenProps,
 } from "@/lib/rowFocus";
@@ -343,5 +346,154 @@ describe("nextUndoToken", () => {
   it("travels as the data attribute the action button is found by", () => {
     expect(undoTokenProps("undo-7")).toEqual({ [UNDO_TOKEN_ATTRIBUTE]: "undo-7" });
     expect(UNDO_TOKEN_ATTRIBUTE.startsWith("data-")).toBe(true);
+  });
+});
+
+/**
+ * The reschedule's focus answer, and the reason it is a different function from
+ * the toggle's (backlog #5).
+ *
+ * A reschedule does not remove the row — it moves it into another section, and
+ * because sections are separate subtrees React rebuilds the row rather than
+ * moving the DOM node, so the trigger the user pressed is destroyed and rebuilt
+ * a few pixels away. Focus falls to `<body>` with nothing on screen to show for
+ * it. The right answer is to put focus back on that same control, not to
+ * redirect it into a toast the way a *removed* row forces.
+ *
+ * Three properties decide whether that is safe, and none of them can be
+ * observed from a browser test that only checks the happy path:
+ *
+ *  - it acts only on focus that is on the floor;
+ *  - it waits for the rebuilt trigger rather than for a frame count;
+ *  - it never takes focus the user has moved somewhere themselves.
+ */
+describe("restoreRescheduleFocus", () => {
+  const makeTrigger = (name: string) => {
+    const world: { active: unknown; body: unknown } = { active: null, body: {} };
+
+    const trigger = {
+      name,
+      focus: () => {
+        world.active = trigger;
+      },
+    };
+
+    return { trigger, world };
+  };
+
+  it("waits for the rebuilt trigger instead of giving up on the first frame", async () => {
+    const { trigger, world } = makeTrigger("rebuilt");
+
+    world.active = world.body;
+
+    let frames = 0;
+    const REBUILD_LANDS_ON_FRAME = 4;
+
+    const restored = await restoreRescheduleFocus("todo-1", {
+      findTrigger: () => (frames < REBUILD_LANDS_ON_FRAME ? null : trigger),
+      getActiveElement: () => world.active,
+      getBody: () => world.body,
+      waitFrame: async () => {
+        frames += 1;
+      },
+    });
+
+    expect(restored).toBe(true);
+    expect(frames).toBe(REBUILD_LANDS_ON_FRAME);
+    expect(world.active).toBe(trigger);
+  });
+
+  /**
+   * The common case, and the one that must do nothing: the row stayed in its
+   * section, so react-aria's own menu close already put focus back on the
+   * trigger. Firing here would be a redundant focus call at best and a fight
+   * with the library at worst.
+   */
+  it("declines while focus is still on the trigger", async () => {
+    const { trigger, world } = makeTrigger("untouched");
+    const stillThere = { name: "menu-restored-me", focus: () => {} };
+
+    world.active = stillThere;
+
+    let frames = 0;
+
+    const restored = await restoreRescheduleFocus("todo-1", {
+      findTrigger: () => trigger,
+      getActiveElement: () => world.active,
+      getBody: () => world.body,
+      waitFrame: async () => {
+        frames += 1;
+      },
+    });
+
+    expect(restored).toBe(false);
+    expect(frames).toBe(MAX_WAIT_FRAMES);
+    expect(world.active).toBe(stillThere);
+  });
+
+  /**
+   * The same discrimination DEF-28 forced one level up: focus the user has
+   * placed is theirs. Here it is expressed as "only `<body>` qualifies",
+   * because an unmounted focused element is the only thing that leaves it.
+   */
+  it("never takes focus the user has moved somewhere else", async () => {
+    const { trigger, world } = makeTrigger("not-mine");
+    const elsewhere = { name: "quick-add-input", focus: () => {} };
+
+    world.active = elsewhere;
+
+    const restored = await restoreRescheduleFocus("todo-1", {
+      findTrigger: () => trigger,
+      getActiveElement: () => world.active,
+      getBody: () => world.body,
+      waitFrame: async () => {},
+    });
+
+    expect(restored).toBe(false);
+    expect(world.active).toBe(elsewhere);
+  });
+
+  it("gives up rather than spinning when the row never comes back", async () => {
+    const { world } = makeTrigger("never-arrives");
+
+    world.active = world.body;
+
+    let frames = 0;
+
+    const restored = await restoreRescheduleFocus("todo-1", {
+      findTrigger: () => null,
+      getActiveElement: () => world.active,
+      getBody: () => world.body,
+      waitFrame: async () => {
+        frames += 1;
+      },
+    });
+
+    expect(restored).toBe(false);
+    expect(frames).toBe(MAX_WAIT_FRAMES);
+  });
+
+  it("reports failure when the trigger refuses the focus", async () => {
+    const world = { active: null as unknown, body: {} };
+    const refuses = { name: "disabled", focus: () => {} };
+
+    world.active = world.body;
+
+    const restored = await restoreRescheduleFocus("todo-1", {
+      findTrigger: () => refuses,
+      getActiveElement: () => world.active,
+      getBody: () => world.body,
+      waitFrame: async () => {},
+    });
+
+    expect(restored).toBe(false);
+  });
+
+  /** The identity the DOM carries, so a row can be found after it has moved. */
+  it("names the row by its todo id, not by its position", () => {
+    expect(rescheduleTriggerProps("todo-42")).toEqual({
+      [RESCHEDULE_TRIGGER_ATTRIBUTE]: "todo-42",
+    });
+    expect(RESCHEDULE_TRIGGER_ATTRIBUTE.startsWith("data-")).toBe(true);
   });
 });
