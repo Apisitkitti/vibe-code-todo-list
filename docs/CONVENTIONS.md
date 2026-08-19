@@ -294,17 +294,37 @@ No hand-rolled `useState` per field, no ad-hoc validation.
 
 ### Folder shape
 
-A form lives in a `components/form/` folder, either under
-`src/components/form/` when shared, or under the route's own
-`components/form/` when used by exactly one route:
+Forms live under the owning route's `components/form/`. There is no shared
+`src/components/form/` directory — the shared thing is `src/components/ui/`,
+the `Form*` field components below.
+
+**Each form owns a folder inside `components/form/`, named after the form,
+holding the form and everything only that form uses.** The one `index.ts` at
+`components/form/` is the barrel, and it is the only public entry point:
 
 ```
 components/form/
-  schema.ts        # zod schemas + inferred types for this folder's forms
-  index.ts         # barrel — the only public entry point
-  SignInForm.tsx   # one file per form, PascalCase, name matches the export
-  SignUpForm.tsx
+  index.ts                      # barrel — the only path consumers import
+  QuickAddForm/
+    QuickAddForm.tsx            # PascalCase, name matches the export
+    schema.ts                   # only this form parses with it
+  TodoForm/
+    TodoForm.tsx
+    fieldErrors.ts              # reads this form's 400 body
 ```
+
+A form's folder gets an `index.ts` of its own only if something other than the
+barrel imports from it. Nothing does today, so neither has one: the barrel is
+the sole reader of those paths, and a second barrel in front of it would
+re-export two names for one consumer while giving a name a second place to go
+missing from. The outer barrel earns its place for the opposite reason — it is
+what lets the rest of the app import from `./form` without knowing any of this
+layout, so adding a file to a form changes no consumer.
+
+Smaller routes still hold a single form each — `src/app/sign-in/components/form/`
+and `src/app/sign-up/components/form/` are flat, with `SignInForm.tsx` and
+`schema.ts` beside their `index.ts`. Give a form a folder when it has files of
+its own to gather, not as ceremony.
 
 ### Shared form UI lives in `src/components/ui`
 
@@ -337,17 +357,53 @@ is not hand-assembled inside a feature form.
   `parseDueDate`). Parse with the strict flag so `2026-02-31` is rejected
   rather than rolled over. Do not hand-roll date maths with `Date.UTC`.
 
+### Where a schema lives — `src/lib` vs beside the form
+
+**A zod schema that server code parses with lives in `src/lib/<thing>.schema.ts`.
+A schema only its own form uses lives in that form's folder.**
+
+```
+src/lib/todo.schema.ts                          ← the route handlers re-parse with it
+form/QuickAddForm/schema.ts                     ← only the quick-add bar uses it
+src/app/sign-in/components/form/schema.ts       ← better-auth owns the server side
+```
+
+The test is not "is it a schema" but **"does server code depend on it".**
+
+`todoFormSchema` is in `src/lib` because the handlers under `src/app/api/todos`
+re-parse every request body with the very same schema — that copy is the trusted
+one. When it lived in `src/app/todos/components/form/`, the API imported its own
+trust boundary out of a screen's presentation folder: the dependency arrow
+pointing UI → API backwards, with a security-relevant module sitting three
+directories inside a route where nobody looks for one. It was filed as a defect
+before quick-add shipped and stayed unfixed for a quarter.
+
+**ESLint now enforces the consequence: nothing under `src/app/api/**` may import
+from `@/app/**`.** So this is not a preference — moving a server-parsed schema
+back under `src/app/` fails the build, and it should.
+
+`quickAddSchema` is the other side of the same rule. It validates that something
+was typed into the bar, and nothing else; the bar parses its line into a todo
+payload and posts *that*, so no handler ever sees a `{ text }` body. Nothing on
+the server depends on it, so it lives beside the form it belongs to. Sign-in and
+sign-up are the same case — better-auth owns their server side and no handler in
+this repo re-parses them.
+
+The form barrel re-exports both, so components import everything a form needs
+from `./form` regardless of which side of the line a schema fell on. Server code
+imports `@/lib/todo.schema` directly.
+
 ### Other form rules
 
-- `schema.ts` holds the zod schemas and their inferred types.
 - `index.ts` re-exports the forms (and the schemas/types that callers need).
-  Consumers import from `@/components/form`, never from a deep file path.
-- Each form component is its own PascalCase file.
+  Consumers import from the route's `./form`, never from a deep file path.
+- Each form component is its own PascalCase file, inside its own folder when it
+  has neighbours.
 
 ### Schema conventions
 
 ```ts
-// components/form/schema.ts
+// src/lib/todo.schema.ts — the API re-parses with it, so it is not in the form's folder
 import { z } from "zod";
 
 const TITLE_MAX_LENGTH = 200;
