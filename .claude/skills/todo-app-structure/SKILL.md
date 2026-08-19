@@ -36,9 +36,10 @@ front of it is trusted. Moving a *call* to the client does not move the
 | A component used by exactly one route | `src/app/<route>/components/Name.tsx` | Keeps a screen's parts next to the screen |
 | A component used by two or more routes | `src/components/Name.tsx` | Only shared things are shared |
 | A reusable form field | `src/components/ui/` + its `index.ts` barrel | Every form composes these, so layout and error slots stay identical |
-| A form | `<owner>/components/form/Name.tsx` | One file per form, barrel is the entry point |
-| A zod schema **a route handler re-parses** | `src/lib/<thing>.schema.ts` | The API must not import out of a UI folder — see below |
-| A zod schema only its own form uses | that form's `components/form/schema.ts` | Sign-in and sign-up live here, correctly |
+| A form | `<owner>/components/form/Name/Name.tsx` | Each form owns a folder; `components/form/index.ts` is the entry point |
+| A file only one form uses | that form's own folder, beside it | `QuickAddForm/schema.ts`, `TodoForm/fieldErrors.ts` |
+| A zod schema **a route handler re-parses** | `src/lib/<thing>.schema.ts` | The API must not import out of a UI folder — ESLint enforces it |
+| A zod schema only its own form uses | that form's folder, `schema.ts` | Quick-add, sign-in and sign-up live here, correctly |
 | An HTTP call the UI makes | `src/service/<resource>.service.ts` | One transport layer, no try/catch |
 | A database read or write | `src/app/api/<resource>/**/route.ts` | The only place Prisma is importable |
 | Shared response/error shapes for an API folder | `util.ts` and `errors.ts` beside the routes | Success side and error side, split |
@@ -159,7 +160,20 @@ new `Form*` there; it is not hand-assembled inside a feature form.
 Types are **inferred** with `z.infer` — never a parallel interface that can
 drift from the schema.
 
-Details, including where a schema lives and why, and the date contract:
+**Each form owns a folder** under the route's `components/form/`, named after
+the form, holding the form and everything only that form uses. One barrel at
+`components/form/index.ts` is the public entry point; the form folders have no
+barrels of their own, because that barrel is their only reader.
+
+**A schema server code parses with lives in `src/lib`; a schema only its form
+uses lives with the form.** `todoFormSchema` is re-parsed by the handlers under
+`src/app/api/todos`, so it is `src/lib/todo.schema.ts` and stays there —
+`no-restricted-imports` fails the build if anything in `src/app/api/**` imports
+`@/app/**`. `quickAddSchema` validates only that something was typed and no
+handler ever sees a `{ text }` body, so it sits in `QuickAddForm/schema.ts`. The
+test is not "is it a schema" but **"does server code depend on it".**
+
+Details, including the full reasoning behind that split and the date contract:
 **read `references/forms.md` before adding or changing a form.**
 
 ## Copy

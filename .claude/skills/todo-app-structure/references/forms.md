@@ -5,12 +5,13 @@ Read before adding or changing a form, a field, or a zod schema.
 ## Where a schema lives — the rule that matters
 
 **A schema a route handler re-parses lives in `src/lib/<thing>.schema.ts`.**
-A schema only its own form uses stays in that form's folder.
+A schema only its own form uses lives in that form's folder.
 
 ```
-src/lib/todo.schema.ts                        ← route handlers re-parse with it
-src/app/sign-in/components/form/schema.ts     ← only the sign-in form uses it
-src/app/sign-up/components/form/schema.ts     ← only the sign-up form uses it
+src/lib/todo.schema.ts                                    ← route handlers re-parse with it
+src/app/todos/components/form/QuickAddForm/schema.ts      ← only the quick-add bar uses it
+src/app/sign-in/components/form/schema.ts                 ← only the sign-in form uses it
+src/app/sign-up/components/form/schema.ts                 ← only the sign-up form uses it
 ```
 
 The todo schema used to live in `src/app/todos/components/form/schema.ts`, which
@@ -21,28 +22,61 @@ survivable when the quick-add bar became a second one: "the form's schema" and
 "the API's contract" were then two ideas sharing one file, three directories
 inside a route, where nobody looks for a security-relevant module.
 
-Sign-in and sign-up are genuinely different: better-auth owns their server side,
-no route handler in this repo re-parses them, so they stay route-local. The test
-is not "is it a schema" but **"does server code depend on it".**
+`quickAddSchema` is the same rule read the other way, and it is the case most
+likely to be got wrong, because it sits in the *same route* as a schema that
+went to `src/lib`. It validates one thing — that something was typed. The bar
+then parses that line into a todo payload and posts *that*, re-using
+`todoFormSchema` for the title's rules rather than restating them; no route
+handler ever sees a `{ text }` body. Nothing on the server depends on it, so it
+lives beside `QuickAddForm.tsx` where its only reader is.
 
-ESLint enforces the consequence: nothing under `src/app/api/**` may import from
-`@/app/**`.
+Sign-in and sign-up are the same case: better-auth owns their server side, no
+route handler in this repo re-parses them, so they stay route-local. The test is
+not "is it a schema" but **"does server code depend on it".**
 
-The form barrel still re-exports the todo schema, so components import
-everything a form needs from `./form` and did not have to change. Server code
+**ESLint enforces the consequence: nothing under `src/app/api/**` may import from
+`@/app/**`.** So the split is not a matter of taste. Moving a server-parsed
+schema back under `src/app/` fails lint, and the rule is there because the todo
+schema *did* live under a screen's `components/` folder, was filed as a defect
+before quick-add shipped, and stayed that way for a quarter. If a form's folder
+looks incomplete without its schema, that discomfort is the rule working: the
+schema is not the form's, it is the API's, and the form borrows it.
+
+The form barrel re-exports both, so components import everything a form needs
+from `./form` regardless of which side of the line a schema fell on. Server code
 imports `@/lib/todo.schema` directly.
 
 ## Folder shape
 
+**Each form owns a folder**, named after the form, holding the form component
+and every file only that form uses. One barrel at `components/form/index.ts` is
+the public entry point:
+
 ```
 components/form/
-  schema.ts        # only if route-local (see above)
-  index.ts         # barrel — the only public entry point
-  TodoForm.tsx     # one file per form, PascalCase, name matches the export
-  QuickAddForm.tsx
+  index.ts                 # barrel — the only public entry point
+  QuickAddForm/
+    QuickAddForm.tsx       # PascalCase, name matches the export
+    schema.ts              # only this form parses with it (see above)
+  TodoForm/
+    TodoForm.tsx
+    fieldErrors.ts         # reads this form's 400 body
 ```
 
-Consumers import from the barrel, never from a deep file path.
+Consumers import from the barrel, never from a deep file path — `QuickAddBar`,
+`TodoFormModal` and `TodoListScreen` all import from `./form` and none of them
+knows this layout exists. That is what the barrel is for, and it is why adding a
+file to a form changes no consumer.
+
+**The form folders have no barrels of their own.** `components/form/index.ts` is
+their only reader, so an inner `index.ts` would re-export two or three names for
+exactly one consumer, and give every name a second place to go missing from. Add
+one when something other than the barrel needs to import from a form's folder —
+not before.
+
+A form that has no files of its own does not need a folder. `src/app/sign-in/`
+and `src/app/sign-up/` each hold one form with one schema and are flat, and that
+is right: the folder exists to gather a form's parts, not as ceremony.
 
 ## Field components
 

@@ -44,12 +44,6 @@ thing a new contributor reads.
   that asked for JSON. Every route handler in the app uses `getSession()` and
   returns `unauthorizedResponse()`. `requireUser()` is for server components and
   layouts.
-- **The Forms folder-shape example** shows a shared `src/components/form/`. The
-  shared thing is `src/components/ui/` (the `Form*` field components); there is
-  no shared `components/form/` directory.
-- **The schema location** is now `src/lib/todo.schema.ts`, not a route's
-  `components/form/schema.ts`. `docs/REVIEW.md` §1.3 / E-3 asked for this and it
-  is done; CONVENTIONS' Forms section has not been updated to match.
 - **`parseDueDate` is in `src/lib/todo.ts`, not `src/lib/date.ts`.** CONVENTIONS'
   Dates section says "dayjs does date parsing and formatting (`src/lib/date.ts`,
   `parseDueDate`)". `date.ts` holds the *display* side — `formatDueDate` and
@@ -87,6 +81,14 @@ thing a new contributor reads.
   the exception still works exactly as §3 describes it.
 
 ## Fixed on this branch
+
+- **CONVENTIONS' Forms section** described a shared `src/components/form/`
+  directory that does not exist, and a flat `components/form/schema.ts` holding
+  "zod schemas + inferred types for this folder's forms". Both entries are gone
+  from the list above because the document was corrected rather than annotated:
+  the folder shape now describes the per-form folders, and a new section states
+  the `src/lib`-versus-colocated schema rule and the ESLint rule that enforces
+  it. The `src/server/` entries above are untouched and still stand.
 
 - `src/app/api/todos/errors.ts` claimed "Success shapes live in `./model.ts`".
   There is no `model.ts` — the file was renamed to `util.ts` and the comment did
