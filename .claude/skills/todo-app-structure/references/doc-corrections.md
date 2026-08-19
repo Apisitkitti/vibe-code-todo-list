@@ -45,6 +45,21 @@ thing a new contributor reads.
 - **The schema location** is now `src/lib/todo.schema.ts`, not a route's
   `components/form/schema.ts`. `docs/REVIEW.md` §1.3 / E-3 asked for this and it
   is done; CONVENTIONS' Forms section has not been updated to match.
+- **`parseDueDate` is in `src/lib/todo.ts`, not `src/lib/date.ts`.** CONVENTIONS'
+  Dates section says "dayjs does date parsing and formatting (`src/lib/date.ts`,
+  `parseDueDate`)". `date.ts` holds the *display* side — `formatDueDate` and
+  `dueDayOffset`, the UTC-day arithmetic the grouping sections cut on. The
+  parsing side is in `todo.ts` beside the constants it validates against. This
+  one is worth knowing about because it is cheap to believe: the first draft of
+  this skill repeated it verbatim from CONVENTIONS without checking.
+
+- **The `AlertDialog` sub-component list** in Mutation UX names
+  `.Root .Trigger .Backdrop .Container .Dialog …` as "verified sub-components".
+  They do all exist, but **this app deliberately uses none of the first two**:
+  every dialog here is controlled and trigger-less, and `.Root` is react-aria's
+  `DialogTrigger`, which warns on every mount when nothing registers as its
+  pressable. Reading the list as a recommended composition is how DEF-02 was
+  reached twice. `src/components/ConfirmDialog.tsx` shows the shape to copy.
 
 ## `docs/DESIGN.md`
 

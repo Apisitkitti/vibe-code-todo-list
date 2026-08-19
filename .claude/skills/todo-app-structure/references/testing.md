@@ -7,8 +7,29 @@ Read before writing a test or touching CI.
 | Suite | Runner | Talks to | Put a test here when |
 |---|---|---|---|
 | `tests/unit/` | Vitest | nothing | The property is arithmetic over values — a parser, a predicate, a reducer |
-| `tests/api/` | Vitest, real HTTP | real Postgres | The answer depends on the database: authorization, ordering, collation, the wire contract |
-| `e2e/` | Playwright | real browser | It is only true once the DOM exists: focus, keyboard journeys, toasts, contrast |
+| `tests/api/` | Vitest | real Postgres | The answer depends on the database: authorization, ordering, collation, the wire contract |
+| `e2e/` | Playwright | real browser + dev server | It is only true once the DOM exists: focus, keyboard journeys, toasts, contrast |
+
+**`tests/api/` does not go over a socket.** It imports the route handler and
+calls it as a plain function with a real `NextRequest`, so URL parsing,
+`searchParams` and JSON body reading all run for real, against a real database,
+with a real better-auth cookie. What it does not exercise is the network, Next's
+routing, or `src/proxy.ts`.
+
+That shape has a consequence you must reproduce in a new file: the handler reads
+the session through `next/headers`, so mock it and drive it from the support
+helpers.
+
+```ts
+vi.mock("next/headers", () => ({ headers: async () => currentRequestHeaders() }));
+
+// then, per request:
+setRequestHeaders(headersWithCookie(userA.cookie));
+const response = await GET(getRequest("/api/todos?status=all"));
+```
+
+The mock has to be declared **above** the handler imports, because the handler
+resolves `next/headers` at import time.
 
 Put a test at the **lowest layer that can actually fail for the reason you care
 about.** `src/lib/todoListState.ts` exists because the optimistic revert is the
@@ -35,12 +56,24 @@ on this project. Redirect to a file, record `$?` on its own line, read both back
 
 ## Isolation
 
-Every API and e2e test **signs up its own account and only ever sees rows it
-created.** That is what lets the suites share one `todo_app_test` database.
+Tests **create their own accounts through the real sign-up endpoint and only
+ever see rows they created.** Nothing inserts a session row by hand, so
+`getSession()` does a genuine lookup and the isolation assertions rest on the
+real auth path rather than on a fixture that agrees with itself. That is what
+lets the suites share one `todo_app_test` database.
 
-It holds only as long as nobody writes a test that counts rows globally or
-truncates a table. **Do not write one.** If you need a global count, scope it to
-your own account.
+Two different mechanisms, so copy the right one:
+
+- **`tests/api/`** — each file creates its users with its own `EMAIL_DOMAIN` and
+  deletes them afterwards. `vitest.config.ts` sets `fileParallelism: false`
+  precisely because of this: run the files in parallel and one file's cleanup
+  deletes another's rows.
+- **`e2e/`** — each test signs up its own account through the browser, via
+  `e2e/support/fixtures.ts`.
+
+Either way it holds only as long as nobody writes a test that counts rows
+globally or truncates a table. **Do not write one.** If you need a count, scope
+it to your own account.
 
 `tests/setup/testDatabaseUrl.ts` and `e2e/support/testDatabaseUrl.ts` refuse a
 hosted host, any database not named `*_test`, and the app's own URL — so aiming

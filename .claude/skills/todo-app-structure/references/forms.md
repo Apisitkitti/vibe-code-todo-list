@@ -118,9 +118,16 @@ export type TodoFormValues = z.infer<typeof todoFormSchema>;
   database. `FormDatePicker` is the only place that converts to and from
   `@internationalized/date`'s `DateValue`, so the widget choice never leaks into
   the contract.
-- dayjs does parsing and formatting (`src/lib/date.ts`, `parseDueDate`), in
-  **strict** mode so `2026-02-31` is rejected rather than rolled over. Do not
-  hand-roll date maths with `Date.UTC`.
+- dayjs does the date work, split across two modules — check which one you want:
+  - **`src/lib/todo.ts`** → `parseDueDate`, `toDueDateInputValue`. Parsing the
+    wire format, in **strict** mode so `2026-02-31` is rejected rather than
+    rolled over.
+  - **`src/lib/date.ts`** → `formatDueDate`, `dueDayOffset`. Turning a stored
+    instant into what the user reads, and the UTC-day arithmetic the grouping
+    sections cut on.
+
+  (`docs/CONVENTIONS.md` places `parseDueDate` in `date.ts`. It is in `todo.ts`.)
+  Do not hand-roll date maths with `Date.UTC`.
 - `parseDueDate` returns `Date | null | "invalid"` — three distinct answers,
   because "not given" and "given and wrong" are different mistakes. Mirror that
   shape when you write a parser with the same problem; `readCreatedVia` does.

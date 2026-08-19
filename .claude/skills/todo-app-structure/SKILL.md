@@ -202,6 +202,19 @@ it is gone, and `Todo "…" added` is a receipt with no action. The test is not
 
 Every mutation reports through a toast, naming what happened to what. A failed
 mutation surfaces the server's message and never fails silently.
+`Toast.Provider` is mounted once, in the root layout.
+
+Use the shared `src/components/ConfirmDialog.tsx`; do not hand-roll a dialog per
+screen. **Every dialog in this app is controlled and has no trigger inside it**,
+because the same modal is opened from a page button and from every row. So
+render `AlertDialog.Backdrop` / `Modal.Backdrop` directly with `isOpen` and
+`onOpenChange` — **never** the `.Root`. The root is react-aria's
+`DialogTrigger`, which wraps its children in a `PressResponder` unconditionally
+so a `.Trigger` beneath it can register; with no trigger, it warns on every
+mount. Two components reached that independently (DEF-02). `Backdrop` is a
+`ModalOverlay`, which builds its own overlay state from those props and
+publishes the context that `Escape`, the backdrop dismiss and `CloseTrigger`
+all read, so nothing is lost by dropping the root.
 
 ## Errors
 
@@ -222,9 +235,11 @@ for the reason you care about.
 
 - `tests/unit/` — pure functions, no database. Fast, and where a correctness
   property belongs if it can live here.
-- `tests/api/` — real HTTP against real Postgres. Contract, authorization,
+- `tests/api/` — the route handler called directly with a real `NextRequest`,
+  against real Postgres and a real better-auth cookie. Contract, authorization,
   ordering, and anything where the answer depends on the database rather than on
-  our arithmetic.
+  our arithmetic. Not over a socket: the network, Next's routing and
+  `src/proxy.ts` are not exercised here.
 - `e2e/` — Playwright, real browser. Journeys, focus, and anything that is only
   true once the DOM exists.
 
