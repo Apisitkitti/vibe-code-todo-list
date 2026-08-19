@@ -494,8 +494,9 @@ dark, and no surface token can beat 1.20:1.
   </Checkbox>
 
   <div className="min-w-0 flex-1 flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+    {/* `sm:min-w-0 sm:flex-1` is what reserves the metadata column — see below. */}
     <Typography type="body" weight="medium" truncate
-      className={todo.completed ? "line-through text-[var(--muted)]" : undefined}>
+      className={todo.completed ? "sm:min-w-0 sm:flex-1 line-through text-[var(--muted)]" : "sm:min-w-0 sm:flex-1"}>
       {todo.title}
     </Typography>
     <div className="flex items-center gap-2 shrink-0">
@@ -617,9 +618,31 @@ Wrap each in a `Tooltip` (`.Root`, `.Trigger`, `.Content`, `.Arrow`) on
 `sm:` and up only; tooltips are useless on touch. The `aria-label` is the
 accessible name regardless.
 
+**The metadata column is reserved, at `sm:` and up.** The title carries
+`sm:min-w-0 sm:flex-1`, so it takes the slack and the chip/date/note cluster is
+pushed to a consistent right edge. Without it the title was sized by its own
+content and the cluster hugged the end of each title, landing somewhere
+different on every row — which is §1's *"Nothing reflows between rows; a row
+with no due date leaves the slot empty rather than shifting"* not being
+delivered by the code that quotes it.
+
+`min-w-0` is not decoration alongside `flex-1`: without it the flex item
+refuses to shrink below its content width and `truncate` never fires. The cost
+is that long titles truncate sooner, which is the trade §1 already made.
+
+`sm:` only. Below that the row is `flex-col`, where `flex-1` would stretch the
+title down the row and there is no column to reserve.
+
+Pinned in `e2e/row-layout.spec.ts`, which drives both viewport widths itself
+rather than relying on the project's own: the claim is about a breakpoint, so a
+test that sees one side of it checks half of it. It measures the cluster's
+**right** edge — with the title taking the slack, that is the fixed edge, and a
+row carrying less metadata is legitimately narrower on the left.
+
 **Responsive.** Mobile: the title and the priority/date cluster stack (`flex-col`),
 actions column stays on the right, always at full opacity. Tablet+: one line
-(`sm:flex-row sm:items-center`). Desktop: actions hidden until hover/focus-within.
+(`sm:flex-row sm:items-center`), with the reserved column above. Desktop:
+actions hidden until hover/focus-within.
 
 ---
 
