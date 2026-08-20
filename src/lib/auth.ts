@@ -38,8 +38,64 @@ const resolveBaseURL = () => {
   return productionURL;
 };
 
+/**
+ * Sign-in is the credential-guessing surface, and on this product a successful
+ * guess is unrecoverable: there is no password reset, so an attacker who gets
+ * in owns the account and the real owner has no way back. That asymmetry is
+ * what these numbers are chosen against, not a generic "be careful".
+ *
+ * better-auth already ships a default of 3 attempts per 10 seconds on
+ * `/sign-in`, `/sign-up`, `/change-password` and `/change-email`
+ * (`getDefaultSpecialRules`). Ten seconds is the wrong unit for guessing: it
+ * still permits 1,080 attempts an hour from one address, which walks a common
+ * password list in days. What limits an online attacker is the sustained rate,
+ * so these rules widen the window instead of shrinking the burst.
+ *
+ * `/sign-in/email` — 10 per 10 minutes, so 60 an hour. The burst is
+ * deliberately larger than better-auth's 3: a person who has genuinely
+ * forgotten which password they used, with no reset link to fall back on,
+ * should not be locked out for mistyping four times. The hourly rate is what
+ * was tightened — from 1,080 to 60 — and the burst is what was loosened, which
+ * costs an attacker nothing they can use and costs a real user much less.
+ *
+ * `/sign-up/email` — 10 per hour, against bulk account creation. Higher than
+ * one because a shared office address is one IP to this limiter, and the cost
+ * of a false refusal here is a person who never becomes a user.
+ *
+ * Everything else keeps better-auth's default of 100 per 10 seconds. Tightening
+ * the global bucket would reach `/get-session`, which runs on every page load
+ * and is shared by everyone behind one NAT — the blast radius of getting that
+ * number wrong is far worse than the abuse it would prevent.
+ *
+ * Paths are matched after `baseURL`'s own prefix is stripped
+ * (`normalizePathname`), so these read `/sign-in/email`, not
+ * `/api/auth/sign-in/email`.
+ */
+export const RATE_LIMIT_RULES = {
+  "/sign-in/email": { window: 60 * 10, max: 10 },
+  "/sign-up/email": { window: 60 * 60, max: 10 },
+};
+
 export const auth = betterAuth({
   baseURL: resolveBaseURL(),
+  rateLimit: {
+    // better-auth's own default is production-only, spelled out here because
+    // it is load-bearing rather than incidental: the e2e suite signs up an
+    // account per test and the limiter keys on `ip|path`, so all 248 tests
+    // share one bucket from 127.0.0.1. Enabled outside production, the suite
+    // would rate-limit itself. See `tests/lib/auth.rateLimit.test.ts`, which
+    // builds its own instance rather than turning this on globally.
+    enabled: isProduction,
+
+    // Not "memory", which is the default. Vercel runs this as serverless
+    // functions, and an in-process Map gives every warm instance its own
+    // counter — the effective ceiling becomes the configured one times the
+    // number of instances, and it resets on each cold start. The `rateLimit`
+    // table is one shared bucket per `ip|path` and the adapter's increment is
+    // atomic. It is why `prisma/migrations/0001_add_rate_limit` exists.
+    storage: "database",
+    customRules: RATE_LIMIT_RULES,
+  },
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
