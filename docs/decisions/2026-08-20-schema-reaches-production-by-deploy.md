@@ -96,6 +96,74 @@ are pinned by setting `DATABASE_URL` for the command, which works because
 `process.loadEnvFile` does not overwrite an already-set variable — verified,
 because the failure mode would have been silent.
 
+## A migration that fails halfway blocks every later deploy
+
+This is the sharpest edge of putting `migrate deploy` in `buildCommand`, and it
+was missed in the first draft. **A failed migration is not rolled back**, and
+the block is not limited to the branch that caused it: every deploy of every
+branch fails until a human with production credentials intervenes, **including a
+revert**. Reverting the bad migration does not help, because the failure is
+recorded in the database, not in the code.
+
+Reproduced locally, in full:
+
+1. A migration whose second statement fails → `P3018`, deploy exit 1. The
+   **first statement had already been committed** and stayed. The
+   `_prisma_migrations` row was left with `finished_at` null.
+2. The next deploy, **with the SQL corrected**, → `P3009: migrate found failed
+   migrations in the target database, new migrations will not be applied`,
+   exit 1. Nothing else applies.
+3. `migrate resolve --rolled-back` **alone is not enough, and this is the trap.**
+   The partial change from step 1 is still in the database, so re-applying hit
+   `42701 column "first_col_ok" of relation "todo" already exists` — a second
+   failed migration and straight back to P3009.
+
+The recovery that actually worked, verified to `migrate status` reporting
+"Database schema is up to date!":
+
+```
+# 1. Undo, by hand, whatever the failed migration committed before it died.
+#    `migrate status` names the migration; its SQL says what ran.
+psql '<neon>' -c 'ALTER TABLE "todo" DROP COLUMN "first_col_ok"'
+
+# 2. Only then tell Prisma it was rolled back, so it will be retried.
+DATABASE_URL='<neon>' npx prisma migrate resolve --rolled-back 9998_example
+
+# 3. Redeploy, or apply directly.
+DATABASE_URL='<neon>' npx prisma migrate deploy
+```
+
+Use `resolve --applied` instead of `--rolled-back` only when the intended end
+state was reached by hand and the migration should never run again.
+
+The practical consequence: **keep each migration to one statement's worth of
+risk** where that is possible, since a single-statement migration cannot fail
+halfway. Multi-statement migrations against a table with real rows are the ones
+that earn a rehearsal against a scratch copy first.
+
+## What this decision does not solve
+
+Per-IP rate limiting, added in the same branch, is keyed `ip|path` with no
+per-account counter. Credential stuffing distributed across addresses gets a
+fresh allowance per address, so **sign-in guessing is reduced, not solved** — the
+comment in `src/lib/auth.ts` should not be read as claiming otherwise. A
+per-account failure counter, or a lockout with a recovery path, is the thing
+that would address it, and neither is possible in a useful form while there is
+no password reset.
+
+**`auth.api.*` is not rate limited — only `auth.handler` is.** Verified against
+a limit of 2: the handler returned 429 on the third attempt, while
+`auth.api.signInEmail` returned 401 indefinitely, because the limiter runs in a
+request pipeline the direct API call never enters. Nothing in `src/` depends on
+that today — its only `auth.api.*` call is `getSession`, and sign-in and sign-up
+reach the handler through `/api/auth/[...all]` — but a future server-side caller
+reaching for `auth.api.signInEmail` would be silently unthrottled.
+
+The 10-per-10-minutes sign-in rule is also **per IP, not per person**: an office
+behind one NAT shares a single bucket for sign-in exactly as it does for
+sign-up. That is the accepted cost of not tightening the global bucket and
+reaching `/get-session` with it.
+
 ## What would change this
 
 - If a migration ever needs to run against a database the build cannot reach,

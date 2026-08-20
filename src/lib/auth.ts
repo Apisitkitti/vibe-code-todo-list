@@ -39,6 +39,37 @@ const resolveBaseURL = () => {
 };
 
 /**
+ * Ordered by preference, and exported so `tests/api/rateLimit.test.ts` can
+ * exercise the list that actually ships rather than a copy of it.
+ *
+ * **When better-auth cannot resolve a trustworthy address it does not limit
+ * less precisely — it falls back to a single shared `no-trusted-ip` bucket per
+ * path**, which would make the sign-in rule below ten attempts per ten minutes
+ * for the entire application. The failure mode of getting this list wrong is an
+ * outage on the login path, not a weaker limit.
+ *
+ * `getIPFromHeader` returns `null` for any multi-hop `x-forwarded-for` unless
+ * `trustedProxies` is configured, because trusting the leftmost entry would let
+ * a caller mint a fresh bucket per request. Vercel sets its own single-value
+ * header and overwrites `x-forwarded-for` with the immediate client address for
+ * that same anti-spoofing reason, so the preferred header is listed first and
+ * `x-forwarded-for` is kept last for local and other runtimes. A header name
+ * that does not exist simply does not match, so this list cannot resolve worse
+ * than the default.
+ *
+ * Per-address bucketing and this precedence are both covered by
+ * `tests/api/rateLimit.test.ts`. What remains unverifiable off Vercel is which
+ * header the platform actually sends; better-auth logs "Rate limiting could not
+ * determine a client IP" once per process on the fallback path, and that line
+ * in the logs after a deploy is the signal that this list is wrong.
+ */
+export const IP_ADDRESS_HEADERS = [
+  "x-vercel-forwarded-for",
+  "x-real-ip",
+  "x-forwarded-for",
+];
+
+/**
  * Sign-in is the credential-guessing surface, and on this product a successful
  * guess is unrecoverable: there is no password reset, so an attacker who gets
  * in owns the account and the real owner has no way back. That asymmetry is
@@ -62,10 +93,17 @@ const resolveBaseURL = () => {
  * one because a shared office address is one IP to this limiter, and the cost
  * of a false refusal here is a person who never becomes a user.
  *
- * Everything else keeps better-auth's default of 100 per 10 seconds. Tightening
- * the global bucket would reach `/get-session`, which runs on every page load
- * and is shared by everyone behind one NAT — the blast radius of getting that
- * number wrong is far worse than the abuse it would prevent.
+ * **This reduces guessing rather than solving it.** Buckets are keyed
+ * `ip|path` with no per-account counter, so credential stuffing spread across
+ * addresses gets a fresh allowance per address. A per-account failure counter,
+ * or a lockout with a recovery path, is what would address that — and neither
+ * is much use while there is no password reset to recover through.
+ *
+ * The window is per address, not per person: an office behind one NAT shares a
+ * single sign-in bucket, as it does for sign-up. Everything else keeps
+ * better-auth's default of 100 per 10 seconds, because tightening the global
+ * bucket would reach `/get-session`, which runs on every page load and is
+ * shared by everyone behind that same NAT.
  *
  * Paths are matched after `baseURL`'s own prefix is stripped
  * (`normalizePathname`), so these read `/sign-in/email`, not
@@ -80,11 +118,12 @@ export const auth = betterAuth({
   baseURL: resolveBaseURL(),
   rateLimit: {
     // better-auth's own default is production-only, spelled out here because
-    // it is load-bearing rather than incidental: the e2e suite signs up an
-    // account per test and the limiter keys on `ip|path`, so all 248 tests
-    // share one bucket from 127.0.0.1. Enabled outside production, the suite
-    // would rate-limit itself. See `tests/api/rateLimit.test.ts`, which
-    // builds its own instance rather than turning this on globally.
+    // it is load-bearing rather than incidental: the limiter keys on
+    // `ip|path`, so every test in the e2e suite — each signing up its own
+    // account, all from 127.0.0.1 — draws from one bucket. Enabled outside
+    // production, the suite would rate-limit itself. See
+    // `tests/api/rateLimit.test.ts`, which builds its own instance rather than
+    // turning this on globally.
     enabled: isProduction,
 
     // Not "memory", which is the default. Vercel runs this as serverless
@@ -97,33 +136,8 @@ export const auth = betterAuth({
     customRules: RATE_LIMIT_RULES,
   },
 
-  /**
-   * **The limiter is only per-user if the client IP resolves, and the failure
-   * mode is an outage rather than a weaker limit.** better-auth keys buckets on
-   * `ip|path`; when it cannot establish a trustworthy IP it falls back to one
-   * shared `no-trusted-ip` bucket per path, which would make the rule above ten
-   * sign-ins per ten minutes *for the entire application*.
-   *
-   * The default is `x-forwarded-for` alone, and `getIPFromHeader` deliberately
-   * returns `null` for a multi-hop chain unless `trustedProxies` is set —
-   * anything else would let a caller spoof the leftmost entry and get a fresh
-   * bucket per request. So a header carrying more than one hop resolves to
-   * nothing, and the fallback is what a login page would feel.
-   *
-   * Vercel's own header carries a single client address, so it is preferred and
-   * `x-forwarded-for` is kept as the fallback for local and any other runtime.
-   * An unknown header name simply does not match and costs nothing.
-   *
-   * **Unverified against production — this is the one thing here that could not
-   * be checked locally.** better-auth logs "Rate limiting could not determine a
-   * client IP" exactly once per process when it falls back; that line appearing
-   * in the Vercel logs after the first deploy is the signal that this list is
-   * wrong, and it should be looked for deliberately rather than waited for.
-   */
   advanced: {
-    ipAddress: {
-      ipAddressHeaders: ["x-vercel-forwarded-for", "x-real-ip", "x-forwarded-for"],
-    },
+    ipAddress: { ipAddressHeaders: IP_ADDRESS_HEADERS },
   },
   database: prismaAdapter(prisma, {
     provider: "postgresql",

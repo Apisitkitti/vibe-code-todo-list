@@ -19,8 +19,24 @@ import { resolveTestDatabaseUrl } from "./testDatabaseUrl";
  * once. This checks it happened and otherwise says exactly what to do.
  */
 
-/** The tables `prisma/schema.prisma` maps to, via its `@@map` names. */
-const REQUIRED_TABLES = ["user", "session", "account", "verification", "todo"];
+/**
+ * The tables `prisma/schema.prisma` maps to, via its `@@map` names.
+ *
+ * `rateLimit` is here even though the suite never reads it: the limiter is off
+ * outside production, so nothing in a test would touch that table. It is listed
+ * because its absence means something else — that the database was baselined
+ * with `resolve --applied 0_init` and the follow-up `migrate deploy` was never
+ * run. Leaving it out let exactly that half-prepared database through this
+ * guard, which is the state this check exists to catch.
+ */
+const REQUIRED_TABLES = [
+  "user",
+  "session",
+  "account",
+  "verification",
+  "todo",
+  "rateLimit",
+];
 
 const globalSetup = async () => {
   const projectRoot = resolve(__dirname, "../..");

@@ -107,7 +107,8 @@ Never print, commit, or paste these values.
 ```bash
 npm run dev        # next dev
 npm run build      # prisma generate && next build
-npm run db:push    # prisma db push
+npm run db:deploy  # prisma migrate deploy — apply migrations
+npm run db:status  # prisma migrate status — what is applied where
 npm run lint
 npx tsc --noEmit   # typecheck
 ```
@@ -131,42 +132,67 @@ moves, this file moves with it.
 
 ## Schema changes against production
 
-There is no migration history — the project uses `prisma db push`, which
-applies whatever the schema file says with no reviewable artifact and no
-ordering guarantee. That is survivable for a table nobody is reading yet. It
-is not survivable for an index change on a live table, because the plain
-statements `db push` issues take locks that stop the app:
+Schema reaches every database through `prisma/migrations/`, applied by
+`prisma migrate deploy`. `vercel.json` runs it in `buildCommand` before
+`next build`, so a deploy applies its own schema. The procedure this section
+used to describe — apply the DDL by hand, then `db push` — is gone; see
+[`docs/decisions/2026-08-20-schema-reaches-production-by-deploy.md`](decisions/2026-08-20-schema-reaches-production-by-deploy.md)
+and `docs/WORKFLOW.md` → "Schema changes".
 
-- a non-concurrent `CREATE INDEX` holds a `SHARE` lock, blocking every write
-  for the whole build
+**Do not run `prisma db push` against production.** It was the old procedure and
+it is now actively harmful: production has migration history, and `db push`
+applies schema without writing a `_prisma_migrations` row. The database silently
+stops matching its recorded history, and the next `migrate deploy` either
+re-applies something already present or reports drift nobody can explain.
+`npm run db:push` remains for local prototyping against a throwaway database
+only — reconcile it into a real migration before committing.
+
+### Index changes still need hand-written SQL
+
+Migrations solve *delivery*, not *locking*. `prisma migrate dev` generates a
+plain `CREATE INDEX`, and on a live table the statements it writes take locks
+that stop the app:
+
+- a non-concurrent `CREATE INDEX` holds a `SHARE` lock, blocking every write for
+  the whole build
 - `DROP INDEX` takes `ACCESS EXCLUSIVE`, which blocks reads too, and queues
   behind in-flight queries — taking new requests with it while it waits
 
-So an index change goes out by hand, in this order, and **create always comes
-before drop**:
+So for an index change on a table with real rows, generate the migration and
+then **edit the SQL by hand** before committing it, keeping this order —
+**create always comes before drop**:
 
-```bash
-# 1. Build the new index without blocking writes.
+```sql
+-- 1. Build the new index without blocking writes.
 CREATE INDEX CONCURRENTLY "todo_userId_completed_dueAt_idx"
   ON "todo" ("userId", "completed", "dueAt");
 
-# 2. Confirm it is valid. A failed concurrent build leaves an invalid index
-#    that costs every write and serves no read.
-SELECT indisvalid FROM pg_index
-  WHERE indexrelid = '"todo_userId_completed_dueAt_idx"'::regclass;
-
-# 3. Confirm the planner uses it, on production-sized data.
-EXPLAIN SELECT … ;
-
-# 4. Only then remove the one it replaces.
+-- 2. Only then remove the one it replaces.
 DROP INDEX CONCURRENTLY "todo_userId_completed_idx";
-
-# 5. `db push` last, where it should be a no-op that re-syncs the shadow.
-npx prisma db push
 ```
 
-Keeping a redundant index is cheap; dropping the wrong one under load is not.
-If step 3 is inconclusive, stop after step 2 and leave both in place.
+Two things that were true of the by-hand procedure are still true, and one is
+new:
+
+- **Confirm the new index is valid before dropping the old one.** A failed
+  concurrent build leaves an invalid index that costs every write and serves no
+  read: `SELECT indisvalid FROM pg_index WHERE indexrelid =
+  '"todo_userId_completed_dueAt_idx"'::regclass;` — and confirm the planner uses
+  it on production-sized data with `EXPLAIN`. Keeping a redundant index is
+  cheap; dropping the wrong one under load is not. If the `EXPLAIN` is
+  inconclusive, ship the create and leave the drop for a later migration.
+- **`CREATE INDEX CONCURRENTLY` does work inside a Prisma migration**, which is
+  worth stating because the opposite is widely assumed — Postgres forbids it in
+  a transaction block, and many migration tools wrap each migration in one.
+  Prisma 7.9.1 does not, for PostgreSQL. Verified: a migration containing only
+  `CREATE INDEX CONCURRENTLY` applied through `migrate deploy` with exit 0 and
+  left `indisvalid = t`. The first draft of this section asserted the reverse
+  from memory and the test contradicted it.
+- **A migration that fails halfway is not rolled back**, and it blocks every
+  subsequent deploy with `P3009` until a human resolves it. That is the single
+  biggest operational hazard of putting migrations in the build path; the
+  recovery commands are in the decision record's "What would change this".
+
 
 ## Definition of done
 
