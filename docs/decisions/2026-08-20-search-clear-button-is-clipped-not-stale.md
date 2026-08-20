@@ -164,11 +164,17 @@ clicked. Measured against the unfixed component at a 200px squeeze: the group's
 `scrollLeft` goes from 0 to 34 — exactly the button's overhang — and the click
 then lands and empties the field. A user has no such affordance.
 
-That also explains the rate. The clip was present on every run; only the runs
-where a re-render reset that scroll between `mousedown` and `mouseup` lost the
-click, which is why both tests sat near 3% rather than at 100%. So the new gate
-asserts **geometry**, not a click: the group's content never exceeds the box that
-clips it, and the button never leaves that box.
+The reveal-scroll is real — measured, `scrollLeft` 0→34 — but **only under an
+induced squeeze**, and it does not explain the historical rate. An earlier draft
+of this record said the clip "was present on every run" and that this was why
+both tests sat near 3%. Both halves are wrong: at the app's real width nothing
+overflows, so there was no clip on any real run to be present; and the probe
+test never clicks, so no reveal-scroll can occur in it at all. **Both historical
+rates remain unexplained**, and the `<html>` fault is the leading candidate for
+each, since the effect test's own trace also ended on `<html>`.
+
+The new gate therefore asserts **geometry**, not a click: the group's content
+never exceeds the box that clips it, and the button never leaves that box.
 
 **The instrumentation change is the durable part.** The sweep recorded only
 `hits: boolean`, and a miss reported as `false` is equally consistent with a
@@ -189,6 +195,45 @@ the same failure message, so the next occurrence diagnoses itself.
 - Mutation — `overflow: visible` injected with the fix removed: probes all hit
   while the geometry assertions stay red, which attributes the misses to the clip
   and confirms the geometry assertions are the earlier gate.
+
+## The `<html>` fault: what is known, for whoever picks it up
+
+Split into measurement and guess, because this is the file where that
+distinction is the point.
+
+**Measured:**
+
+- **It is there on the very first sweep.** It was caught when no retry loop
+  existed, immediately after `expect(clear).toBeVisible()` resolved. It does not
+  develop over the life of the test; it is present when the test opens its eyes.
+- **The failing observation, verbatim**, so the next person can pattern-match
+  rather than re-derive: `button 44×44 at (344, 483)`, `group 380×44 at
+  (16, 483)`, chromium-mobile at 412×915. Rect correct, position correct, 138px
+  of slack in the group. Nothing clipped.
+- **A green run proves very little.** The 220 clean sweeps came *after* the run
+  that failed. It wants reproducing under contention — parallel workers, a
+  loaded machine — not in a quiet loop.
+
+**The one cheap datum nobody has yet.** `<html>` is far more specific than
+"stale": it means nothing between that point and the root accepted the hit, not
+that the button was missing. On failure only, record
+`document.elementsFromPoint(centre)` — the whole stack, plural. `[html]` alone
+means the entire subtree stopped hit-testing and the button is a bystander;
+`[html, body, main, …]` with the button absent means the button specifically is
+the problem. Those want completely different investigations and today's
+instrumentation cannot tell them apart. Alongside it: computed `pointerEvents`
+and `visibility` for button, group, `main` and `body`; whether `main` carries
+`aria-hidden` or `inert`; and any `[role="dialog"]` present.
+
+**A lead, explicitly untested.** Document-level inerting predicts `<html>`
+specifically: `modal.css:99` keeps React Aria's modal container at
+`pointer-events: none` by design, and React Aria hides everything outside an
+open overlay, so a probe outside one would fall past `main` to the root — and it
+would be load-dependent, which matches. **This has not been tested**, no modal
+is visible in that test's flow, and the `elementsFromPoint` datum above would
+confirm or kill it in a single run. It is a lead, not a mechanism. This record
+has been repaired twice for letting a guess be read as a fact; do not let this
+be the third.
 
 ## What would change this
 
