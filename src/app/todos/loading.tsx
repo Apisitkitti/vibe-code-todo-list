@@ -11,7 +11,7 @@ const TodosLoading = () => {
     <main className={TODOS_PAGE_SHELL}>
       <div className={PAGE_HEADING_ROW}>
         <Typography.Heading level={1}>{PAGE_HEADING}</Typography.Heading>
-        <Skeleton className="h-4 w-24 rounded-[var(--radius)]" />
+        <Skeleton className="h-4 w-24 rounded-(--radius)" />
       </div>
 
       {/*
@@ -22,7 +22,7 @@ const TodosLoading = () => {
       */}
       <TodoListHeaderLine groups={null} />
 
-      <Skeleton className="h-11 w-full rounded-[var(--field-radius)] sm:w-32" />
+      <Skeleton className="h-11 w-full rounded-(--field-radius) sm:w-32" />
 
       <Card>
         <Card.Content className="p-0">

@@ -101,7 +101,7 @@ export const TodosHeader = ({ userName, userEmail }: TodosHeaderProps) => {
   };
 
   return (
-    <Header className="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--background)]/80 backdrop-blur">
+    <Header className="sticky top-0 z-20 border-b border-(--border) bg-(--background)/80 backdrop-blur">
       {/*
         Shares `TODOS_PAGE_SHELL`'s content width and page gutters so the header
         lines up with the content under it, but deliberately not composed from
@@ -133,7 +133,7 @@ export const TodosHeader = ({ userName, userEmail }: TodosHeaderProps) => {
                 HeroUI `variant`/`isIconOnly`, so it is styled directly. */}
             <Dropdown.Trigger
               aria-label="Account menu"
-              className={`inline-flex items-center justify-center rounded-[var(--radius)] ${ICON_BUTTON_SIZING}`}
+              className={`inline-flex items-center justify-center rounded-(--radius) ${ICON_BUTTON_SIZING}`}
             >
               <Avatar size="sm">
                 <Avatar.Fallback>{initialsOf(userName, userEmail)}</Avatar.Fallback>

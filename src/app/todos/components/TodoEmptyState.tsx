@@ -21,7 +21,7 @@ export const TodoEmptyState = ({
 }: TodoEmptyStateProps) => {
   return (
     <EmptyState className="flex flex-col items-center gap-3 px-6 py-12 text-center">
-      <div aria-hidden="true" className="text-[var(--muted)]">
+      <div aria-hidden="true" className="text-(--muted)">
         <svg
           width={32}
           height={32}
