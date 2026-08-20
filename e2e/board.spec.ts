@@ -10,6 +10,7 @@ import {
   OVERDUE_HEADING,
   TODAY_HEADING,
   TODAY_ITEM_LABEL,
+  UNDO_LABEL,
   UPCOMING_HEADING,
   VIEW_TOGGLE_ARIA_LABEL,
   dueToast,
@@ -312,6 +313,38 @@ test.describe("dragging a card between columns", () => {
   });
 
   /**
+   * A card's own column is not a target either, and this is the third time this
+   * project has learned that a guard nothing asserts is a guard that leaves.
+   *
+   * Deleting the same-column line in `boardMove` leaves every other test in
+   * this file green: the column would light up as a drop target and the drop
+   * would fire a redundant `PATCH …/due` plus a toast reporting a change that
+   * changed nothing. Shaped like the `Overdue` test below — count the writes,
+   * read the toasts once — because the assertion is the same shape: nothing
+   * happened.
+   */
+  test("a card's own column refuses the drop", async ({ signedIn, todos }) => {
+    await seedTodos(signedIn, [{ title: "staying put", dueAt: localDay(1) }]);
+    await openBoard(signedIn);
+
+    await expect(cardIn(signedIn, UPCOMING_HEADING, "staying put")).toBeVisible();
+
+    const dueWrites = countRequests(signedIn, TODO_DUE_URL, "PATCH");
+
+    await dragCardTo(signedIn, "staying put", UPCOMING_HEADING);
+
+    await expect(cardIn(signedIn, UPCOMING_HEADING, "staying put")).toBeVisible();
+    expect(
+      dueWrites.count,
+      "a drop on the card's own column wrote a due date",
+    ).toBe(0);
+    await expectAbsentNow(
+      todos.toasts,
+      "a no-op drop reported that something changed",
+    );
+  });
+
+  /**
    * `Overdue` is not a drop target, because no menu item produces it: being
    * overdue is something time does to a date, not something a user chooses, and
    * honouring the drop would mean back-dating a todo nobody asked to back-date.
@@ -418,6 +451,65 @@ test.describe("the keyboard does everything the drag does", () => {
         name: markNotCompleteLabel("book the flights"),
       }),
     ).toBeFocused();
+  });
+});
+
+/**
+ * The one combination the list's focus machinery was never shaped for
+ * (review F5).
+ *
+ * Completing a card under `status=active` **removes** it, so this takes the
+ * list's rescue path rather than the board's restoration: `focusRowAfterRemoval`
+ * walks `main input[type="checkbox"]`, which on a board enumerates every card
+ * across all five columns in document order. Its `nextFocusIndex` arithmetic is
+ * linear and the board is not, so step 1 can land focus on a card in a
+ * different column — an index that means nothing there.
+ *
+ * **That is a real limitation and this test does not paper over it.** What it
+ * pins is the guarantee that actually has to survive, which is NFR-04's: the
+ * Undo is reachable inside its window, and focus is never left on the floor.
+ * Step 2 delivers that regardless of where step 1 landed, because it selects
+ * the toast by the token this toggle minted rather than by position. So the
+ * board inherits the property that matters and only loses the *quality* of the
+ * fallback — worth knowing, worth testing, and not worth re-deriving
+ * `nextFocusIndex` in two dimensions for a case that ends on the toast anyway.
+ */
+test.describe("a keyboard toggle under a status filter", () => {
+  test.skip(({ isMobile }) => isMobile === true, "the board needs a desktop viewport");
+
+  test("lands focus on this toggle's own Undo, from a board", async ({
+    signedIn,
+    todos,
+  }) => {
+    // Three cards in three different columns, so step 1's linear walk really
+    // does cross a column boundary rather than running out of rows.
+    await seedTodos(signedIn, [
+      { title: "overdue card", dueAt: localDay(-2) },
+      { title: "today card", dueAt: localDay(0) },
+      { title: "undated card" },
+    ]);
+    await signedIn.goto("/todos?view=board&status=active");
+    await expect(signedIn.getByText(BOARD_ORDER_NOTE)).toBeVisible();
+
+    const checkbox = signedIn.getByRole("checkbox", {
+      name: markCompleteLabel("today card"),
+    });
+
+    await focusFromKeyboard(signedIn, checkbox);
+    await signedIn.keyboard.press("Space");
+
+    // The card left the filter, so it is gone from the board entirely.
+    await expect(card(signedIn, "today card")).toHaveCount(0);
+
+    const undo = todos.undoButton.filter({
+      hasText: UNDO_LABEL,
+    });
+
+    await expect(undo).toBeFocused();
+
+    // And it undoes this toggle, not a neighbour's — the card comes back.
+    await signedIn.keyboard.press("Enter");
+    await expect(cardIn(signedIn, TODAY_HEADING, "today card")).toBeVisible();
   });
 });
 
@@ -536,9 +628,28 @@ test.describe("on a phone", () => {
       signedIn.locator("main").getByRole("heading", { level: 2 }),
     ).toHaveText([`${UPCOMING_HEADING} · 1`, `${NO_DATE_HEADING} · 1`]);
     await expect(signedIn.getByText(BOARD_ORDER_NOTE)).toHaveCount(0);
+
+    /*
+      **Both readings, and the second is the one that matters.** `getByRole`
+      ignores a `display: none` subtree, so an aria-level assertion passes
+      whether the toggle is absent or merely hidden with `lg:` classes — which
+      is exactly how the hidden-radiogroup defect survived its first fix and was
+      caught only by an unrelated contrast test acting as an accidental
+      tripwire. Scoping that test by name, correctly, removed the tripwire. So
+      the claim is made at the DOM level here, where it is actually about the
+      document the phone is carrying.
+    */
     await expect(
-      signedIn.getByRole("radiogroup", { name: VIEW_TOGGLE_ARIA_LABEL }),
+      signedIn.getByRole("radiogroup", {
+        name: VIEW_TOGGLE_ARIA_LABEL,
+        includeHidden: true,
+      }),
+      "the view toggle is in the phone's document, hidden rather than absent",
     ).toHaveCount(0);
+    await expect(
+      signedIn.locator('[role="radiogroup"]'),
+      "the phone carries a radiogroup besides the status filter",
+    ).toHaveCount(1);
     // The URL is kept: the user did not change their mind, their window is narrow.
     await expect(signedIn).toHaveURL(/view=board/);
   });
