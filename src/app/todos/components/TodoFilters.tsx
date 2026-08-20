@@ -17,23 +17,25 @@ import {
   STATUS_FILTER_LABELS,
 } from "@/app/todos/constants";
 import {
-  DEFAULT_PRIORITY_FILTER,
-  DEFAULT_STATUS_FILTER,
   PRIORITY_FILTER_VALUES,
   STATUS_FILTER_VALUES,
   type TodoListFilters,
   type TodoPriorityFilter,
   type TodoStatusFilter,
+  type TodoView,
 } from "@/lib/todo";
+import { todosUrl } from "@/lib/todosUrl";
 
-const TODOS_PATH = "/todos";
-const STATUS_PARAM = "status";
-const PRIORITY_PARAM = "priority";
-const QUERY_PARAM = "q";
 const SEARCH_DEBOUNCE_MS = 300;
 
 export interface TodoFiltersProps {
   filters: TodoListFilters;
+  /**
+   * Carried, not used: the view is another piece of URL state, and a writer
+   * that rebuilt the query string without it would delete it — dropping a user
+   * out of the board every time they changed a filter (`src/lib/todosUrl.ts`).
+   */
+  view: TodoView;
 }
 
 /**
@@ -41,7 +43,7 @@ export interface TodoFiltersProps {
  * The current values arrive as props from the server component, so this never
  * needs to read the search params itself.
  */
-export const TodoFilters = ({ filters }: TodoFiltersProps) => {
+export const TodoFilters = ({ filters, view }: TodoFiltersProps) => {
   const [query, setQuery] = useState(filters.query);
   const [lastAppliedQuery, setLastAppliedQuery] = useState(filters.query);
   const [, startTransition] = useTransition();
@@ -56,20 +58,8 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
   }
 
   const pushFilters = (next: TodoListFilters) => {
-    const params = new URLSearchParams();
-
-    if (next.status !== DEFAULT_STATUS_FILTER) params.set(STATUS_PARAM, next.status);
-    if (next.priority !== DEFAULT_PRIORITY_FILTER) {
-      params.set(PRIORITY_PARAM, next.priority);
-    }
-    if (next.query !== "") params.set(QUERY_PARAM, next.query);
-
-    const search = params.toString();
-
     startTransition(() => {
-      router.replace(search === "" ? TODOS_PATH : `${TODOS_PATH}?${search}`, {
-        scroll: false,
-      });
+      router.replace(todosUrl(next, view), { scroll: false });
     });
   };
 
@@ -83,7 +73,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, filters.query, filters.status, filters.priority]);
+  }, [query, filters.query, filters.status, filters.priority, view]);
 
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
