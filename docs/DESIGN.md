@@ -1136,10 +1136,16 @@ filter — the same control with the same selected treatment, not a new one — 
 it is gated on `hasTodos`, so it never appears on the empty screen where the
 existing over-spend lives.
 
-**Below `lg` (1024px) this view renders the list.** Five columns do not fit, and
-HTML5 drag does not fire on touch at all — so a phone gets the same five groups
-stacked, with the same reschedule menu, which is the whole of the board's write
-vocabulary. The toggle is hidden there rather than shown inert: a control
+**This view requires `(min-width: 1024px) and (pointer: fine)`; anything else
+renders the list.** Five columns do not fit below `lg`, and HTML5 drag does not
+fire from touch at all — so both halves are in the query, not just the width. A
+tablet in landscape clears the width and fails the pointer, and used to be
+handed a board whose cards could not be dragged: pulling one scrolled the page,
+nothing happened, and nothing said why. The primary pointer is what is asked
+about rather than `any-pointer`, which is true of a stylus in a drawer.
+
+The fallback is the same five groups stacked, with the same reschedule menu,
+which is the whole of the board's write vocabulary. The toggle is hidden there rather than shown inert: a control
 reporting `Board` while the list is on screen is a control lying about the state
 it shows. The URL keeps `view=board`, so widening the window restores it.
 

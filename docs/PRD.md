@@ -340,14 +340,14 @@ As a signed-in user, I want to see my todos as columns and drag one to another c
 - Given I change a filter or clear the filters, When the URL is rewritten, Then the chosen view is still in it — and given I switch views, Then the filters are still in it.
 - Given a column with no todos in it, When the board renders, Then the column is still on screen with a line saying so. Unlike the list, the board omits no column: an empty column is a drop target, and a drop target that is not rendered cannot be aimed at.
 - Given the list and the board are showing the same todos, When I compare them, Then every todo is in the column named by the section the list would put it under. The two are the same cut, made by the same function.
-- Given a viewport narrower than 1024px, When `view=board` is requested, Then the **list** renders and the view toggle is not offered — five columns do not fit and a drag collides with vertical touch scrolling. The URL keeps `view=board`, so widening the window restores the board without asking again.
+- Given a viewport narrower than 1024px **or a device whose primary pointer is not fine** (a phone, or a tablet in landscape), When `view=board` is requested, Then the **list** renders and the view toggle is not offered — five columns do not fit, and HTML5 drag does not fire from touch, so a board there would show a drag affordance that cannot be used. Both conditions are enforced, not just the width. The URL keeps `view=board`, so opening the same link on a pointer device gives the board without asking again.
 
 **Acceptance criteria — what a drop does**
 
 - Given I drag a card onto `Today` or `Upcoming`, When I release it, Then the todo's due date becomes the user's today, or tomorrow, exactly as the row's `Today` and `Tomorrow` menu items would set it (US-13, §2) — and it is still there after a reload.
 - Given I drag a card onto `No date`, When I release it, Then the due date is cleared.
 - Given I drag a card onto `Completed`, When I release it, Then the todo is **completed** and its due date is untouched — a completion is not a reschedule, and the two go to different routes. Reopening the card returns it to the column its unchanged date names.
-- Given I drag a card onto `Overdue`, When I release it, Then nothing is written. No control in this app sets a date in the past; being overdue is what time does to a date, not something a user chooses.
+- Given I drag a card onto `Overdue`, When I release it, Then nothing is written. `Upcoming` spans many days and a gesture cannot name one, so it takes that bucket's near edge, tomorrow; `Overdue`'s near edge is yesterday, where the same guess stops being a shorthand for intent and becomes a claim about the record — it invents a deadline already missed. **Past dates themselves remain ordinary supported data**: `Pick a date…` sets one, the schema accepts one, and the API stores one. What is refused is a gesture *guessing* one.
 - Given a completed card, When I drag it, Then the only column that accepts it is the one it returns to when reopened. Reopening writes no date, so any other target would land the card somewhere other than where I released it.
 - Given a write is already in flight for a card, When I try to drag it, Then the drag does not start.
 

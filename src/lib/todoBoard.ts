@@ -108,13 +108,32 @@ export type BoardMove =
  * | `No date` | `Clear due date` | as above |
  * | `Completed` | tick the checkbox | — it is already there |
  *
- * **`Overdue` is refused for an active card, and that is not an oversight.**
- * There is no menu item that produces it, because being overdue is not
- * something a user chooses — it is something time does to a date they chose. A
- * drop there could only be honoured by back-dating the todo to yesterday,
- * which is a fact about the record nobody asked to state. So the column is
- * shown, cards live in it and can be dragged *out* of it — which is the move
- * that actually matters — but nothing is dragged in.
+ * **`Overdue` is refused for an active card, and the reason is the one
+ * `Upcoming` already explains, pointed the other way.**
+ *
+ * `Upcoming` spans every future date, and a gesture cannot name a date — so it
+ * takes the bucket's *near edge*, tomorrow, and `Pick a date…` remains the way
+ * to say which day. `Overdue` spans every past date and has the same problem,
+ * but its near edge is **yesterday**, and there the guess stops being helpful
+ * and turns destructive: it invents a deadline the user has already missed,
+ * which is a claim about their record rather than a shorthand for their
+ * intent, and it files the row under the section that exists to shout at them.
+ * A wrong guess towards the future costs a second drag; a wrong guess into the
+ * past rewrites history.
+ *
+ * So the column is shown, cards live in it and can be dragged *out* of it —
+ * which is the move that actually matters — but nothing is dragged in.
+ *
+ * **What this refusal is emphatically not.** An earlier version of this comment
+ * claimed "no menu item produces it" and that "nothing in this app sets a date
+ * in the past". Both are false, and the code says so: `FormDatePicker` sets no
+ * `minValue` and no `isDateUnavailable`, `todoFormSchema.dueAt` only checks
+ * that the day parses, and `PATCH /api/todos/[id]/due` accepts any parseable
+ * day — so `Pick a date…`, this very menu's fourth item, opens a picker that
+ * will happily set last Tuesday. `e2e/grouping.spec.ts` seeds three past dates
+ * through the real create endpoint and asserts `201` on each. **Past dates are
+ * ordinary, supported data.** What is refused here is a *gesture guessing one*,
+ * which is a far narrower claim and the only one this code makes.
  *
  * **A completed card has exactly one valid target: the column it returns to**,
  * computed from the date it still holds. Reopening is a `/status` write and

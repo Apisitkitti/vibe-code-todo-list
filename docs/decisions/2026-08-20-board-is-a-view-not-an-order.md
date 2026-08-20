@@ -50,11 +50,16 @@ Everything below follows from it, including the accessibility story:
 | `No date` | the menu's `Clear due date` | as above |
 | `Completed` | tick the checkbox | — |
 
-`Overdue` refuses an active card because **no control in this app sets a date in
-the past**. Being overdue is what time does to a date, not something a user
-chooses; honouring the drop would mean back-dating a todo to yesterday, a fact
-about the record nobody asked to state. Cards are still dragged *out* of it,
-which is the move that actually matters.
+`Overdue` refuses an active card for the reason `Upcoming` already gives,
+pointed the other way. `Upcoming` spans every future date and a gesture cannot
+name a date, so it takes the bucket's **near edge**, tomorrow, and `Pick a
+date…` remains the way to say which day. `Overdue` spans every past date and has
+the identical problem, but its near edge is **yesterday** — and there the guess
+stops being a shorthand for the user's intent and becomes a claim about their
+record: it invents a deadline they have already missed and files the row under
+the section that exists to shout at them. A wrong guess towards the future costs
+a second drag; a wrong guess into the past rewrites history. Cards are still
+dragged *out* of `Overdue`, which is the move that actually matters.
 
 A completed card has exactly one valid target — the column it returns to when
 reopened, decided by the date it still holds. Reopening is a `/status` write and
@@ -168,3 +173,72 @@ unit test over the mapping catches the mapping, and only a browser test catches
 whether the mapping is the one the *gesture* actually reaches. Neither layer was
 sufficient alone, and in both cases the gap was invisible until the mutation
 exposed it.
+
+## Known limitation: the removal rescue is linear and the board is not
+
+Completing a card under `status=active` **removes** it, so that press takes the
+list's rescue path rather than the board's restoration. `focusRowAfterRemoval`
+walks `main input[type="checkbox"]`, which on a board enumerates every card
+across all five columns in document order, and `nextFocusIndex` then picks an
+index in that flat sequence — so step 1 can land focus on a card in a different
+column, at a position that means nothing there.
+
+**Left as is, deliberately.** Step 1 is a *fallback* for the paths step 2 cannot
+take; on this path step 2 does run, and it selects the toast by the token this
+toggle minted rather than by position, so NFR-04's guarantee — the Undo is
+reachable inside its window and focus is never left on the floor — holds on the
+board exactly as on the list. What is lost is the quality of the fallback, not
+the guarantee. Re-deriving `nextFocusIndex` in two dimensions to improve a
+landing that is immediately superseded would be machinery for a frame.
+
+Pinned by `e2e/board.spec.ts` → "a keyboard toggle under a status filter", with
+three cards in three columns so the walk really does cross a boundary. Disabling
+step 2 fails it.
+
+## Not pinned by a test: the settle ring's restart
+
+Dropping the same card twice inside the highlight window has to restart the
+ring, and did not — the effect keyed on the card's id, so the second drop wrote
+a value the state already held and the first drop's timer stood. Fixed by keying
+on a sequence number as well as the id.
+
+**There is no test.** Asserting it means proving a ring is *still* present after
+the first timer would have fired, which is a wall-clock claim on a machine this
+project already knows is contended enough to have killed a full run. A flaky
+test here would be worse than none, and the property is one line of state. Said
+plainly so the next reader knows it is unguarded rather than assuming the suite
+covers it.
+
+## Correction, 2026-08-20 — the `Overdue` reasoning was false as first written
+
+Recorded rather than silently rewritten, because this directory exists to stop
+documents quietly becoming untrue, and a record that edits its own reasoning
+without saying so is the failure it was created to prevent.
+
+**The first version of this record, and the matching comment in
+`src/lib/todoBoard.ts`, justified the `Overdue` refusal by claiming "no menu
+item produces it" and that "nothing in this app sets a date in the past". Both
+are false.** Senior review checked, and the code contradicts them at four
+points:
+
+- `src/components/ui/FormDatePicker.tsx` sets no `minValue` and no
+  `isDateUnavailable`;
+- `todoFormSchema.dueAt` (`src/lib/todo.schema.ts`) only refines on
+  parseability;
+- `PATCH /api/todos/[id]/due` accepts any parseable day;
+- `e2e/grouping.spec.ts` seeds three past due dates through the real
+  `POST /api/todos` and asserts `201` on each — the repro was already green in
+  our own suite.
+
+And the fourth item of the card's own reschedule menu, `Pick a date…`, opens
+exactly that unbounded picker.
+
+**The decision is unchanged** — the refusal is right and Senior agreed with it —
+but it rests on the near-edge argument above, which is true, rather than on a
+claim about the app's capabilities, which was not. Past dates are ordinary,
+supported data; what this board refuses is a *gesture guessing one*.
+
+The general lesson is the one this project keeps paying for: a comment asserting
+a mechanism is a claim about the code, and it has to be checked against the code
+rather than against how the design feels. The correct reason was already written
+two paragraphs above, for `Upcoming`, and was simply not carried across.
