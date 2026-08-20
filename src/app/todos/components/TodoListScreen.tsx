@@ -1353,16 +1353,32 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
       />
 
       {/*
-        Hidden below `lg`, where the board would not render even if it were
-        chosen (`BOARD_MEDIA_QUERY`). A control that changes nothing is worse
-        than an absent one: it would report `Board` as selected while the list
-        was on screen, which is the control lying about the state it shows.
+        Not rendered below `lg`, where the board would not render even if it
+        were chosen (`BOARD_MEDIA_QUERY`). A control that changes nothing is
+        worse than an absent one: it would report `Board` as selected while the
+        list was on screen, which is the control lying about the state it shows.
+
+        **Not rendered, rather than hidden with `lg:` classes.** A
+        `display: none` radiogroup is still a radiogroup in the document —
+        `getByRole` skips it, so an accessibility-aware query cannot see the
+        difference, but anything reading the DOM can, and one did: it gave
+        `a11y-contrast.spec.ts` two elements matching
+        `[role="radio"][aria-checked="true"]` where it expected the status
+        filter's one. That was a real ambiguity and not only a test's problem —
+        the mobile document was carrying a second, inert radiogroup named
+        `Choose a view`, which is exactly the sort of thing that ends up
+        announced to somebody.
+
+        Safe against hydration because `isWideEnoughForBoard` is the same
+        two-pass reading the board itself uses: false on the server and on the
+        first client render, so the markup agrees before the layout effect
+        flips it.
 
         Gated on `hasTodos` like the filter bar beside it, and for the same
         reason — there is nothing to look at two ways yet.
       */}
-      {hasTodos ? (
-        <div className="hidden justify-end lg:flex">
+      {hasTodos && isWideEnoughForBoard ? (
+        <div className="flex justify-end">
           <ViewToggle filters={filters} view={view} />
         </div>
       ) : null}
