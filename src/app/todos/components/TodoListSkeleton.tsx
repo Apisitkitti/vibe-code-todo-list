@@ -1,5 +1,7 @@
 import { Skeleton } from "@heroui/react";
 
+import { LIST_CONTAINER } from "@/lib/styles";
+
 const SKELETON_ROW_COUNT = 4;
 
 /** Row geometry matches `TodoRow` so nothing shifts on swap (§4.8). */
@@ -8,7 +10,7 @@ export const TodoListSkeleton = () => {
     <ul
       aria-busy="true"
       aria-label="Loading todos"
-      className="flex flex-col gap-1.5 p-2"
+      className={LIST_CONTAINER}
     >
       {Array.from({ length: SKELETON_ROW_COUNT }).map((_, index) => (
         <li

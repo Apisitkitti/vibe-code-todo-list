@@ -358,6 +358,190 @@ export const focusRowAfterRemoval = async (
 };
 
 /**
+ * Names a row's reschedule trigger by the todo it belongs to (backlog #5).
+ *
+ * The same shape of answer as `UNDO_TOKEN_ATTRIBUTE` above, for a different
+ * question: not "which toast did I raise" but "which row did I act on". A
+ * positional selector would be wrong for the same reason it was wrong there —
+ * the row's position is exactly what a reschedule changes.
+ */
+export const RESCHEDULE_TRIGGER_ATTRIBUTE = "data-reschedule-for";
+
+/** The attribute as a spreadable prop; see `undoTokenProps` for why. */
+export const rescheduleTriggerProps = (
+  todoId: string,
+): Record<string, string> => ({
+  [RESCHEDULE_TRIGGER_ATTRIBUTE]: todoId,
+});
+
+const rescheduleTriggerSelector = (todoId: string) =>
+  `main [${RESCHEDULE_TRIGGER_ATTRIBUTE}="${CSS.escape(todoId)}"]`;
+
+/** What `restoreRescheduleFocus` reads the world through. */
+export interface RestoreFocusDeps {
+  findTrigger: (todoId: string) => FocusTarget | null;
+  getActiveElement: () => unknown;
+  getBody: () => unknown;
+  waitFrame: () => Promise<void>;
+}
+
+const browserRestoreDeps: RestoreFocusDeps = {
+  findTrigger: (todoId) =>
+    document.querySelector<HTMLElement>(rescheduleTriggerSelector(todoId)),
+  getActiveElement: () => document.activeElement,
+  getBody: () => document.body,
+  waitFrame: nextFrame,
+};
+
+/**
+ * The loop both restorations run, with only "which control" left to the caller.
+ *
+ * Extracted when the board gave the same problem a second shape, and it is the
+ * *conditions* that are worth sharing rather than the frame counting: act only
+ * on focus that is already on the floor, wait for the control to be
+ * **focusable** rather than merely present, and give up after
+ * `MAX_WAIT_FRAMES` instead of hanging. Each of those is a defect this project
+ * has already paid for once (review F1), and a second copy of the loop is a
+ * second place for one of them to be dropped.
+ */
+const restoreFocusTo = async (
+  findTarget: () => FocusTarget | null,
+  deps: Omit<RestoreFocusDeps, "findTrigger">,
+): Promise<boolean> => {
+  for (let frame = 0; frame < MAX_WAIT_FRAMES; frame += 1) {
+    const active = deps.getActiveElement();
+
+    if (active === null || active === deps.getBody()) {
+      const target = findTarget();
+
+      if (target !== null) {
+        target.focus();
+
+        if (deps.getActiveElement() === target) return true;
+      }
+    }
+
+    await deps.waitFrame();
+  }
+
+  return false;
+};
+
+/**
+ * Puts focus back on the control the user pressed, after the row it lives on
+ * has been rebuilt somewhere else in the list.
+ *
+ * **This is a restoration, not the redirection the toggle needs, and the
+ * difference is the whole reason it is a separate function.** A toggle under a
+ * status filter destroys the row: there is nothing to go back to, so focus is
+ * moved to the toast's Undo and the user pays the surprise §6.8 describes. A
+ * reschedule destroys nothing — the row is still on screen, still the user's,
+ * just under a different heading — so the right place for focus is the button
+ * they pressed, and moving them to a toast instead would arm an Undo under
+ * their next `Space` for no reason at all.
+ *
+ * The focus is lost in the first place because the list is cut into sections
+ * (`TodoGroupedList`): a todo moving from `Upcoming` to `Today` is rendered
+ * under a different `<section>`, so React unmounts the row and builds a new
+ * one rather than moving the DOM node, and the trigger goes with it. Nothing
+ * about that is visible on screen — the row appears to slide — which is
+ * exactly the kind of focus loss that only shows up in keyboard use.
+ *
+ * **It only ever acts on focus that is already on the floor.** `<body>` (or
+ * `null`) is what an unmounted focused element leaves behind; a row that did
+ * *not* change section leaves focus on the trigger, and this declines and
+ * expires quietly. So it cannot take focus the user has moved themselves, and
+ * it cannot fire on the common case where nothing was lost — which also means
+ * there is no version of this that fights react-aria's own restore-focus-to-
+ * trigger on menu close.
+ *
+ * Bounded by `MAX_WAIT_FRAMES` for the same reason step 2 is: the list refetch
+ * has to land first, and waiting on the condition rather than the clock is what
+ * makes that safe on a slow machine.
+ *
+ * **It waits for the trigger to be *focusable*, not merely to exist** (review
+ * F1, the latent half). An earlier version focused the first trigger it found
+ * and reported failure if the focus was refused — which reads as a reasonable
+ * "it did not work" until you notice what refuses focus: a control that is
+ * momentarily unavailable. A restore landing one frame before React flushed
+ * the end of the pending state would give up permanently and leave focus on the
+ * floor, and the give-up path was pinned by a unit test, so it would have
+ * survived review. Existence and focusability are different conditions and only
+ * one of them is the one worth waiting for.
+ */
+export const restoreRescheduleFocus = async (
+  todoId: string,
+  deps: RestoreFocusDeps = browserRestoreDeps,
+): Promise<boolean> => {
+  return restoreFocusTo(() => deps.findTrigger(todoId), deps);
+};
+
+/**
+ * Names a card's completion checkbox by the todo it belongs to — the board's
+ * equivalent of `RESCHEDULE_TRIGGER_ATTRIBUTE`, for the control beside it.
+ *
+ * **It is on a wrapper element, and the checkbox is found beneath it**, rather
+ * than on the checkbox itself. react-aria renders the real
+ * `<input type="checkbox">` visually hidden inside a `<label>`, and which of
+ * those elements a stray `data-*` prop lands on is HeroUI's business, not this
+ * app's; the input is the thing that takes focus. A wrapper this app owns is
+ * the one anchor that cannot move under a dependency upgrade.
+ *
+ * The accessible name is not usable as the anchor here, which is the whole
+ * reason an attribute is needed at all: the label reads `Mark "x" as complete`
+ * before the press and `Mark "x" as not complete` after it, so a selector built
+ * from it would be looking for the control the toggle just stopped being.
+ */
+export const TOGGLE_TARGET_ATTRIBUTE = "data-toggle-for";
+
+/** The attribute as a spreadable prop; see `undoTokenProps` for why. */
+export const toggleTargetProps = (todoId: string): Record<string, string> => ({
+  [TOGGLE_TARGET_ATTRIBUTE]: todoId,
+});
+
+const toggleTargetSelector = (todoId: string) =>
+  `main [${TOGGLE_TARGET_ATTRIBUTE}="${CSS.escape(todoId)}"] input[type="checkbox"]`;
+
+/** What `restoreToggleFocus` reads the world through. */
+export interface RestoreToggleDeps extends Omit<RestoreFocusDeps, "findTrigger"> {
+  findToggle: (todoId: string) => FocusTarget | null;
+}
+
+const browserToggleDeps: RestoreToggleDeps = {
+  findToggle: (todoId) =>
+    document.querySelector<HTMLElement>(toggleTargetSelector(todoId)),
+  getActiveElement: () => document.activeElement,
+  getBody: () => document.body,
+  waitFrame: nextFrame,
+};
+
+/**
+ * Puts focus back on the checkbox the user ticked, after the card it lives on
+ * has been rebuilt in another column (`docs/DESIGN.md` §8.8).
+ *
+ * A **restoration**, like `restoreRescheduleFocus` and for the same reason —
+ * and deliberately not the toggle's list behaviour, which moves focus to the
+ * toast's Undo. That move is right on the list because the row is *gone*: a
+ * status filter removed it and the toast is the only route back. On the board
+ * the card is not gone, it has moved to `Completed` and is still on screen and
+ * still the user's, so the right place for focus is the control they pressed,
+ * where the next `Space` un-completes what they just completed. Dragging them
+ * into a toast instead would arm a different mutation under that keypress, for
+ * a row they can still see.
+ *
+ * The focus is lost for the reason the reschedule's is: columns are separate
+ * subtrees, so React unmounts the card and builds a new one rather than moving
+ * the DOM node. Nothing about that is visible — the card appears to slide —
+ * which is exactly the kind of loss only keyboard use finds.
+ */
+export const restoreToggleFocus = async (
+  todoId: string,
+  deps: RestoreToggleDeps = browserToggleDeps,
+): Promise<boolean> => {
+  return restoreFocusTo(() => deps.findToggle(todoId), deps);
+};
+
+/**
  * What `focusUndoAction` reads the world through.
  *
  * Injectable for the same reason `RowFocusDeps` is, and for one more: the

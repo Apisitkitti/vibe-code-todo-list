@@ -1,3 +1,27 @@
+/**
+ * The todo write contract: the one schema both producers of a todo payload
+ * validate with, and the one the route handlers re-parse with.
+ *
+ * **It lives in `src/lib` because the API depends on it** (`docs/REVIEW.md`
+ * §1.3 / E-3). It used to live in `src/app/todos/components/form/`, which made
+ * `src/app/api/todos/route.ts` import its trust boundary out of a screen's
+ * presentation folder — the dependency arrow pointing UI → API backwards. That
+ * was survivable while the form was the only producer of this payload. It
+ * stopped being survivable when the quick-add bar became a second one, because
+ * "the form's schema" and "the API's contract" were then two ideas sharing one
+ * file, three directories inside a route, where nobody looks for a
+ * security-relevant module.
+ *
+ * The form barrel at `src/app/todos/components/form/index.ts` still re-exports
+ * everything here, so components keep importing from `./form` and none of them
+ * had to change. Server code imports this path directly.
+ *
+ * The converse of the same rule is why `quickAddSchema` is *not* here: nothing
+ * on the server parses a `{ text }` body, so that schema lives beside its form
+ * at `src/app/todos/components/form/QuickAddForm/schema.ts`. What lands in
+ * `src/lib` is what the API depends on, not everything that happens to be a
+ * schema.
+ */
 import { z } from "zod";
 
 import {
@@ -34,7 +58,13 @@ const DUE_DATE_INVALID_MESSAGE = `Enter a valid date (${DUE_DATE_FORMAT}).`;
  * The single description of a todo form's shape. The client validates with it
  * for fast feedback and the route handlers under `src/app/api/todos` re-parse
  * with the very same schema, which is the only copy that is trusted
- * (`docs/CONVENTIONS.md` → Forms, `docs/PRD.md` NFR-08).
+ * (`docs/CONVENTIONS.md` → Route handlers are the trust boundary, step 2;
+ * `docs/PRD.md` NFR-08).
+ *
+ * Not the Forms section's wording, which says this schema is "re-validated
+ * inside the server action". There are no server actions in this app and there
+ * never have been. The re-parse happens in the route handler, and that is the
+ * boundary — see `.claude/skills/todo-app-structure/SKILL.md`.
  *
  * Limits live in `@/lib/todo` so the schema, the inputs' `maxLength` and the
  * database rules all read the same constant.
@@ -96,22 +126,6 @@ export const TODO_FIELD_NAMES = [
 
 export const isTodoFieldName = (value: string): value is keyof TodoFormValues =>
   (TODO_FIELD_NAMES as readonly string[]).includes(value);
-
-/**
- * The quick-add bar's own shape: one line of raw text.
- *
- * It validates only what it can validate *about the raw string* — that
- * something was typed. Everything else is a claim about the todo the text
- * parses into, not about the text, so the bar re-parses its result through
- * `todoFormSchema` above before it calls the API. That is deliberate: the
- * title's rules live in one schema, the one the route handler re-parses with,
- * and the bar borrows them rather than restating them at a second length.
- */
-export const quickAddSchema = z.object({
-  text: z.string("Enter a title.").trim().min(1, "Enter a title."),
-});
-
-export type QuickAddValues = z.infer<typeof quickAddSchema>;
 
 export const DEFAULT_TODO_FORM_VALUES: TodoFormValues = {
   title: "",

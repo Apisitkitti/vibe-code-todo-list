@@ -1,79 +1,13 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { Checkbox, Typography } from "@heroui/react";
 
-import { Button, Checkbox, Tooltip, Typography } from "@heroui/react";
-
+import { ICON_BUTTON_SIZING, ROW_TITLE_LAYOUT } from "@/lib/styles";
 import type { TodoItemData } from "@/lib/todo";
 
 import { PriorityChip } from "./PriorityChip";
+import { TodoActions } from "./TodoActions";
 import { TodoDueDate } from "./TodoDueDate";
-
-const ICON_BUTTON_SIZING = "min-h-11 min-w-11 sm:min-h-9 sm:min-w-9";
-
-const EditIcon = () => {
-  return (
-    <svg
-      aria-hidden="true"
-      width={16}
-      height={16}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-    </svg>
-  );
-};
-
-const DeleteIcon = () => {
-  return (
-    <svg
-      aria-hidden="true"
-      width={16}
-      height={16}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M3 6h18" />
-      <path d="M8 6V4h8v2" />
-      <path d="M19 6l-1 14H6L5 6" />
-      <path d="M10 11v6M14 11v6" />
-    </svg>
-  );
-};
-
-/** Tooltips are pointer-only affordances; the `aria-label` is the real name. */
-const ActionTooltip = ({
-  label,
-  isEnabled,
-  children,
-}: {
-  label: string;
-  isEnabled: boolean;
-  children: ReactNode;
-}) => {
-  if (!isEnabled) return <>{children}</>;
-
-  // `Tooltip.Trigger` renders a plain `div`, which lands between react-aria's
-  // PressResponder and the button and swallows the trigger ("A PressResponder
-  // was rendered without a pressable child"). The pressable child belongs
-  // directly under `Tooltip`.
-  return (
-    <Tooltip>
-      {children}
-      <Tooltip.Content>{label}</Tooltip.Content>
-    </Tooltip>
-  );
-};
 
 export interface TodoRowProps {
   todo: TodoItemData;
@@ -87,6 +21,8 @@ export interface TodoRowProps {
   showTooltips: boolean;
   onToggle: (todo: TodoItemData, nextCompleted: boolean) => void;
   onEdit: (todo: TodoItemData) => void;
+  /** `dueAt` is the `YYYY-MM-DD` wire day, or `null` to clear it. */
+  onReschedule: (todo: TodoItemData, dueAt: string | null) => void;
   onDelete: (todo: TodoItemData) => void;
 }
 
@@ -97,6 +33,7 @@ export const TodoRow = ({
   showTooltips,
   onToggle,
   onEdit,
+  onReschedule,
   onDelete,
 }: TodoRowProps) => {
   return (
@@ -146,7 +83,20 @@ export const TodoRow = ({
       // latency for its own sake. `isDisabled` on the controls is what
       // actually prevents the out-of-order PATCHes m-4 describes; this only
       // ever stopped a mouse (QA DEF-12).
-      className={`group flex items-center gap-3 rounded-2xl border border-border-secondary px-4 py-3.5 hover:bg-surface-hover ${
+      //
+      // **`flex-wrap`, and it is load-bearing rather than defensive** (§4.4,
+      // "Three targets and 320px"). A third 44×44 action does not fit beside a
+      // 44×44 checkbox and a readable title at 320px, and the target size is
+      // not negotiable — so the actions cluster is allowed to take a line of
+      // its own when the row cannot hold everything on one. The content
+      // column's `min-w-32` is what decides *when*: it is the narrowest a
+      // truncated title may be squeezed to, so flexbox breaks the line rather
+      // than going below it. Measured, that is a wrap below 457px — every
+      // phone — with no breakpoint named anywhere in the CSS to keep in step
+      // with the design. §4.4 carries the arithmetic; note that 112px of it is
+      // surrounding padding, a third of which is the Card's own `px-4` and is
+      // the term the first draft of that arithmetic left out.
+      className={`group flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-border-secondary px-4 py-3.5 hover:bg-surface-hover ${
         isVanishing ? "pointer-events-none" : ""
       }`}
     >
@@ -166,7 +116,7 @@ export const TodoRow = ({
             : `Mark "${todo.title}" as complete`
         }
       >
-        <Checkbox.Content className="flex min-h-11 min-w-11 items-center justify-start sm:min-h-9 sm:min-w-9">
+        <Checkbox.Content className={`${ICON_BUTTON_SIZING} flex items-center justify-start`}>
           {/*
             HeroUI's theme gives form fields no border by default
             (`--field-border-width: 0px`), relying on the field background to
@@ -186,20 +136,48 @@ export const TodoRow = ({
         </Checkbox.Content>
       </Checkbox>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+      {/*
+        `min-w-32` rather than `min-w-0`, and it is the whole of the 320px
+        decision: it says a truncated title may be squeezed to 128px and no
+        further, which is what makes flexbox move the actions to their own line
+        instead of crushing the title to nothing. `truncate` still works — the
+        floor bounds the shrink, it does not stop it.
+      */}
+      <div className="flex min-w-32 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
         <Typography
           type="body"
           weight="medium"
           truncate
-          className={todo.completed ? "text-muted line-through" : undefined}
+          className={
+            todo.completed
+              ? `${ROW_TITLE_LAYOUT} text-muted line-through`
+              : ROW_TITLE_LAYOUT
+          }
         >
           {todo.title}
         </Typography>
         <div className="flex shrink-0 items-center gap-2">
-          <PriorityChip priority={todo.priority} />
-          {todo.dueAt ? (
-            <TodoDueDate dueAt={todo.dueAt} completed={todo.completed} />
-          ) : null}
+          {/*
+            A completed row goes quiet: no priority chip and no due date.
+            `src/lib/todoGroups.ts` already argues the date half — "a completed
+            todo is done, so its date has nothing left to say" — and this is
+            the row finally agreeing with it, instead of filing a finished task
+            under `Completed` while it announces `Aug 12`. The priority half is
+            §8.5: once a todo is done its priority is history and it is
+            competing for attention with the active rows above it.
+
+            §6.4 is unaffected. Completion is carried by the checkbox's
+            `aria-checked` and by `line-through` on the title, never by the
+            chip or the date, so nothing that carried meaning has been removed.
+            The `✎` note marker stays — a note is still there to read — and so
+            do the actions.
+          */}
+          {todo.completed ? null : (
+            <>
+              <PriorityChip priority={todo.priority} />
+              {todo.dueAt ? <TodoDueDate dueAt={todo.dueAt} /> : null}
+            </>
+          )}
           {todo.note ? (
             <>
               <span aria-hidden="true" className="text-muted">
@@ -211,34 +189,21 @@ export const TodoRow = ({
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1 transition-opacity motion-reduce:transition-none lg:opacity-0 lg:group-focus-within:opacity-100 lg:group-hover:opacity-100">
-        <ActionTooltip label="Edit" isEnabled={showTooltips}>
-          <Button
-            variant="ghost"
-            size="sm"
-            isIconOnly
-            className={ICON_BUTTON_SIZING}
-            isDisabled={isPending}
-            aria-label={`Edit "${todo.title}"`}
-            onPress={() => onEdit(todo)}
-          >
-            <EditIcon />
-          </Button>
-        </ActionTooltip>
-        <ActionTooltip label="Delete" isEnabled={showTooltips}>
-          <Button
-            variant="ghost"
-            size="sm"
-            isIconOnly
-            className={ICON_BUTTON_SIZING}
-            isDisabled={isPending}
-            aria-label={`Delete "${todo.title}"`}
-            onPress={() => onDelete(todo)}
-          >
-            <DeleteIcon />
-          </Button>
-        </ActionTooltip>
-      </div>
+      {/*
+        `ml-auto` keeps the cluster right-aligned whether it shares the row's
+        first line or has wrapped onto one of its own. The controls themselves
+        are `TodoActions`, shared with the board's cards so the reschedule menu
+        cannot differ between the two (`docs/DESIGN.md` §8.8).
+      */}
+      <TodoActions
+        todo={todo}
+        isPending={isPending}
+        showTooltips={showTooltips}
+        className="ml-auto transition-opacity motion-reduce:transition-none lg:opacity-0 lg:group-focus-within:opacity-100 lg:group-hover:opacity-100"
+        onEdit={onEdit}
+        onReschedule={onReschedule}
+        onDelete={onDelete}
+      />
     </li>
   );
 };

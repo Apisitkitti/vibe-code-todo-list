@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import { TODOS_PATH } from "@/lib/routes";
 import { getSession } from "@/lib/session";
+import { AUTH_PAGE_SHELL } from "@/lib/styles";
 
 import { SignUpForm } from "./components/form";
 
@@ -19,7 +20,7 @@ const SignUpPage = async () => {
   }
 
   return (
-    <main className="flex-1 grid place-items-center px-4 py-8">
+    <main className={AUTH_PAGE_SHELL}>
       <SignUpForm />
     </main>
   );

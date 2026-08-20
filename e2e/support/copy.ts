@@ -110,6 +110,29 @@ export const markNotCompleteLabel = (title: string) =>
 export const EDIT_TOOLTIP = "Edit";
 export const DELETE_TOOLTIP = "Delete";
 
+/**
+ * §7.19 — the reschedule menu (backlog #5).
+ *
+ * The trigger's name is built the same way Edit's and Delete's are — straight
+ * quotes, because it is an `aria-label` — and the menu borrows it, so a screen
+ * reader hears which todo the open menu belongs to rather than five unlabelled
+ * items.
+ */
+export const rescheduleLabel = (title: string) => `Reschedule ${ariaQuoted(title)}`;
+export const RESCHEDULE_TOOLTIP = "Reschedule";
+export const TODAY_ITEM_LABEL = "Today";
+export const TOMORROW_ITEM_LABEL = "Tomorrow";
+export const NEXT_WEEK_ITEM_LABEL = "Next week";
+export const PICK_A_DATE_ITEM_LABEL = "Pick a date…";
+export const CLEAR_DUE_DATE_ITEM_LABEL = "Clear due date";
+
+/** §7.19 — what a reschedule reports, and what its Undo reports when it lands. */
+export const dueToast = (title: string, dayLabel: string) =>
+  `Todo ${quoted(title)} due ${dayLabel}`;
+export const dueClearedToast = (title: string) =>
+  `Todo ${quoted(title)} due date cleared`;
+export const RESCHEDULE_FAILURE = "Couldn’t change the due date. Try again.";
+
 /** §7.11 / §7.15 — success toasts. All name the record. */
 export const addedToast = (title: string) => `Todo ${quoted(title)} added`;
 export const updatedToast = (title: string) => `Todo ${quoted(title)} updated`;
@@ -170,6 +193,19 @@ export const TODAY_HEADING = "Today";
 export const UPCOMING_HEADING = "Upcoming";
 export const NO_DATE_HEADING = "No date";
 export const COMPLETED_HEADING = "Completed";
+/**
+ * §7.16 — a heading's **rendered text**, which carries the section count:
+ * `Overdue · 3`. Separator is `·` per §7.18's punctuation note.
+ *
+ * Deliberately separate from the constants above, and both are needed. The
+ * count is `aria-hidden`, so a heading's *accessible name* is still the bare
+ * string — `getByRole("heading", { name: OVERDUE_HEADING })` keeps matching —
+ * while `toHaveText` reads the text content and sees the count. Asserting the
+ * wrong one of the two would pass for the wrong reason.
+ */
+export const sectionHeadingText = (heading: string, count: number) =>
+  `${heading} · ${count}`;
+
 export const GROUP_HEADINGS_IN_ORDER = [
   OVERDUE_HEADING,
   TODAY_HEADING,
@@ -177,6 +213,52 @@ export const GROUP_HEADINGS_IN_ORDER = [
   NO_DATE_HEADING,
   COMPLETED_HEADING,
 ];
+
+/**
+ * US-12 / §7.19 — the dated header line above the list.
+ *
+ * The date is built here from `Date`'s own parts rather than through dayjs,
+ * which is what the app formats it with. That is deliberate: a helper sharing
+ * the app's formatter would agree with it by construction and could not catch
+ * the app formatting the wrong day. Clauses are joined with `·` per §7.18.
+ */
+const WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** `Saturday, 16 August`, in the runner's own local day. */
+export const headerDate = (now: Date = new Date()) =>
+  `${WEEKDAYS[now.getDay()]}, ${now.getDate()} ${MONTHS[now.getMonth()]}`;
+
+export const headerLine = (...clauses: string[]) =>
+  [headerDate(), ...clauses].join(" · ");
+
+export const dueTodayClause = (count: number) => `${count} due today`;
+export const overdueClause = (count: number) => `${count} overdue`;
+
+/** Matches the line whatever its clauses, for locating it before reading it. */
+export const HEADER_LINE_PATTERN = /^\w+day, \d{1,2} [A-Z][a-z]+/;
 
 /**
  * Raw transport text that must NEVER reach the user. `getErrorMessage`
@@ -190,3 +272,31 @@ export const AXIOS_LEAK_PATTERNS = [
   /AxiosError/i,
   /ERR_[A-Z_]+/,
 ];
+
+/**
+ * §7.20 — the board view (`docs/PRD.md` US-14).
+ *
+ * The column headings are §7.16's, unchanged and deliberately so: the board is
+ * the list's own sections laid out sideways, and a second set of names for the
+ * same five groups would be the first sign it had become a second opinion
+ * about where a todo belongs.
+ */
+export const VIEW_TOGGLE_ARIA_LABEL = "Choose a view";
+export const LIST_VIEW_LABEL = "List";
+export const BOARD_VIEW_LABEL = "Board";
+
+/** §7.20 — what an empty column says, per column. */
+export const BOARD_EMPTY_COLUMN = {
+  overdue: "Nothing overdue.",
+  today: "Nothing due today.",
+  upcoming: "Nothing scheduled ahead.",
+  "no-date": "Every todo has a date.",
+  completed: "Nothing completed yet.",
+} as const;
+
+/**
+ * §7.20 — the line under the columns, and the one place the app states what
+ * §8.8 decided: a drop chooses a column, not a place inside it.
+ */
+export const BOARD_ORDER_NOTE =
+  "Cards are ordered by due date within each column. Dropping a card chooses its column, not its place in it.";

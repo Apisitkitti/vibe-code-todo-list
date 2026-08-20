@@ -2,7 +2,6 @@ import type { Prisma } from "@/generated/prisma/client";
 
 import { NextResponse, type NextRequest } from "next/server";
 
-import { todoFormSchema } from "@/app/todos/components/form";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import {
@@ -10,6 +9,7 @@ import {
   parsePriorityFilter,
   parseStatusFilter,
 } from "@/lib/todo";
+import { todoFormSchema } from "@/lib/todo.schema";
 
 import {
   badRequestResponse,

@@ -19,6 +19,7 @@ import { Controller, useForm } from "react-hook-form";
 import { FormTextField } from "@/components/ui";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { TODOS_PATH } from "@/lib/routes";
+import { AUTH_CARD_SIZING, FORM_ACTION_SIZING, FORM_FIELD_STACK } from "@/lib/styles";
 import { signUpWithEmail } from "@/service/auth.service";
 
 import { signUpFormSchema, type SignUpFormValues } from "./schema";
@@ -87,7 +88,7 @@ export const SignUpForm = () => {
   };
 
   return (
-    <Card className="w-full max-w-sm">
+    <Card className={AUTH_CARD_SIZING}>
       <Card.Header>
         <Card.Title>Create your account</Card.Title>
         <Card.Description>It takes about ten seconds.</Card.Description>
@@ -96,7 +97,7 @@ export const SignUpForm = () => {
         <Form
           validationBehavior="aria"
           onSubmit={handleSubmit(onSubmit)}
-          className="flex flex-col gap-4"
+          className={FORM_FIELD_STACK}
         >
           {formError ? (
             <Alert status="danger">
@@ -175,7 +176,7 @@ export const SignUpForm = () => {
             type="submit"
             variant="primary"
             fullWidth
-            className="min-h-11"
+            className={FORM_ACTION_SIZING}
             isDisabled={isPending}
           >
             {isPending ? (

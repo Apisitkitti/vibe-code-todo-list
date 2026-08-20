@@ -11,12 +11,12 @@ import {
   useMediaQuery,
   useOverlayState,
 } from "@heroui/react";
-import { useRouter } from "next/navigation";
 import { useFocusVisible } from "react-aria";
 
 import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
 import { useTodoList } from "@/app/todos/hooks/useTodoList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { formatDueDate } from "@/lib/date";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { createHandoff } from "@/lib/handoff";
 import {
@@ -25,27 +25,94 @@ import {
   focusUndoAction,
   nextUndoToken,
   readFocusedRow,
+  restoreRescheduleFocus,
+  restoreToggleFocus,
   undoTokenProps,
 } from "@/lib/rowFocus";
-import type { TodoItemData, TodoListFilters } from "@/lib/todo";
+import {
+  toDueDateInputValue,
+  type TodoItemData,
+  type TodoListFilters,
+  type TodoView,
+} from "@/lib/todo";
+import { boardColumns } from "@/lib/todoBoard";
+import { groupTodos, type TodoGroup } from "@/lib/todoGroups";
 import {
   applyCompletion,
+  applyDueDate,
   replaceTodo,
   todoMatchesFilters,
   todoMatchesStatusFilter,
 } from "@/lib/todoListState";
-import { deleteTodo, toggleTodo, updateTodo } from "@/service/todo.service";
+import {
+  deleteTodo,
+  rescheduleTodo,
+  toggleTodo,
+  updateTodo,
+} from "@/service/todo.service";
 
-import type { TodoFormValues } from "./form";
+/*
+  The schema's real home, not the form barrel. `TodoFormValues` is the write
+  contract — the route handlers re-parse with it — and this screen wants the
+  contract, not a form component, so it says so.
+*/
+import type { TodoFormValues } from "@/lib/todo.schema";
 import { QuickAddBar } from "./QuickAddBar";
+import { TodoBoard } from "./TodoBoard";
+import { TodoBoardSkeleton } from "./TodoBoardSkeleton";
 import { TodoEmptyState } from "./TodoEmptyState";
+import { LABELLED_CONTROL_SIZING, PAGE_HEADING_ROW } from "@/lib/styles";
+
+import { useTodosUrlSync } from "@/app/todos/hooks/useTodosUrlSync";
+
 import { TodoFilters } from "./TodoFilters";
 import { TodoFormModal } from "./TodoFormModal";
 import { TodoGroupedList } from "./TodoGroupedList";
+import { TodoListHeaderLine } from "./TodoListHeaderLine";
 import { TodoListSkeleton } from "./TodoListSkeleton";
+import { ViewToggle } from "./ViewToggle";
 
-const TODOS_PATH = "/todos";
 const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
+
+/**
+ * Where the board becomes a board (`docs/DESIGN.md` §8.8, §4.11).
+ *
+ * Five columns need roughly 200px each to hold a readable title beside a
+ * 44×44 checkbox; below `lg` there is not room, and the honest answers to "what
+ * happens on a phone" were a two-column compromise, a sideways scroller whose
+ * drop targets are off screen, or the list. **It is the list**, and that is not
+ * a failure mode: the list already groups by the same five sections, stacked —
+ * so a phone gets the board's information in the shape a phone can read it,
+ * and it gets the reschedule menu, which is the whole of the board's write
+ * vocabulary. The drag is the only thing lost, and a drag is the one part that
+ * was never going to work there anyway: it collides head-on with vertical touch
+ * scrolling, and the disambiguating long-press would make the gesture slower
+ * than the menu it replaces (§8.1 makes this argument for the checkbox; it is
+ * the same argument).
+ *
+ * **`(pointer: fine)` as well as the width, because the width alone left half
+ * of this argument reasoned about and not implemented.** The paragraph above
+ * rules the board out on a phone for two reasons — five columns do not fit,
+ * *and* HTML5 drag does not fire from touch — but a query on width alone only
+ * enforces the first. An iPad in landscape is wider than `lg` and has no fine
+ * pointer, so it was being handed a board whose cards cannot be dragged:
+ * pulling one scrolls the page instead, nothing happens, and nothing on screen
+ * says why. That is worse than not offering the view, because the affordance
+ * is visibly there.
+ *
+ * The *primary* pointer is the right thing to ask about rather than
+ * `any-pointer`, which answers "is any fine pointer available" — true of a
+ * tablet with a stylus in a drawer or a trackpad in a case, while the user's
+ * hands are on the glass. `hover: hover` would be a proxy for the same thing
+ * and says less about whether a drag can be started.
+ *
+ * `?view=board` in the URL is **kept** while this is showing the list, rather
+ * than rewritten to `view=list`. The user did not change their mind; their
+ * window is narrow. Rotating a tablet or widening a window puts the board back
+ * without them having to ask twice, and a link shared from a phone still opens
+ * as a board on a desktop.
+ */
+const BOARD_MEDIA_QUERY = "(min-width: 1024px) and (pointer: fine)";
 
 /**
  * How long an Undo stays offered. HeroUI's 4s default is a reasonable life for
@@ -75,6 +142,7 @@ const ADD_TODO_LABEL = "Add a todo";
  * Undo share one code path, and both kinds of Undo report the same wording.
  */
 const TOGGLE_FAILURE_MESSAGE = "Couldn’t update the todo. Try again.";
+const RESCHEDULE_FAILURE_MESSAGE = "Couldn’t change the due date. Try again.";
 const UNDO_FAILURE_MESSAGE = "Couldn’t undo that. Try again.";
 
 /** The word on the button (`docs/DESIGN.md` §7.13, §7.15). */
@@ -111,6 +179,12 @@ interface ToggleOutcome {
   reloadOnSuccess: boolean;
 }
 
+/** What a reschedule and its Undo do differently; everything else is shared. */
+interface RescheduleOutcome {
+  onSuccess: (saved: TodoItemData) => void;
+  failureMessage: string;
+}
+
 interface EmptyStateCopy {
   heading: string;
   body: string;
@@ -120,6 +194,7 @@ interface EmptyStateCopy {
 
 export interface TodoListScreenProps {
   filters: TodoListFilters;
+  view: TodoView;
 }
 
 /**
@@ -130,7 +205,13 @@ export interface TodoListScreenProps {
  * filter entirely. A toggle does not: it applies the change locally and
  * reconciles with the row the write returned (`runToggle`).
  */
-export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
+export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
+  /*
+    The one writer of the `/todos` query string. It lives here rather than in
+    `TodoFilters` because the view toggle writes the same URL and renders when
+    the filter row does not — see `useTodosUrlSync` for what two writers cost.
+  */
+  const urlSync = useTodosUrlSync(filters, view);
   const {
     result,
     setResult,
@@ -167,8 +248,32 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
    */
   const quickAddInputRef = useRef<HTMLInputElement>(null);
 
-  const router = useRouter();
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
+  /*
+    The view actually on screen, which is not always the view in the URL — see
+    `BOARD_MEDIA_QUERY`. Everything below asks this rather than `view`, because
+    the behaviours that differ (optimistic column membership, where focus goes
+    after a move) belong to the board being *rendered*, not requested.
+  */
+  /*
+    `initializeWithValue: false`, and it is a hydration fix rather than a
+    preference. HeroUI's hook reads `matchMedia` during the *first client
+    render* by default, while the server — which has no `matchMedia` — rendered
+    its `defaultValue`. That is a genuine mismatch the moment the answer decides
+    which component tree exists: the server sent a list and the client built a
+    board over the top of it, and React threw the whole subtree away with
+    "Hydration failed" in the console. `e2e/console-clean.spec.ts` treats that
+    as a defect, correctly.
+
+    Opting out makes the first client render agree with the server, and the
+    layout effect inside the hook flips it before the browser paints — so the
+    board still arrives without a visible flash, and the `isDesktop` query
+    beside this one is left alone because it changes no markup.
+  */
+  const isWideEnoughForBoard = useMediaQuery(BOARD_MEDIA_QUERY, {
+    initializeWithValue: false,
+  });
+  const isBoard = view === "board" && isWideEnoughForBoard;
   /**
    * Whether the user is driving from the keyboard. The focus rescue below only
    * runs then, and that restriction is the point: a pointer user's focus is
@@ -411,8 +516,16 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     quickAddInputRef.current?.focus();
   };
 
+  /*
+    The filters go back to their defaults and the view stays — the user asked
+    to stop narrowing the list, not to leave the board (`CLEARED_FILTERS`).
+
+    Pushed through the same owner as every other change, so clearing cannot
+    discard a view press that has not landed yet. Writing the URL here directly
+    is what made this a second unguarded writer.
+  */
   const clearFilters = () => {
-    router.replace(TODOS_PATH, { scroll: false });
+    urlSync.clearFilters();
   };
 
   /**
@@ -762,6 +875,221 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     }
 
     await running;
+
+    /*
+      The board's toggle loses focus where the list's does not, and for the
+      reason the reschedule already had: the card moves to another **column**,
+      columns are separate subtrees, so React rebuilds the card and the
+      checkbox the user was standing on goes with it. On the list the row
+      merely slides between sections and — under the default filter — keeps its
+      DOM node, so nothing was lost and nothing needed catching.
+
+      Restored, not redirected. The card is still on screen and still theirs, so
+      focus belongs back on the control they pressed, where the next `Space`
+      un-completes what they just completed. Moving them to the toast's Undo —
+      which is right on the list, where a filter has *removed* the row and the
+      toast is the only route back — would arm a different mutation under that
+      keypress for a card they can still see (`src/lib/rowFocus.ts` →
+      `restoreToggleFocus`).
+
+      Keyboard only, on §6.8's reasoning: a pointer user's focus is not a place
+      they are standing, and the drag that reaches this is a pointer gesture.
+      The helper declines unless focus is already on the floor, so a card that
+      did not change column leaves focus exactly where it was.
+    */
+    if (isBoard && isFocusVisible) await restoreToggleFocus(todo.id);
+  };
+
+  /**
+   * What the toast says a reschedule did, in the row's own words.
+   *
+   * Built from `formatDueDate` — the same function the row's label uses — so
+   * the toast and the row can never describe one date two ways, and `Today`
+   * means the viewer's today in both places rather than in one of them
+   * (`src/lib/date.ts`). §7.11's pattern holds: it names the record and says
+   * what happened to it.
+   */
+  const rescheduledMessage = (title: string, dueAt: string | null) =>
+    dueAt === null
+      ? `Todo “${title}” due date cleared`
+      : `Todo “${title}” due ${formatDueDate(dueAt).label}`;
+
+  /**
+   * The one path a reschedule and its Undo both take. Undo is a reschedule —
+   * same endpoint, same authorization, a different value written to the same
+   * column — so it gets the same code rather than a parallel copy that can
+   * drift (`docs/CONVENTIONS.md` → Mutation UX). What differs is passed in.
+   *
+   * **Deliberately not optimistic, unlike the toggle.** A completion flip
+   * changes a boolean on a row that stays where it is; a due date changes the
+   * row's place in the §2 sequence, and local state is forbidden from
+   * re-sequencing (`src/lib/todoListState.ts`, invariants 1 and 2) because the
+   * server owns the order. So an optimistic reschedule could only ever move the
+   * row into the right *section* at the wrong position, and then correct itself
+   * — a second visible move for a press that happens a few times a day, not
+   * fifty. The row says it is busy through `aria-busy` and its disabled
+   * controls, and the change appears once, where it belongs, when the refetch
+   * lands.
+   */
+  const runReschedule = async (
+    todo: TodoItemData,
+    dueAt: string | null,
+    { onSuccess, failureMessage }: RescheduleOutcome,
+  ) => {
+    markPending(todo.id);
+
+    /*
+      **The board's one departure from the paragraph above, and it is scoped to
+      the board deliberately** (`docs/DESIGN.md` §8.8).
+
+      On the list, a reschedule is a press on a menu item and the row slides
+      under a different heading when the answer arrives; there is no promise to
+      break, and the argument above — one visible move instead of two — holds.
+      On the board the user has *carried the card to the column with their
+      hand*, and a card that springs back until the server answers is a broken
+      drag, whatever the round trip costs.
+
+      What is applied is **membership only**. `applyDueDate` rewrites the field
+      and leaves the sequence exactly as the server sent it, so the card re-cuts
+      into its new column on the next render and nothing anywhere chooses a
+      position (`todoListState` invariants 1 and 2 both hold). The refetch below
+      then replaces the guess with the server's order.
+
+      The menu takes this path too when the board is on screen, because the two
+      have to behave identically — the menu *is* the keyboard's drag, and a
+      keyboard user watching a card sit still while a mouse user's moves
+      immediately would be the accessibility gap this feature exists to avoid.
+    */
+    const previousDueAt = todo.dueAt;
+
+    if (isBoard) setResult((current) => applyDueDate(current, todo.id, dueAt));
+
+    try {
+      const saved = await rescheduleTodo(todo.id, dueAt);
+
+      onSuccess(saved);
+      // Only the server can say where the row goes now, so this is the same
+      // refetch a restored row gets — see `runToggle`'s note on §2 position.
+      reloadSilently();
+    } catch (error) {
+      /*
+        The revert writes back the value the card held when the drop happened,
+        read from the row rather than derived — the same rule the toggle's
+        revert follows, and the reason `applyDueDate` takes a value instead of
+        an instruction to undo.
+      */
+      if (isBoard) {
+        setResult((current) => applyDueDate(current, todo.id, previousDueAt));
+      }
+
+      toast.danger(getErrorMessage(error, failureMessage));
+    } finally {
+      clearPending(todo.id);
+    }
+  };
+
+  /** Reports the restored date with the same §7.19 toast, and arms no further Undo. */
+  const undoReschedule = async (
+    todo: TodoItemData,
+    previousDueAt: string | null,
+  ) => {
+    await runReschedule(todo, previousDueAt, {
+      onSuccess: (saved) => {
+        toast.success(rescheduledMessage(saved.title, saved.dueAt));
+      },
+      failureMessage: UNDO_FAILURE_MESSAGE,
+    });
+  };
+
+  /**
+   * A due date is trivially reversible, so it fires immediately and offers Undo
+   * rather than opening a confirm dialog (`docs/CONVENTIONS.md` → Mutation UX:
+   * confirm what cannot be undone).
+   */
+  const handleReschedule = async (todo: TodoItemData, dueAt: string | null) => {
+    /*
+      The lock, and it lives here now rather than on the control (review F1).
+
+      `pendingTodoIds` has always been the lock — `useTodoList` says so — but
+      what *enforced* it was `isDisabled` on the row's buttons, and the
+      reschedule trigger no longer carries that: a disabled control is blurred
+      by the browser, which is the whole of F1. So the refusal moves to the one
+      place that can see the pending set.
+
+      It is not redundant with the menu's own open guard, and the difference is
+      measurable. react-aria closes the menu *asynchronously* after an item is
+      actioned — measured at more than 28ms in `next dev` — so `Enter` pressed
+      twice in quick succession re-activates the item on a menu that is still
+      open and never asks to open anything. Two `PATCH`es to the same column,
+      free to land in either order. The open guard cannot see that press; this
+      one can. Pinned by `e2e/reschedule.spec.ts`, which presses both inside
+      that window and after it.
+    */
+    if (pendingTodoIds.has(todo.id)) return;
+
+    // Before the write, like the toggle's: the row's outstanding Undo describes
+    // a date it is leaving (review M-1, M-2).
+    dismissUndo(todo.id);
+
+    /*
+      The value Undo puts back, read from the row **before** the write and never
+      recomputed afterwards — recomputing "the date it used to have" is the same
+      class of mistake as computing "next week" from the wrong anchor.
+
+      `toDueDateInputValue` takes the calendar day off the stored instant by
+      slicing the ISO string, so this is the *UTC* day the column already holds
+      and no local conversion happens on this path. That is correct and it is
+      the only place on this feature where local time must not be consulted: the
+      previous value is a fact about the record, not about the viewer.
+    */
+    const previousDay = toDueDateInputValue(todo.dueAt);
+    /*
+      `""` is `toDueDateInputValue`'s answer for "no date", and it is the one
+      spelling this route refuses — folding it to `null` here is what keeps the
+      client from ever being the caller that sends it. Written as a check on
+      the *value* rather than on `todo.dueAt` being `null`, because the value is
+      what goes on the wire: guarding the input leaves any other falsy reading
+      (an empty ISO string from a future response shape) to fall through as
+      `""` and come back a 400 the user cannot act on.
+    */
+    const previousDueAt = previousDay === "" ? null : previousDay;
+
+    await runReschedule(todo, dueAt, {
+      onSuccess: (saved) => {
+        showUndoableSuccess(
+          saved.id,
+          rescheduledMessage(saved.title, saved.dueAt),
+          () => {
+            void undoReschedule(saved, previousDueAt);
+          },
+        );
+      },
+      failureMessage: RESCHEDULE_FAILURE_MESSAGE,
+    });
+
+    /*
+      Focus, and the decision is to **restore rather than redirect**
+      (`src/lib/rowFocus.ts` → `restoreRescheduleFocus`).
+
+      A reschedule can move the row into a different section, and sections are
+      different `<section>` subtrees, so React rebuilds the row rather than
+      moving it — taking the trigger the user is standing on with it, and
+      dropping focus to `<body>` with nothing on screen to show for it. The
+      toggle's answer to that is to move focus to the toast's Undo, and it is
+      the right answer *there*, where the row is gone and the toast is the only
+      route back. Here the row is still on screen and still the user's, so the
+      right place for focus is the button they pressed — moving them to a toast
+      instead would arm an Undo under their next `Space` and cost them the §6.8
+      surprise for nothing.
+
+      Keyboard only, on the same reasoning §6.8 gives: a pointer user's focus is
+      not a place they are standing. Awaited after the write so the refetch that
+      moves the row has been asked for; the helper itself waits for the row to
+      actually be rebuilt and declines unless focus is on the floor, so a row
+      that did not change section leaves focus exactly where react-aria's menu
+      put it.
+    */
+    if (isFocusVisible) await restoreRescheduleFocus(todo.id);
   };
 
   const handleDelete = async () => {
@@ -855,8 +1183,27 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     return noMatchingFilters();
   };
 
+  /**
+   * The sections, cut once per render and shared by the list and the header
+   * line above it (US-12).
+   *
+   * `null` while the list has not loaded and while it is showing a load
+   * failure. Both are cases where `result.todos` is not what is on screen — a
+   * filter change keeps the previous rows in `result` until the new ones land,
+   * so counting them would report the old filter's numbers under the new
+   * filter's heading — and US-12 asks for the date alone in the first case
+   * anyway, so the counts never render as zero and then change.
+   */
+  const visibleGroups = (): TodoGroup[] | null => {
+    if (isLoading || loadError !== null) return null;
+
+    return groupTodos(result.todos);
+  };
+
+  const groups = visibleGroups();
+
   const renderList = () => {
-    if (isLoading) return <TodoListSkeleton />;
+    if (isLoading) return isBoard ? <TodoBoardSkeleton /> : <TodoListSkeleton />;
 
     if (loadError !== null) {
       return (
@@ -871,7 +1218,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
           <Button
             variant="secondary"
             size="sm"
-            className="min-h-11 sm:min-h-9"
+            className={LABELLED_CONTROL_SIZING}
             onPress={retry}
           >
             {TRY_AGAIN_LABEL}
@@ -880,6 +1227,14 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       );
     }
 
+    /*
+      The board shows the same empty state as the list rather than five empty
+      columns, and this is the one place it deliberately does not show its
+      structure. Five columns each saying "nothing" say nothing, and they would
+      push the one thing worth showing — `Add your first todo`, or
+      `Clear filters` — off the bottom of the board. The columns are how you
+      read todos; there are none.
+    */
     if (result.todos.length === 0) {
       const emptyState = resolveEmptyState();
 
@@ -903,9 +1258,44 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
       Card, so the gap alone left nothing to see at rest. The boundary is the
       row's own outline (`TodoRow`); the gaps only keep the outlines apart.
     */
+    if (isBoard) {
+      return (
+        <TodoBoard
+          /*
+            `boardColumns` over the same `result.todos` the list groups, so the
+            two views can never disagree about which column a todo is in — they
+            are the same cut, made by the same `todoGroupId`.
+          */
+          columns={boardColumns(result.todos)}
+          pendingTodoIds={rowPendingIds()}
+          vanishingTodoId={isDeleting ? (pendingDelete?.id ?? null) : null}
+          showTooltips={isDesktop}
+          onToggle={(target, nextCompleted) => {
+            void handleToggle(target, nextCompleted);
+          }}
+          onEdit={openEdit}
+          onReschedule={(target, dueAt) => {
+            void handleReschedule(target, dueAt);
+          }}
+          onDelete={setPendingDelete}
+        />
+      );
+    }
+
     return (
       <TodoGroupedList
-        todos={result.todos}
+        /*
+          The same array the header line above is counting — one `groupTodos`
+          call per render feeding both, which is what makes "the line and the
+          list can never disagree" (US-12) a property of the code rather than
+          something a test has to keep catching.
+
+          Non-null by the time this line runs: `groups` is `null` only while
+          loading or while showing a load failure, and both of those branches
+          have already returned above. The `?? []` is the type narrowing, not a
+          fallback anybody expects to take.
+        */
+        groups={groups ?? []}
         pendingTodoIds={rowPendingIds()}
         /*
           The one row §8.3.2 still gives a row-level pending treatment to: a
@@ -919,6 +1309,9 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
           void handleToggle(target, nextCompleted);
         }}
         onEdit={openEdit}
+        onReschedule={(target, dueAt) => {
+          void handleReschedule(target, dueAt);
+        }}
         onDelete={setPendingDelete}
       />
     );
@@ -956,7 +1349,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
 
   return (
     <>
-      <div className="flex items-baseline justify-between gap-4">
+      <div className={PAGE_HEADING_ROW}>
         <Typography.Heading level={1}>{PAGE_HEADING}</Typography.Heading>
         {hasTodos ? (
           <Typography type="body-sm" color="muted">
@@ -964,6 +1357,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
           </Typography>
         ) : null}
       </div>
+
+      {/*
+        US-12. One plain-text line, below the app bar and above the list,
+        reporting the viewer's today and the sizes of the two sections that
+        answer "what now?". It is not gated on `hasTodos`: the date alone is
+        the specified state for an empty list and for a list still loading, and
+        a line that came and went would be a fourth thing moving on the page.
+      */}
+      <TodoListHeaderLine groups={groups} />
 
       {/*
         Never gated on `hasTodos`, unlike the filter bar below it and unlike
@@ -977,7 +1379,45 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
         onMoreOptions={openCreate}
       />
 
-      {hasTodos ? <TodoFilters filters={filters} /> : null}
+      {/*
+        Not rendered below `lg`, where the board would not render even if it
+        were chosen (`BOARD_MEDIA_QUERY`). A control that changes nothing is
+        worse than an absent one: it would report `Board` as selected while the
+        list was on screen, which is the control lying about the state it shows.
+
+        **Not rendered, rather than hidden with `lg:` classes.** A
+        `display: none` radiogroup is still a radiogroup in the document —
+        `getByRole` skips it, so an accessibility-aware query cannot see the
+        difference, but anything reading the DOM can, and one did: it gave
+        `a11y-contrast.spec.ts` two elements matching
+        `[role="radio"][aria-checked="true"]` where it expected the status
+        filter's one. That was a real ambiguity and not only a test's problem —
+        the mobile document was carrying a second, inert radiogroup named
+        `Choose a view`, which is exactly the sort of thing that ends up
+        announced to somebody.
+
+        Safe against hydration because `isWideEnoughForBoard` is the same
+        two-pass reading the board itself uses: false on the server and on the
+        first client render, so the markup agrees before the layout effect
+        flips it.
+
+        Gated on `hasTodos` like the filter bar beside it, and for the same
+        reason — there is nothing to look at two ways yet.
+      */}
+      {hasTodos && isWideEnoughForBoard ? (
+        <div className="flex justify-end">
+          <ViewToggle view={view} onSelectView={(next) => urlSync.push({ view: next })} />
+        </div>
+      ) : null}
+
+      {hasTodos ? (
+        <TodoFilters
+          filters={filters}
+          query={urlSync.query}
+          onQueryChange={urlSync.setQuery}
+          onFilterChange={urlSync.push}
+        />
+      ) : null}
 
       <Card>
         <Card.Content className="p-0">{renderList()}</Card.Content>

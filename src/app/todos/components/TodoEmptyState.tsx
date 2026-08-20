@@ -1,5 +1,7 @@
 import { Button, EmptyState, Typography } from "@heroui/react";
 
+import { LABELLED_CONTROL_SIZING } from "@/lib/styles";
+
 export interface TodoEmptyStateProps {
   heading: string;
   body: string;
@@ -19,7 +21,7 @@ export const TodoEmptyState = ({
 }: TodoEmptyStateProps) => {
   return (
     <EmptyState className="flex flex-col items-center gap-3 px-6 py-12 text-center">
-      <div aria-hidden="true" className="text-[var(--muted)]">
+      <div aria-hidden="true" className="text-(--muted)">
         <svg
           width={32}
           height={32}
@@ -45,7 +47,7 @@ export const TodoEmptyState = ({
         <Button
           variant="primary"
           size="sm"
-          className="min-h-11 sm:min-h-9"
+          className={LABELLED_CONTROL_SIZING}
           onPress={onAction}
         >
           {actionLabel}

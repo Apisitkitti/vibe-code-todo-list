@@ -84,6 +84,165 @@ const expectReadable = async (target: Locator, label: string, theme: Theme) => {
     .toBeGreaterThanOrEqual(TEXT_MIN);
 };
 
+/**
+ * §8.4.2 — only `High` is loud.
+ *
+ * `low` and `medium` moved from `variant="soft"` to `variant="tertiary"`, and
+ * `medium` lost `color="warning"` with it: `chip--tertiary` sets only
+ * `--chip-bg: transparent`, so the colour class still drives `--chip-fg` and a
+ * tertiary+warning chip would have been orange text with the fill removed.
+ *
+ * The chip is where §6.4's priority wording lives, so the label is body text
+ * and 4.5:1 binds. A tertiary chip has no fill of its own, which means its
+ * label is measured against whatever the row paints — that is the reason to
+ * measure rather than to assume the surface is the one the designer's
+ * reference reading came from.
+ */
+test.describe("§8.4.2 — the priority chip label stays readable at every level", () => {
+  const seedPriority = async (page: Page, title: string, priority: string) => {
+    const response = await page.request.post("/api/todos", {
+      data: { title, note: "", priority, dueAt: "" },
+    });
+
+    expect(response.status()).toBe(201);
+  };
+
+  test("all three levels clear 4.5:1 in both themes", async ({
+    signedIn,
+    todos,
+  }) => {
+    await seedPriority(signedIn, "high chip row", "high");
+    await seedPriority(signedIn, "medium chip row", "medium");
+    await seedPriority(signedIn, "low chip row", "low");
+    await signedIn.reload();
+
+    await expect(todos.row("low chip row")).toBeVisible();
+
+    const chipLabel = (title: string) =>
+      todos.row(title).locator('[data-slot="chip-label"]');
+
+    for (const theme of THEMES) {
+      await setTheme(signedIn, theme);
+
+      for (const title of ["high chip row", "medium chip row", "low chip row"]) {
+        await expectReadable(chipLabel(title), `${title} chip label`, theme);
+      }
+    }
+  });
+
+  /*
+    The variant itself, pinned. Contrast alone would pass just as happily on
+    the column of identical `soft` chips this change exists to break up, so the
+    ratio is not the whole claim — the claim is that two of the three no longer
+    carry a fill.
+  */
+  test("low and medium carry no fill, high still does", async ({
+    signedIn,
+    todos,
+  }) => {
+    await seedPriority(signedIn, "high chip row", "high");
+    await seedPriority(signedIn, "medium chip row", "medium");
+    await seedPriority(signedIn, "low chip row", "low");
+    await signedIn.reload();
+
+    await expect(todos.row("low chip row")).toBeVisible();
+
+    const chip = (title: string) =>
+      todos.row(title).locator('[data-slot="chip"]');
+
+    // `--chip-bg: transparent`, resolved by the browser to `rgba(0, 0, 0, 0)`.
+    await expect(chip("low chip row")).toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
+    await expect(chip("medium chip row")).toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
+    await expect(chip("high chip row")).not.toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
+  });
+});
+
+/**
+ * §7.16 — the section heading has a voice of its own.
+ *
+ * It used to be `body-sm` at `color="muted"`, which is the same size *and* the
+ * same token as the due dates in the rows beneath it — both 4.83:1 on the
+ * Card — so a heading was visually indistinguishable from row metadata.
+ * Dropping `color="muted"` puts it at `--foreground`.
+ *
+ * Contrast rises, so there is no a11y exposure; it is measured anyway, and
+ * against the due date rather than only against a floor. A floor alone would
+ * pass just as happily on the state this change exists to leave behind — the
+ * defect was never that the heading was unreadable, it was that it read as the
+ * same kind of thing as the text below it.
+ */
+test.describe("§7.16 — the section heading is not the same ink as a due date", () => {
+  test("the heading outreads the due date it stands over, in both themes", async ({
+    signedIn,
+    todos,
+  }) => {
+    const day = (offset: number) => {
+      const date = new Date();
+
+      date.setDate(date.getDate() + offset);
+
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    };
+
+    for (const [title, dueAt] of [
+      ["upcoming heading row", day(7)],
+      ["undated heading row", ""],
+    ] as const) {
+      const response = await signedIn.request.post("/api/todos", {
+        data: { title, note: "", priority: "medium", dueAt },
+      });
+
+      expect(response.status()).toBe(201);
+    }
+
+    await signedIn.reload();
+
+    const heading = signedIn
+      .locator("main")
+      .getByRole("heading", { level: 2, name: "Upcoming", exact: true });
+    /*
+      The `Typography` **inside** the `<time>`, not the `<time>` itself. The
+      wrapper carries no `color` of its own and inherits `--foreground`, so
+      measuring it reads the heading's ink twice and reports the two as equal —
+      which is exactly the false pass this comparison exists to avoid, and it
+      is the reading this test produced before the locator was scoped down.
+    */
+    const dueDate = todos.row("upcoming heading row").locator("time > *");
+
+    await expect(heading).toBeVisible();
+    await expect(dueDate).toBeVisible();
+
+    for (const theme of THEMES) {
+      await setTheme(signedIn, theme);
+
+      const headingReading = await measureContrast(heading);
+      const dateReading = await measureContrast(dueDate);
+
+      await expectReadable(heading, "section heading", theme);
+
+      /*
+        The claim, stated as a comparison rather than as a floor: the heading
+        is no longer the muted token the row metadata beneath it uses.
+      */
+      expect
+        .soft(
+          headingReading.ratio,
+          `section heading [${theme}] ${headingReading.ratio.toFixed(2)}:1 vs due date ${dateReading.ratio.toFixed(2)}:1 — ${formatRgb(headingReading.foreground)} on ${formatRgb(headingReading.background)}`,
+        )
+        .toBeGreaterThan(dateReading.ratio + 1);
+    }
+  });
+});
+
 test.describe("the row a mutation is working on stays readable", () => {
   /**
    * QA §A4: completing a row applied `text-muted line-through` optimistically
@@ -224,6 +383,17 @@ test.describe("DEF-15 — the muted token clears 4.5:1 on every surface", () => 
       await expectReadable(todos.doneCounter, "done counter", theme);
       // Same token, same surface — QA noted it travels with the count.
       await expectReadable(accountMenu, "account menu label", theme);
+      /*
+        US-12's header line is the third thing on this token and this surface,
+        and it is the one a user reads first. Measured here rather than in its
+        own describe, because "the fix is to the token and a token fix has to
+        hold everywhere" is this block's whole argument.
+      */
+      await expectReadable(
+        signedIn.locator("main").getByText(/^\w+day, \d{1,2} [A-Z][a-z]+/),
+        "dated header line",
+        theme,
+      );
     }
   });
 
@@ -311,7 +481,17 @@ test.describe("DEF-14 — the primary button label clears 4.5:1", () => {
     await todos.quickAdd("accent regression row");
     await expect(todos.doneCounter).toBeVisible();
 
-    const selectedChip = signedIn.locator('[role="radio"][aria-checked="true"]');
+    /*
+      Scoped to the status filter by name. The screen carries a second
+      `ToggleButtonGroup` at `lg:` and above — the list/board view toggle — and
+      react-aria renders both as radiogroups, so an unscoped
+      `[role="radio"][aria-checked="true"]` matches two selected chips and trips
+      strict mode. The subject here has always been the status filter's chip;
+      it simply used to be the only one.
+    */
+    const selectedChip = signedIn
+      .getByRole("radiogroup", { name: "Filter todos by status" })
+      .locator('[role="radio"][aria-checked="true"]');
     const addButton = signedIn.getByRole("button", { name: "Add", exact: true });
 
     await expect(selectedChip).toBeVisible();

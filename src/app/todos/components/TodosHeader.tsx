@@ -14,10 +14,10 @@ import {
 import { useRouter } from "next/navigation";
 
 import { getErrorMessage } from "@/lib/getErrorMessage";
+import { ICON_BUTTON_SIZING } from "@/lib/styles";
 import { signOutCurrentUser } from "@/service/auth.service";
 
 const SIGN_IN_PATH = "/sign-in";
-const ICON_BUTTON_SIZING = "min-h-11 min-w-11 sm:min-h-9 sm:min-w-9";
 
 const initialsOf = (name: string, email: string): string => {
   const source = name.trim() === "" ? email : name;
@@ -101,7 +101,16 @@ export const TodosHeader = ({ userName, userEmail }: TodosHeaderProps) => {
   };
 
   return (
-    <Header className="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--background)]/80 backdrop-blur">
+    <Header className="sticky top-0 z-20 border-b border-(--border) bg-(--background)/80 backdrop-blur">
+      {/*
+        Shares `TODOS_PAGE_SHELL`'s content width and page gutters so the header
+        lines up with the content under it, but deliberately not composed from
+        it: the shell interleaves its vertical rhythm (`py-6 … lg:py-8`) between
+        the gutter steps, which the header does not have, so there is no
+        contiguous run of classes the two can share without one of them being
+        rebuilt from fragments. Change the max-width or the gutters in one and
+        the other has to follow by hand.
+      */}
       <div className="mx-auto flex h-14 w-full max-w-2xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <span className="font-semibold">Todos</span>
         <div className="flex items-center gap-2">
@@ -124,7 +133,7 @@ export const TodosHeader = ({ userName, userEmail }: TodosHeaderProps) => {
                 HeroUI `variant`/`isIconOnly`, so it is styled directly. */}
             <Dropdown.Trigger
               aria-label="Account menu"
-              className={`inline-flex items-center justify-center rounded-[var(--radius)] ${ICON_BUTTON_SIZING}`}
+              className={`inline-flex items-center justify-center rounded-(--radius) ${ICON_BUTTON_SIZING}`}
             >
               <Avatar size="sm">
                 <Avatar.Fallback>{initialsOf(userName, userEmail)}</Avatar.Fallback>

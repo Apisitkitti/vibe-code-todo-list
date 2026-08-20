@@ -14,6 +14,7 @@ vi.mock("next/headers", () => ({
   headers: async () => currentRequestHeaders(),
 }));
 
+import { PATCH as patchDue } from "@/app/api/todos/[id]/due/route";
 import { PATCH as patchFields } from "@/app/api/todos/[id]/route";
 import { PATCH as patchStatus } from "@/app/api/todos/[id]/status/route";
 import { POST } from "@/app/api/todos/route";
@@ -297,6 +298,204 @@ describe("PATCH /api/todos/[id]/status takes completion and nothing else", () =>
   });
 });
 
+/**
+ * `.strict()` on the due-date schema, and the same argument that settled the
+ * status route: an extra key silently dropped is a half-applied write reported
+ * as a success. A reschedule from the row must not be able to carry a field
+ * edit (`docs/PM-PROPOSAL.md` §3 #5), and this is the only thing enforcing it.
+ *
+ * Every rejection is checked by its effect as well as its status, because a
+ * 400 that still moved the date would be the original defect wearing a
+ * different status code.
+ */
+describe("PATCH /api/todos/[id]/due takes a due date and nothing else", () => {
+  const DUE_BODY_ONLY_MESSAGE =
+    "Only the due date can be changed here. Save the todo's other fields separately.";
+  const DUE_TYPE_MESSAGE =
+    "A due date must be a YYYY-MM-DD date, or null to clear it.";
+  const DUE_DATE_INVALID_MESSAGE = "Enter a valid date.";
+
+  const dueRequest = (body: unknown) =>
+    jsonRequest(`/api/todos/${todo.id}/due`, "PATCH", body);
+
+  test("a lone dueAt is accepted and is stored at UTC midnight", async () => {
+    const response = await patchDue(
+      dueRequest({ dueAt: "2026-08-23" }),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(200);
+    expect((await readTodoBody(response)).dueAt).toBe("2026-08-23T00:00:00.000Z");
+    expect((await readTodo(todo.id))?.dueAt?.toISOString()).toBe(
+      "2026-08-23T00:00:00.000Z",
+    );
+  });
+
+  test("null clears the due date", async () => {
+    await patchDue(dueRequest({ dueAt: "2026-08-23" }), idContext(todo.id));
+
+    const response = await patchDue(dueRequest({ dueAt: null }), idContext(todo.id));
+
+    expect(response.status).toBe(200);
+    expect((await readTodoBody(response)).dueAt).toBeNull();
+    expect((await readTodo(todo.id))?.dueAt).toBeNull();
+  });
+
+  test("it touches nothing but the date", async () => {
+    await patchDue(dueRequest({ dueAt: "2026-08-23" }), idContext(todo.id));
+
+    const after = await readTodo(todo.id);
+
+    expect(after?.title).toBe(ORIGINAL_TITLE);
+    expect(after?.note).toBe(ORIGINAL_NOTE);
+    expect(after?.priority).toBe("low");
+    expect(after?.completed).toBe(false);
+  });
+
+  test("rejects a body that also carries a title", async () => {
+    const response = await patchDue(
+      dueRequest({ dueAt: "2026-08-23", title: "Sneaked in" }),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await readError(response)).message).toBe(DUE_BODY_ONLY_MESSAGE);
+  });
+
+  test("and writes neither the title nor the date when it rejects", async () => {
+    await patchDue(
+      dueRequest({ dueAt: "2026-08-23", title: "Sneaked in" }),
+      idContext(todo.id),
+    );
+
+    const after = await readTodo(todo.id);
+
+    expect(after?.title).toBe(ORIGINAL_TITLE);
+    expect(after?.dueAt).toBeNull();
+  });
+
+  /** Completion has its own route too; this one must not become a second door. */
+  test("rejects a body that also carries completed", async () => {
+    const response = await patchDue(
+      dueRequest({ dueAt: "2026-08-23", completed: true }),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await readError(response)).message).toBe(DUE_BODY_ONLY_MESSAGE);
+    expect((await readTodo(todo.id))?.completed).toBe(false);
+  });
+
+  test("rejects any unknown key, even a harmless-looking one", async () => {
+    const response = await patchDue(
+      dueRequest({ dueAt: "2026-08-23", updatedAt: "2026-08-16" }),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await readError(response)).message).toBe(DUE_BODY_ONLY_MESSAGE);
+  });
+
+  /** A different mistake deserves a different answer, as on `/status`. */
+  test.each([
+    ["a number", 20260823],
+    ["a boolean", false],
+    ["an object", { year: 2026 }],
+  ])("a dueAt that is %s gets the type message", async (_label, value) => {
+    const response = await patchDue(
+      dueRequest({ dueAt: value }),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await readError(response)).message).toBe(DUE_TYPE_MESSAGE);
+  });
+
+  test("a missing dueAt gets the type message", async () => {
+    const response = await patchDue(dueRequest({}), idContext(todo.id));
+
+    expect(response.status).toBe(400);
+    expect((await readError(response)).message).toBe(DUE_TYPE_MESSAGE);
+  });
+
+  /**
+   * Strict parsing, the same as everywhere else: `2026-02-31` is refused rather
+   * than rolled forward into March, so nobody is silently given a date they did
+   * not ask for.
+   */
+  test.each([
+    ["a day that does not exist in that month", "2026-02-31"],
+    ["a month above twelve", "2026-13-01"],
+    ["a full ISO timestamp", "2026-08-23T00:00:00.000Z"],
+    ["a slash-separated date", "2026/08/23"],
+    ["free text", "next tuesday"],
+  ])("refuses %s and writes nothing", async (_label, value) => {
+    const response = await patchDue(
+      dueRequest({ dueAt: value }),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await readError(response)).message).toBe(DUE_DATE_INVALID_MESSAGE);
+    expect((await readTodo(todo.id))?.dueAt).toBeNull();
+  });
+
+  /**
+   * Clearing is spelled `null` on this route and only `null`. The form schema
+   * uses `""` for the same thing, because a cleared text field produces one —
+   * accepting it here as a second spelling would let a caller clear a date
+   * while believing it had sent one.
+   */
+  test.each([["an empty string", ""], ["whitespace", "   "]])(
+    "refuses %s rather than treating it as a clear",
+    async (_label, value) => {
+      await patchDue(dueRequest({ dueAt: "2026-08-23" }), idContext(todo.id));
+
+      const response = await patchDue(
+        dueRequest({ dueAt: value }),
+        idContext(todo.id),
+      );
+
+      expect(response.status).toBe(400);
+      expect((await readError(response)).message).toBe(DUE_DATE_INVALID_MESSAGE);
+      // Still the date it had: a refused clear must not clear.
+      expect((await readTodo(todo.id))?.dueAt?.toISOString()).toBe(
+        "2026-08-23T00:00:00.000Z",
+      );
+    },
+  );
+
+  /**
+   * Stray spaces around a real date are *not* the same thing as a string with
+   * no date in it. `parseDueDate` trims before parsing, exactly as the form
+   * schema does, so this is accepted — and it is asserted because the route's
+   * own comment says so, and a comment about parsing behaviour with no test
+   * behind it is the thing this project keeps having to correct.
+   */
+  test("surrounding whitespace around a real date is accepted", async () => {
+    const response = await patchDue(
+      dueRequest({ dueAt: "  2026-08-23  " }),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(200);
+    expect((await readTodo(todo.id))?.dueAt?.toISOString()).toBe(
+      "2026-08-23T00:00:00.000Z",
+    );
+  });
+
+  /** Undo is an ordinary reschedule: the previous value, written back. */
+  test("writing the previous value back restores it exactly", async () => {
+    await patchDue(dueRequest({ dueAt: "2026-08-16" }), idContext(todo.id));
+    await patchDue(dueRequest({ dueAt: "2026-08-23" }), idContext(todo.id));
+    await patchDue(dueRequest({ dueAt: "2026-08-16" }), idContext(todo.id));
+
+    expect((await readTodo(todo.id))?.dueAt?.toISOString()).toBe(
+      "2026-08-16T00:00:00.000Z",
+    );
+  });
+});
+
 describe("a body that is not usable JSON", () => {
   test("POST answers 400 rather than throwing", async () => {
     const request = new Request("http://localhost:3000/api/todos", {
@@ -306,6 +505,21 @@ describe("a body that is not usable JSON", () => {
     });
 
     const response = await POST(request as never);
+
+    expect(response.status).toBe(400);
+  });
+
+  test("PATCH /due answers 400 rather than throwing", async () => {
+    const request = new Request(
+      `http://localhost:3000/api/todos/${todo.id}/due`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: "{not json",
+      },
+    );
+
+    const response = await patchDue(request as never, idContext(todo.id));
 
     expect(response.status).toBe(400);
   });

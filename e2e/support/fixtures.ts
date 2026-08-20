@@ -15,6 +15,7 @@ import {
   editLabel,
   markCompleteLabel,
   markNotCompleteLabel,
+  rescheduleLabel,
 } from "./copy";
 
 /**
@@ -79,6 +80,10 @@ export interface TodosScreen {
   checkbox: (title: string) => Locator;
   editButton: (title: string) => Locator;
   deleteButton: (title: string) => Locator;
+  rescheduleButton: (title: string) => Locator;
+  rescheduleMenu: (title: string) => Locator;
+  openReschedule: (title: string) => Promise<void>;
+  reschedule: (title: string, itemLabel: string) => Promise<void>;
   quickAddInput: Locator;
   quickAdd: (text: string) => Promise<void>;
   openCreate: () => Promise<void>;
@@ -218,6 +223,32 @@ export const createTodosScreen = (page: Page): TodosScreen => {
   const deleteButton = (title: string) =>
     page.getByRole("button", { name: deleteLabel(title), exact: true });
 
+  const rescheduleButton = (title: string) =>
+    page.getByRole("button", { name: rescheduleLabel(title), exact: true });
+
+  /**
+   * The open menu, named for the todo it belongs to — several rows' triggers
+   * are on screen at once and only the name tells their menus apart.
+   */
+  const rescheduleMenu = (title: string) =>
+    page.getByRole("menu", { name: rescheduleLabel(title), exact: true });
+
+  const openReschedule = async (title: string) => {
+    await rowByText(title).hover();
+    await rescheduleButton(title).click();
+    await expect(rescheduleMenu(title)).toBeVisible();
+  };
+
+  /**
+   * `itemLabel` is matched as a prefix rather than exactly: the three quick
+   * days render their resolved date beside the word, so `Today`'s accessible
+   * name is `Today Aug 19` (§7.19).
+   */
+  const reschedule = async (title: string, itemLabel: string) => {
+    await openReschedule(title);
+    await rescheduleMenu(title).getByRole("menuitem", { name: itemLabel }).click();
+  };
+
   /*
     The toolbar `New todo` button is gone; the modal's only create entry point
     is `More options` on the quick-add bar, which is present on every account
@@ -318,6 +349,10 @@ export const createTodosScreen = (page: Page): TodosScreen => {
     checkbox,
     editButton,
     deleteButton,
+    rescheduleButton,
+    rescheduleMenu,
+    openReschedule,
+    reschedule,
     quickAddInput: quickAddField(page),
     quickAdd,
     openCreate,

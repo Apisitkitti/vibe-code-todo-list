@@ -294,17 +294,37 @@ No hand-rolled `useState` per field, no ad-hoc validation.
 
 ### Folder shape
 
-A form lives in a `components/form/` folder, either under
-`src/components/form/` when shared, or under the route's own
-`components/form/` when used by exactly one route:
+Forms live under the owning route's `components/form/`. There is no shared
+`src/components/form/` directory — the shared thing is `src/components/ui/`,
+the `Form*` field components below.
+
+**Each form owns a folder inside `components/form/`, named after the form,
+holding the form and everything only that form uses.** The one `index.ts` at
+`components/form/` is the barrel, and it is the only public entry point:
 
 ```
 components/form/
-  schema.ts        # zod schemas + inferred types for this folder's forms
-  index.ts         # barrel — the only public entry point
-  SignInForm.tsx   # one file per form, PascalCase, name matches the export
-  SignUpForm.tsx
+  index.ts                      # barrel — the only path consumers import
+  QuickAddForm/
+    QuickAddForm.tsx            # PascalCase, name matches the export
+    schema.ts                   # only this form parses with it
+  TodoForm/
+    TodoForm.tsx
+    fieldErrors.ts              # reads this form's 400 body
 ```
+
+A form's folder gets an `index.ts` of its own only if something other than the
+barrel imports from it. Nothing does today, so neither has one: the barrel is
+the sole reader of those paths, and a second barrel in front of it would
+re-export two names for one consumer while giving a name a second place to go
+missing from. The outer barrel earns its place for the opposite reason — it is
+what lets the rest of the app import from `./form` without knowing any of this
+layout, so adding a file to a form changes no consumer.
+
+Smaller routes still hold a single form each — `src/app/sign-in/components/form/`
+and `src/app/sign-up/components/form/` are flat, with `SignInForm.tsx` and
+`schema.ts` beside their `index.ts`. Give a form a folder when it has files of
+its own to gather, not as ceremony.
 
 ### Shared form UI lives in `src/components/ui`
 
@@ -337,17 +357,53 @@ is not hand-assembled inside a feature form.
   `parseDueDate`). Parse with the strict flag so `2026-02-31` is rejected
   rather than rolled over. Do not hand-roll date maths with `Date.UTC`.
 
+### Where a schema lives — `src/lib` vs beside the form
+
+**A zod schema that server code parses with lives in `src/lib/<thing>.schema.ts`.
+A schema only its own form uses lives in that form's folder.**
+
+```
+src/lib/todo.schema.ts                          ← the route handlers re-parse with it
+form/QuickAddForm/schema.ts                     ← only the quick-add bar uses it
+src/app/sign-in/components/form/schema.ts       ← better-auth owns the server side
+```
+
+The test is not "is it a schema" but **"does server code depend on it".**
+
+`todoFormSchema` is in `src/lib` because the handlers under `src/app/api/todos`
+re-parse every request body with the very same schema — that copy is the trusted
+one. When it lived in `src/app/todos/components/form/`, the API imported its own
+trust boundary out of a screen's presentation folder: the dependency arrow
+pointing UI → API backwards, with a security-relevant module sitting three
+directories inside a route where nobody looks for one. It was filed as a defect
+before quick-add shipped and stayed unfixed for a quarter.
+
+**ESLint now enforces the consequence: nothing under `src/app/api/**` may import
+from `@/app/**`.** So this is not a preference — moving a server-parsed schema
+back under `src/app/` fails the build, and it should.
+
+`quickAddSchema` is the other side of the same rule. It validates that something
+was typed into the bar, and nothing else; the bar parses its line into a todo
+payload and posts *that*, so no handler ever sees a `{ text }` body. Nothing on
+the server depends on it, so it lives beside the form it belongs to. Sign-in and
+sign-up are the same case — better-auth owns their server side and no handler in
+this repo re-parses them.
+
+The form barrel re-exports both, so components import everything a form needs
+from `./form` regardless of which side of the line a schema fell on. Server code
+imports `@/lib/todo.schema` directly.
+
 ### Other form rules
 
-- `schema.ts` holds the zod schemas and their inferred types.
 - `index.ts` re-exports the forms (and the schemas/types that callers need).
-  Consumers import from `@/components/form`, never from a deep file path.
-- Each form component is its own PascalCase file.
+  Consumers import from the route's `./form`, never from a deep file path.
+- Each form component is its own PascalCase file, inside its own folder when it
+  has neighbours.
 
 ### Schema conventions
 
 ```ts
-// components/form/schema.ts
+// src/lib/todo.schema.ts — the API re-parses with it, so it is not in the form's folder
 import { z } from "zod";
 
 const TITLE_MAX_LENGTH = 200;
@@ -471,3 +527,142 @@ missing there, add it to that file rather than improvising inline.
   calling `axios.get` directly.
 - Server actions invoked directly from a client component do not need axios —
   axios is for actual HTTP endpoints (route handlers).
+
+## Styles
+
+Before this section existed, this document said **nothing at all** about
+styling — not where a shared class string lives, not what to call one, not
+whether one should exist. That silence is why the 44×44 tap-target floor ended
+up declared twice, as `ICON_BUTTON_SIZING`, in two component files with no
+link between them. There was no wrong rule to correct here; there was no rule.
+
+Tailwind utilities go inline in the component. That is the default and it stays
+the default — most class strings describe one component's own layout and are
+already in the right place.
+
+**The exception is a class string that encodes a rule, and those live in
+`src/lib/styles.ts`.** One file, for the whole app: the values are used from
+`/todos`, from both auth routes and from `src/components/**`, so they sit below
+every consumer rather than beside one of them. A route's `constants/` is for
+copy that belongs to that route; these do not belong to a route.
+
+**A value earns a name when any of these is true:**
+
+- it appears in more than one component;
+- it is a numbered rule from `docs/DESIGN.md` — §2.2's spacing steps, §2.4's
+  type scale, §6.3's 44×44 tap floor;
+- a second file has to match it or something visibly breaks, e.g. a loading
+  skeleton against the component it stands in for (§4.8);
+- it is a **documented deviation** from one of those rules. `CHIP_SIZING` and
+  `SECONDARY_ACTION_SIZING` are each used exactly once and by the tests above
+  would stay inline. They are here because they are the app's only two
+  controls sitting below §6.3's 36px pointer step, and a deviation from a rule
+  belongs where someone auditing that rule will look, not in the component
+  that quietly takes it.
+
+**Otherwise it stays inline.** Two components that arrive at the same string
+for *different reasons* are not a duplicate and must not be merged:
+`flex flex-col gap-1.5` is §2.2's field-group gap in `src/components/ui/Form*`
+and, separately, the list's row rhythm in `TodoGroupedList`. A shared name
+would assert a relationship that is not there, and would tie the two together
+the next time either rule moves.
+
+**Naming.** UPPER_SNAKE_CASE, like every other constant. The name says what the
+value *means* to the design system, never what it does in CSS —
+`ICON_BUTTON_SIZING` is a name, `MIN_H_11` is the value spelled differently.
+Two shapes:
+
+- `<ROLE>` when the constant is that element's entire shared treatment:
+  `SECTION_HEADING`, `LIST_CONTAINER`, `TODOS_PAGE_SHELL`.
+- `<ROLE>_<ASPECT>` when it is one aspect of an element that also carries
+  classes of its own: `ICON_BUTTON_SIZING`, `ROW_TITLE_LAYOUT`. `ASPECT` is
+  `SIZING` for dimensions and tap floors, `LAYOUT` for how a thing sits in its
+  parent.
+
+Compose with a template literal:
+
+```tsx
+<Checkbox.Content className={`${ICON_BUTTON_SIZING} flex items-center`} />
+```
+
+### CSS variables use the shorthand
+
+`rounded-(--radius)`, not `rounded-[var(--radius)]`. Both compile on the
+Tailwind this project has (4.3.3) and emit identical declarations — verified by
+diffing the built stylesheet, including the composition with an opacity
+modifier, where `bg-(--background)/80` and `bg-[var(--background)]/80` produce
+the same `color-mix(in oklab, var(--background) 80%, transparent)`.
+
+It is a readability rule, not a behaviour one: the bracket form is Tailwind's
+escape hatch into arbitrary CSS and reads like one, while the parenthesis form
+says "this is a token" — which, given §3's rule that every colour is a token,
+is the thing worth being able to see at a glance.
+
+### Why TypeScript constants and not CSS
+
+Three homes were possible; two lose.
+
+- A **HeroUI token override** in `globals.css` is barred by `docs/DESIGN.md` §3
+  except for a token whose shipped value fails a WCAG floor. Neither half of
+  that bar is met: none of these values *is* a HeroUI token — there is no
+  shipped variable for a tap-target floor or a content max-width — so there is
+  nothing to override, and no contrast measurement to justify it with. The two
+  standing exceptions, `--muted` and `--accent`, both carry their measurements
+  in `globals.css` and are the shape this bar was written for.
+- A Tailwind **`@utility`** in `globals.css` would work, and loses on the
+  failure it allows. A misspelt utility class is an error nowhere: it emits no
+  CSS, the element keeps its intrinsic size, and the result is a 20×20 button —
+  DEF-16 exactly, the defect this floor exists to prevent. A misspelt constant
+  fails `tsc` before it reaches a browser. For a rule this project has already
+  shipped as a defect once, the home that makes breaking it a compile error is
+  the one it gets.
+
+The cost of constants is that Tailwind must still *see* the class strings to
+emit them. `@source "../../src"` covers `src/lib/styles.ts`, and the strings are
+written out in full there rather than built from fragments, so the scanner
+finds them. Do not construct a class name from pieces at runtime.
+
+### `cn` — considered and declined
+
+The usual `twMerge(clsx(...))` helper was proposed and not taken. Measured
+rather than assumed:
+
+- The **`clsx` half** solves almost nothing here. Of the `className=` sites in
+  `src/`, three are template literals and two are conditional. There is no
+  conditional-class problem to solve.
+- The **`twMerge` half** exists to make *caller-overrides-child* deterministic.
+  Our own `src/components/ui/Form*` components do not accept a `className`
+  prop at all, so there is no override for it to arbitrate — and that is
+  deliberate, not an oversight: §2.2 and §2.3 read as rules about what call
+  sites may *not* change ("do not add your own", "never write `rounded-lg` on
+  a HeroUI component"). Opening those components to `className` would make
+  breaking §2.2 a one-liner at any call site.
+
+**The one place it looked like it might already matter**, and the answer is
+worth writing down. We pass `ICON_BUTTON_SIZING` straight into HeroUI's
+`Button`, which sets its own height (`h-10`, `md:h-9` — see
+`@heroui/styles/dist/components/button.css`). Ours wins. It does **not** win by
+merging, and HeroUI would not merge it: `Button` composes the caller's
+`className` with `cx` from `tailwind-variants` — plain concatenation, not
+`cnMerge`. It wins because `min-height` and `height` are different CSS
+properties, and the used height is clamped to at least `min-height` by the box
+model. There is no cascade race and no source-order luck: `min-h-*` beats `h-*`
+whatever the order, and `tailwind-merge` would classify them into different
+conflict groups and keep both anyway. So `cn` would change nothing here.
+
+**What would have to become true to reopen this:**
+
+1. `src/components/ui/*` starts accepting `className` — a defensible design-system
+   decision, and the point at which "caller wins" needs to be a rule instead of
+   a coincidence; or
+2. someone needs to override a HeroUI utility *in the same conflict group* —
+   passing `rounded-*`, `px-*` or `h-*` to a HeroUI component and expecting it
+   to win. That case is genuinely undefined today: `cx` concatenates, so it
+   resolves by stylesheet source order, which is Tailwind's ordering and not
+   ours. Do not rely on it; use a different property, as `min-h-*` does, or
+   take the merge.
+
+If it is reopened, note that **no new dependency is required**:
+`tailwind-variants` is already installed as a HeroUI dependency and exports
+`cn`/`cnMerge`. That is why deferring costs nothing. Pin any override behaviour
+with a test that asserts the caller's value actually lands.

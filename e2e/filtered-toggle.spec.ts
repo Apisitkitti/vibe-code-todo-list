@@ -6,6 +6,7 @@ import {
   OVERDUE_HEADING,
   UPCOMING_HEADING,
   doneCount,
+  sectionHeadingText,
   markedCompleteToast,
   markedNotCompleteToast,
 } from "./support/copy";
@@ -95,9 +96,9 @@ test.describe("toggling under a status filter", () => {
     await page.goto(ACTIVE_URL);
 
     await expect(groupHeadings(page)).toHaveText([
-      OVERDUE_HEADING,
-      UPCOMING_HEADING,
-      NO_DATE_HEADING,
+      sectionHeadingText(OVERDUE_HEADING, 1),
+      sectionHeadingText(UPCOMING_HEADING, 1),
+      sectionHeadingText(NO_DATE_HEADING, 1),
     ]);
     await expect(todos.doneCounter).toHaveText(doneCount(0, 3));
 
@@ -118,8 +119,8 @@ test.describe("toggling under a status filter", () => {
 
     // US-10: under Active the `Completed` heading never appears at any point.
     await expect(groupHeadings(page)).toHaveText([
-      UPCOMING_HEADING,
-      NO_DATE_HEADING,
+      sectionHeadingText(UPCOMING_HEADING, 1),
+      sectionHeadingText(NO_DATE_HEADING, 1),
     ]);
     await expect(page.getByRole("heading", { name: COMPLETED_HEADING })).toHaveCount(0);
 

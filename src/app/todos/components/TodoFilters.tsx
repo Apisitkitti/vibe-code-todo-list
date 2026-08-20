@@ -1,7 +1,5 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
-
 import {
   Label,
   ListBox,
@@ -10,15 +8,14 @@ import {
   ToggleButton,
   ToggleButtonGroup,
 } from "@heroui/react";
-import { useRouter } from "next/navigation";
 
 import {
   PRIORITY_FILTER_LABELS,
   STATUS_FILTER_LABELS,
 } from "@/app/todos/constants";
+import type { UrlStateChange } from "@/lib/filterSync";
+import { ICON_BUTTON_SIZING, LABELLED_CONTROL_SIZING } from "@/lib/styles";
 import {
-  DEFAULT_PRIORITY_FILTER,
-  DEFAULT_STATUS_FILTER,
   PRIORITY_FILTER_VALUES,
   STATUS_FILTER_VALUES,
   type TodoListFilters,
@@ -26,65 +23,31 @@ import {
   type TodoStatusFilter,
 } from "@/lib/todo";
 
-const TODOS_PATH = "/todos";
-const STATUS_PARAM = "status";
-const PRIORITY_PARAM = "priority";
-const QUERY_PARAM = "q";
-const SEARCH_DEBOUNCE_MS = 300;
-
 export interface TodoFiltersProps {
+  /** The URL's filters, which is what the controls show. */
   filters: TodoListFilters;
+  /** The search box's text, which is *not* the URL's — see `useTodosUrlSync`. */
+  query: string;
+  onQueryChange: (value: string) => void;
+  onFilterChange: (change: UrlStateChange) => void;
 }
 
 /**
  * Filter state lives in the URL so it survives a reload (`docs/PRD.md` US-10).
- * The current values arrive as props from the server component, so this never
- * needs to read the search params itself.
+ *
+ * **This component no longer writes the URL.** It used to own the search text,
+ * the debounce and the guard that decides whether a landing navigation is its
+ * own echo — all of which moved to `useTodosUrlSync` when the view toggle
+ * became a second writer of the same query string. Two writers reading the URL
+ * to rebuild it is how a change that has not landed yet gets deleted; there is
+ * one owner now, and this row is one of the controls that asks it for a change.
  */
-export const TodoFilters = ({ filters }: TodoFiltersProps) => {
-  const [query, setQuery] = useState(filters.query);
-  const [lastAppliedQuery, setLastAppliedQuery] = useState(filters.query);
-  const [, startTransition] = useTransition();
-
-  const router = useRouter();
-
-  // Adjusting state during render rather than in an effect: the search box
-  // follows the URL when navigation changes it from outside this component.
-  if (lastAppliedQuery !== filters.query) {
-    setLastAppliedQuery(filters.query);
-    setQuery(filters.query);
-  }
-
-  const pushFilters = (next: TodoListFilters) => {
-    const params = new URLSearchParams();
-
-    if (next.status !== DEFAULT_STATUS_FILTER) params.set(STATUS_PARAM, next.status);
-    if (next.priority !== DEFAULT_PRIORITY_FILTER) {
-      params.set(PRIORITY_PARAM, next.priority);
-    }
-    if (next.query !== "") params.set(QUERY_PARAM, next.query);
-
-    const search = params.toString();
-
-    startTransition(() => {
-      router.replace(search === "" ? TODOS_PATH : `${TODOS_PATH}?${search}`, {
-        scroll: false,
-      });
-    });
-  };
-
-  // Typing should not push a history entry per keystroke.
-  useEffect(() => {
-    if (query === filters.query) return;
-
-    const timer = setTimeout(() => {
-      pushFilters({ ...filters, query });
-    }, SEARCH_DEBOUNCE_MS);
-
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, filters.query, filters.status, filters.priority]);
-
+export const TodoFilters = ({
+  filters,
+  query,
+  onQueryChange,
+  onFilterChange,
+}: TodoFiltersProps) => {
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
       <ToggleButtonGroup
@@ -97,7 +60,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
 
           if (typeof key !== "string") return;
 
-          pushFilters({ ...filters, status: key as TodoStatusFilter });
+          onFilterChange({ status: key as TodoStatusFilter });
         }}
         size="sm"
         className="w-full sm:w-auto"
@@ -113,7 +76,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
           <ToggleButton
             key={status}
             id={status}
-            className="min-h-11 flex-1 sm:min-h-9 sm:flex-none"
+            className={`${LABELLED_CONTROL_SIZING} flex-1 sm:flex-none`}
           >
             {STATUS_FILTER_LABELS[status]}
           </ToggleButton>
@@ -126,12 +89,12 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
         onSelectionChange={(key) => {
           if (typeof key !== "string") return;
 
-          pushFilters({ ...filters, priority: key as TodoPriorityFilter });
+          onFilterChange({ priority: key as TodoPriorityFilter });
         }}
         className="flex w-full flex-col gap-1.5 sm:w-40"
       >
         <Label className="sr-only">Priority</Label>
-        <Select.Trigger className="min-h-11 sm:min-h-9">
+        <Select.Trigger className={LABELLED_CONTROL_SIZING}>
           <Select.Value />
           <Select.Indicator />
         </Select.Trigger>
@@ -149,12 +112,49 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
       <SearchField
         aria-label="Search todos"
         value={query}
-        onChange={setQuery}
+        onChange={onQueryChange}
         className="w-full sm:ml-auto sm:max-w-64"
       >
-        <SearchField.Group className="min-h-11 sm:min-h-9">
+        <SearchField.Group className={LABELLED_CONTROL_SIZING}>
           <SearchField.SearchIcon />
-          <SearchField.Input placeholder="Search todos" />
+          {/*
+            `min-w-0` is what keeps the clear button reachable, and it is not a
+            cosmetic tweak — see `e2e/a11y-targets.spec.ts`.
+
+            A flex item's automatic minimum size is its min-content width, and
+            an `<input>`'s min-content is its default intrinsic width (`size=20`
+            worth of glyphs), which is a *font metric*, not a layout choice.
+            Without `min-w-0` the input refuses to shrink below it, so once the
+            group's content — icon 28 + input min-content + the button's 44px
+            margin box (36 wide at `sm:`, plus its 8px end margin) — exceeds
+            the `sm:max-w-64` cap of 256px, the surplus is pushed off the end of
+            the group. The group computes `overflow: hidden`, and overflow
+            clipping clips *hit-testing*, so the clear button stops taking the
+            pointer on the right-hand side first and then entirely. It has 8px
+            of headroom (its `margin-inline-end`) before that starts.
+
+            Measured: min-content is 242px, so 14px of slack. Forcing the input
+            to `monospace` takes the group's `scrollWidth` to 261 against a
+            `clientWidth` of 256 — already overflowing — and cuts the button's
+            headroom from 8px to 3px — so the overflow is reachable by
+            construction. **What tipped it over on CI is not established.** A
+            fallback face while `next/font` settles was the first guess and it
+            does not survive measurement: no face reaches the cliff at this
+            width. Left unknown deliberately rather than filled in.
+
+            `min-w-0` puts the group's cap back in charge: the input yields, the
+            button keeps its place, and no font can push the content out. The
+            cost is that a very narrow field shows fewer characters of the query
+            at once — which is the right thing to give up, and the only thing
+            the group can give up without taking width from the filter row.
+
+            Not fixed by removing `overflow: hidden`: the group carries the 12px
+            field radius and its children are deliberately squared against it
+            (`search-field__input` zeroes its own corner radii, and the focus
+            and autofill backgrounds paint to the edge), so the clip is what
+            makes the rounded field rounded.
+          */}
+          <SearchField.Input className="min-w-0" placeholder="Search todos" />
           {/*
             HeroUI ships this control at 20×20 — `padding: 4px` around a 12px
             icon and no min-size. That is below NFR-05's 44×44 and, alone in
@@ -164,17 +164,20 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
 
             The same `ICON_BUTTON_SIZING` step the row actions use (§6.3): 44
             on phones, relaxing to 36 for pointer input. The group is given the
-            matching floor so the field grows with the button rather than the
-            button escaping it — and that also lines the search box up with the
-            status toggles and the priority select beside it, which were
-            already `min-h-11 sm:min-h-9`.
+            matching *height* floor so the field grows with the button rather
+            than the button escaping it vertically — and that also lines the
+            search box up with the status toggles and the priority select
+            beside it, which were already `LABELLED_CONTROL_SIZING`. The
+            horizontal half of that is the input's `min-w-0` above; the group
+            has no width floor and cannot be given one without taking width
+            from the rest of the row.
 
             `aria-label` last, because `CloseButton` hardcodes `aria-label="Close"`
             before spreading its props: "Close" describes dismissing something,
             which is not what this does.
           */}
           <SearchField.ClearButton
-            className="min-h-11 min-w-11 sm:min-h-9 sm:min-w-9"
+            className={ICON_BUTTON_SIZING}
             aria-label="Clear search"
           />
         </SearchField.Group>

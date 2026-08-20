@@ -39,7 +39,7 @@ const RootLayout = ({ children }: LayoutProps<"/">) => {
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
       </head>
-      <body className="min-h-full flex flex-col bg-[var(--background)] text-[var(--foreground)]">
+      <body className="min-h-full flex flex-col bg-(--background) text-(--foreground)">
         {children}
         <Toast.Provider placement="bottom" />
         <SpeedInsights />
