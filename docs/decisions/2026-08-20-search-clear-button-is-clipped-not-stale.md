@@ -52,7 +52,15 @@ the 256px cap, so there are 14px of slack and 8px of them are the button's
 `margin-inline-end`. Forcing the input to `monospace` takes the group's
 `scrollWidth` to 261 against a `clientWidth` of 256 — already overflowing — and
 cuts the button's headroom from 8px to 3px. Geist arrives through `next/font`,
-so a fallback face measures the field until the webfont settles: different
+**Correction, from review.** A fallback face while `next/font` settles was the
+first guess at what tips it over, and it does not survive measurement: at the
+app's real width no face reaches the cliff — Geist and seven others sit at
+256/256, monospace at 261/256, Courier New at 260/256, every probe hitting. The
+CI signature needs content near 278. The overflow is reachable by construction
+and the trigger that reached it on CI is **unknown**. What follows is the
+original guess, kept for the record rather than as fact.
+
+The original guess was that
 metrics on CI's headless Linux, and transiently during swap locally.
 
 ## Two standing hypotheses that are now refuted, and must not come back
@@ -101,7 +109,16 @@ The sweep looped while the **centre** probe missed. That was correct for what it
 targeted and it never fired for the right-only case, so it never covered the CI
 failure at all. The sharper point is that if the cause is clipping rather than
 staleness, **re-sweeping a still-overflowed layout returns the same answer** —
-so where the loop did appear to help, it was waiting out the font swap, not
+**Correction, from review.** The loop was restored. Review reproduced the
+historical signature on the fixed tree — 119 of 120 at `--repeat-each=20`, all
+five probes on `<html>`, with **overhang −8 and zero group overflow**. Nothing
+was clipped, so the clip is not that failure's cause and the two families do
+not unify. The clip lands probes on `main` and takes the right pair first; the
+undiagnosed fault lands all five on `<html>` at once. The loop gates on the
+centre, which is the second and never the first. It is kept as a workaround for
+something unexplained, said plainly in the test.
+
+The original reasoning for deleting it was that
 curing anything. It was a sleep with a condition attached.
 
 With the cap governing, there is no swap to wait out: the button cannot leave the

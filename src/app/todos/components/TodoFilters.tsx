@@ -125,7 +125,8 @@ export const TodoFilters = ({
             an `<input>`'s min-content is its default intrinsic width (`size=20`
             worth of glyphs), which is a *font metric*, not a layout choice.
             Without `min-w-0` the input refuses to shrink below it, so once the
-            group's content — icon 28 + input min-content + button 44 — exceeds
+            group's content — icon 28 + input min-content + the button's 44px
+            margin box (36 wide at `sm:`, plus its 8px end margin) — exceeds
             the `sm:max-w-64` cap of 256px, the surplus is pushed off the end of
             the group. The group computes `overflow: hidden`, and overflow
             clipping clips *hit-testing*, so the clear button stops taking the
@@ -135,11 +136,11 @@ export const TodoFilters = ({
             Measured: min-content is 242px, so 14px of slack. Forcing the input
             to `monospace` takes the group's `scrollWidth` to 261 against a
             `clientWidth` of 256 — already overflowing — and cuts the button's
-            headroom from 8px to 3px. Geist arrives through `next/font`, so a
-            fallback face is measuring the field until the webfont settles:
-            different metrics on CI's headless Linux, and transiently during
-            swap locally. That is why this presented as an intermittent
-            "unclickable" button rather than as a broken layout.
+            headroom from 8px to 3px — so the overflow is reachable by
+            construction. **What tipped it over on CI is not established.** A
+            fallback face while `next/font` settles was the first guess and it
+            does not survive measurement: no face reaches the cliff at this
+            width. Left unknown deliberately rather than filled in.
 
             `min-w-0` puts the group's cap back in charge: the input yields, the
             button keeps its place, and no font can push the content out. The

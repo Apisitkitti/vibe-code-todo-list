@@ -42,6 +42,24 @@ const CLEAR_BUTTON = '[data-slot="search-field-clear-button"]';
 const CLICK_DELIVERY_ATTEMPTS = 2;
 
 /**
+ * How many times the hit-test sweep is re-read while the **centre** probe
+ * misses, and how long to wait between reads.
+ *
+ * This gates an undiagnosed fault, not the clip. See the note in the probe
+ * test: review reproduced all five probes landing on `<html>` with overhang
+ * −8 and zero group overflow, so nothing was clipped. The centre is the right
+ * gate because a genuinely undersized control hits dead centre and fails only
+ * the corners, so a real regression is reported on the first pass and never
+ * re-read.
+ *
+ * Four attempts at 100ms is a tenth of a second of tolerance, chosen to be
+ * shorter than anything a person would notice and long enough to cover a
+ * fault measured at roughly 0.5–3% of runs.
+ */
+const MAX_SWEEP_ATTEMPTS = 4;
+const SWEEP_RETRY_MS = 100;
+
+/**
  * The width the field is squeezed to in the clipping test.
  *
  * Below the group's unshrunk `min-content` of 242px by more than the clear
@@ -263,15 +281,45 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
       with it. Insetting would weaken a gate that still correctly fails a 20px
       control, while hiding the reachability defect the next test pins.
 
-      This test carried a re-sweep loop that re-read the hit test while the
-      centre probe missed, on the theory that a control which is present,
-      visible and unmoved but answers `<html>` had a stale hit-test tree. That
-      theory was wrong. The failure was overflow clipping — see the next test —
-      and re-reading a still-clipped layout returns the same answer, so where
-      the loop appeared to help it was waiting out a font swap rather than
-      curing anything. It is gone, and nothing here retries.
+      **The re-sweep below covers a fault nobody has diagnosed, and it is not
+      the clip.** This loop was deleted once, on the theory that overflow
+      clipping — the defect the next test pins — explained every red here. It
+      does not. Review reproduced the historical signature on the *fixed* tree,
+      at `--repeat-each=20`, 119 of 120: all five probes missing, every one
+      landing on `<html>`, with the instrumentation reporting **overhang −8 and
+      groupOverflow 0**. There was no clip. The clip cannot be the cause.
+
+      The two failures are distinguishable and the distinction is what the loop
+      gates on. Clipping lands probes on `main` (or `body` at extreme squeezes)
+      and takes the right-hand pair first, because the clip has an edge. This
+      one lands every probe on `<html>` at once, with the control present,
+      correctly sized and unmoved. The loop re-reads only while the **centre**
+      misses, which is this failure and never the clip's — and it cannot mask a
+      genuinely undersized control, because a small control still hits dead
+      centre and fails the corners on the first pass.
+
+      So this is a workaround for something unexplained, kept deliberately
+      rather than because it is understood. What is known: it survives the
+      `min-w-0` fix, it occurs where no clip exists, it reproduces on mobile
+      where the group cannot clip at all (380px against a 242px min-content),
+      and no font reaches the cliff at the app's real width. Roughly 0.5–3%.
+      Whoever picks this up: the instrumentation below already records what each
+      probe hit, which is what turned the clip diagnosis around — the next step
+      is finding what `<html>` means here when nothing is clipped.
     */
-    const sweep = await sweepHitTest(signedIn, WCAG_MIN);
+    let sweep = await sweepHitTest(signedIn, WCAG_MIN);
+
+    for (
+      let attempt = 0;
+      attempt < MAX_SWEEP_ATTEMPTS &&
+      sweep !== null &&
+      sweep.probes.some((probe) => probe.name === "centre" && !probe.hits);
+      attempt += 1
+    ) {
+      await signedIn.waitForTimeout(SWEEP_RETRY_MS);
+
+      sweep = await sweepHitTest(signedIn, WCAG_MIN);
+    }
 
     expect(sweep, "the clear button is not rendered").not.toBeNull();
 
@@ -299,11 +347,20 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
     What pushes it out is a font metric. A flex item's automatic minimum size is
     its min-content width, and an `<input>`'s min-content is its default
     intrinsic width — `size=20` worth of glyphs in whichever face is currently
-    measuring. Geist arrives through `next/font`, so a fallback face is in use
-    until the webfont settles: different metrics on CI's headless Linux, and
-    transiently during swap locally. Forcing the input to `monospace` here takes
-    the group's `scrollWidth` to 261 against a `clientWidth` of 256 and cuts the
-    button's headroom from 8px to 3px, on a component that is otherwise fine.
+    measuring. Forcing the input to `monospace` here takes the group's
+    `scrollWidth` to 261 against a `clientWidth` of 256 and cuts the button's
+    headroom from 8px to 3px, on a component that is otherwise fine.
+
+    **What actually pushed it past the edge on CI is not established.** A
+    fallback face while `next/font` settles was the first guess and review
+    defeated it: at the app's real width no face reaches the cliff — Geist and
+    seven others sit at 256/256, monospace at 261/256 and Courier New at
+    260/256, and every probe still hits in all of them. The CI signature needs
+    content near 278, roughly 17px past the widest face available. So the
+    mechanism below is real and reachable by construction, and the trigger that
+    reached it in that particular run is unknown. Recorded as unknown rather
+    than filled in, because a record that asserts a mechanism nobody measured
+    gets believed.
 
     That is why this presented for days as three unrelated intermittents: all
     five probes missing with `elementFromPoint` answering the page background, a
@@ -382,7 +439,7 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
 
     /*
       **There is deliberately no `clear.click()` here, and it is the reason this
-      defect survived a suite that clicks that button in four other specs.**
+      defect survived a suite that clicks that button elsewhere.**
 
       Playwright's actionability check calls `scrollRectIntoViewIfNeeded`, and
       an `overflow: hidden` box is still programmatically scrollable — so a
@@ -472,9 +529,12 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
 
       What is left is one clause with a specific job. React Aria's `usePress`
       fires on `pointerup`, not `click`, so a press can take effect while the
-      counter stays 0 — and a second `click()` then aims at a button that has
-      already been removed, which fails on a 20s timeout rather than on
-      anything true. Breaking on the field being empty removes that flake shape.
+      counter stays 0 — and a second `click()` then aims at a button the empty
+      state has made inert. `search-field.css` gives the cleared field's button
+      `pointer-events-none opacity-0` and leaves the node in place, so the
+      retry burns a 20s action timeout on "does not receive pointer events"
+      rather than on anything true. Breaking on the field being empty removes
+      that flake shape.
 
       **This assertion has no sensitivity to a refill**, and an earlier comment
       claimed it did. Disabling the echo guard outright — so a real press is
