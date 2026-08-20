@@ -46,6 +46,7 @@ front of it is trusted. Moving a *call* to the client does not move the
 | A pure helper over domain data | `src/lib/name.ts` | Testable in Node, no React |
 | A stateful hook for one route | `src/app/<route>/hooks/useName.ts` | `useTodoList` is the precedent |
 | Copy used by more than one file | `src/app/<route>/constants/` | Single-use copy stays inline |
+| A class string that encodes a **design rule** | `src/lib/styles.ts` | Consumers span every route and `src/components/**`, so it sits below all of them. Single-use layout stays inline — see **Styles** |
 | Framework plumbing (prisma, auth, session, http) | `src/lib/` | |
 | A test of a pure function | `tests/unit/name.test.ts` | |
 | A test of an API contract | `tests/api/name.test.ts` | The real handler, real Postgres, real cookie |
@@ -197,6 +198,67 @@ Colours are `var(--token)` only — no hex, no `rgb()`, no `bg-zinc-900`. A
 hard-coded colour does not swap with the theme, which makes it a dark-mode
 defect that light-mode review cannot see. Compose a missing shade with
 `color-mix()` from an existing token. ESLint enforces this.
+
+## Styles
+
+Tailwind utilities go inline in the component, which is the default and stays
+the default. The exception is a class string that encodes a **rule** — and the
+rule is what decides, not the repetition.
+
+**`src/lib/styles.ts` is the one home for those.** Not a route's `constants/`:
+the tap-target floor is used by `/todos`, by both auth routes and by
+`src/components/**`, and a value used across routes goes below them, the same
+way a component used by two routes goes to `src/components/`. Dependencies
+point inward and `src/lib` is the floor.
+
+**A value earns a name when any of these is true:**
+
+- it appears in more than one component;
+- it is a numbered rule from `docs/DESIGN.md` (the §2.2 spacing steps, §2.4's
+  type scale, §6.3's 44×44 tap floor);
+- a second file has to match it or something visibly breaks — a skeleton
+  against the thing it stands in for (§4.8);
+- it is a **documented deviation** from one of those rules. `CHIP_SIZING` and
+  `SECONDARY_ACTION_SIZING` are each used once and would otherwise stay
+  inline; they are the app's only two controls below §6.3's pointer floor, and
+  a deviation belongs where someone auditing the rule will look.
+
+**A value stays inline when** it appears once, in the component it belongs to,
+describing that component's own layout. Two components arriving at the same
+string for *different reasons* are not a duplicate: `flex flex-col gap-1.5` is
+§2.2's field-group gap in `src/components/ui/Form*`, and separately the list's
+row rhythm in `TodoGroupedList`. Naming one after the other would assert
+something false, so those stay apart deliberately.
+
+**Naming.** UPPER_SNAKE_CASE, and the name says what the value *means* to the
+design system, never what it does in CSS — `ICON_BUTTON_SIZING`, never
+`MIN_H_11`. Two shapes:
+
+- `<ROLE>` alone when the constant is that element's entire shared treatment:
+  `SECTION_HEADING`, `LIST_CONTAINER`.
+- `<ROLE>_<ASPECT>` when it is one aspect of an element that also carries
+  classes of its own: `ICON_BUTTON_SIZING`, `ROW_TITLE_LAYOUT`. `ASPECT` is
+  `SIZING` for dimensions and tap floors, `LAYOUT` for how a thing sits in its
+  parent.
+
+Compose with a template literal — `` className={`${ICON_BUTTON_SIZING} flex`} ``
+— which is what the codebase already did. There is no `cn` helper and adding
+one was declined; the reasoning, and what would have to change to reopen it,
+is in `docs/CONVENTIONS.md` under **Styles**.
+
+**Constants rather than CSS, deliberately.** A HeroUI token override is barred
+by `docs/DESIGN.md` §3 except for a token failing a WCAG floor, and none of
+these values *is* a token. A Tailwind `@utility` would work and loses on the
+failure it permits: a misspelt utility class emits no CSS and silently leaves
+the element at its intrinsic size — which is DEF-16, a 20×20 button, exactly
+the defect the tap floor exists to prevent. A misspelt constant fails `tsc`.
+
+**Write CSS variables in the shorthand**: `rounded-(--radius)`, not
+`rounded-[var(--radius)]`. Both compile on Tailwind 4.3.3 and emit identical
+declarations — verified including composition with an opacity modifier, where
+`bg-(--background)/80` and `bg-[var(--background)]/80` produce the same
+`color-mix()`. The bracket form reads as an escape hatch into arbitrary CSS;
+the parenthesis form reads as "this is a token", which is what it is.
 
 ## Mutation UX
 

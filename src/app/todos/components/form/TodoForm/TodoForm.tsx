@@ -11,6 +11,7 @@ import {
   FormTextArea,
   FormTextField,
 } from "@/components/ui";
+import { FORM_FIELD_STACK } from "@/lib/styles";
 import { PRIORITY_VALUES } from "@/lib/todo";
 import {
   todoFormSchema,
@@ -68,7 +69,7 @@ export const TodoForm = ({
   return (
     <Form
       id={formId}
-      className="flex flex-col gap-4"
+      className={FORM_FIELD_STACK}
       validationBehavior="aria"
       validationErrors={validationErrors}
       onSubmit={handleSubmit(onValidSubmit)}

@@ -1,16 +1,17 @@
 import { Card, Skeleton, Typography } from "@heroui/react";
 
 import { PAGE_HEADING } from "@/app/todos/constants";
+import { PAGE_HEADING_ROW, TODOS_PAGE_SHELL } from "@/lib/styles";
 
 import { TodoListHeaderLine } from "./components/TodoListHeaderLine";
 import { TodoListSkeleton } from "./components/TodoListSkeleton";
 
 const TodosLoading = () => {
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-      <div className="flex items-baseline justify-between gap-4">
+    <main className={TODOS_PAGE_SHELL}>
+      <div className={PAGE_HEADING_ROW}>
         <Typography.Heading level={1}>{PAGE_HEADING}</Typography.Heading>
-        <Skeleton className="h-4 w-24 rounded-[var(--radius)]" />
+        <Skeleton className="h-4 w-24 rounded-(--radius)" />
       </div>
 
       {/*
@@ -21,7 +22,7 @@ const TodosLoading = () => {
       */}
       <TodoListHeaderLine groups={null} />
 
-      <Skeleton className="h-11 w-full rounded-[var(--field-radius)] sm:w-32" />
+      <Skeleton className="h-11 w-full rounded-(--field-radius) sm:w-32" />
 
       <Card>
         <Card.Content className="p-0">

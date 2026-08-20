@@ -4,6 +4,8 @@ import type { KeyboardEvent, Ref } from "react";
 
 import { Description, FieldError, Input, Label, TextField } from "@heroui/react";
 
+import { FIELD_GROUP_STACK } from "@/lib/styles";
+
 export interface FormTextFieldProps {
   name: string;
   label: string;
@@ -80,7 +82,7 @@ export const FormTextField = ({
       autoComplete={autoComplete}
       validationBehavior="aria"
       isInvalid={isInvalid}
-      className="flex flex-col gap-1.5"
+      className={FIELD_GROUP_STACK}
     >
       <Label className={isLabelHidden ? "sr-only" : undefined}>{label}</Label>
       <Input placeholder={placeholder} ref={inputRef} />

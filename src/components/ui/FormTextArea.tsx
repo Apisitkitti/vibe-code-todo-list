@@ -2,6 +2,8 @@
 
 import { Description, FieldError, Label, TextArea, TextField } from "@heroui/react";
 
+import { FIELD_GROUP_STACK } from "@/lib/styles";
+
 export interface FormTextAreaProps {
   name: string;
   label: string;
@@ -37,7 +39,7 @@ export const FormTextArea = ({
       onChange={onChange}
       onBlur={onBlur}
       isDisabled={isDisabled}
-      className="flex flex-col gap-1.5"
+      className={FIELD_GROUP_STACK}
     >
       <Label>{label}</Label>
       <TextArea rows={rows} placeholder={placeholder} />

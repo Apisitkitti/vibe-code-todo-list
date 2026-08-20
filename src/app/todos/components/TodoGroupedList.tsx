@@ -2,19 +2,11 @@
 
 import { Separator, Typography } from "@heroui/react";
 
+import { LIST_CONTAINER, SECTION_HEADING } from "@/lib/styles";
 import type { TodoItemData } from "@/lib/todo";
 import type { TodoGroup } from "@/lib/todoGroups";
 
 import { TodoRow } from "./TodoRow";
-
-/**
- * `Typography.Heading` at `level={2}` renders a real `<h2>` but is styled
- * `text-3xl` (`typography--h2`), which would shout over the rows it labels.
- * `text-sm leading-6` is exactly the `body-sm` step the copy deck asks for
- * (`docs/DESIGN.md` §2.4, §7.16) — the size comes down, the element stays a
- * heading, and the semibold weight and tight tracking of a heading remain.
- */
-const GROUP_HEADING_CLASS = "px-2 pt-1 text-sm leading-6";
 
 /**
  * The count clause appended to each heading — `Overdue · 3`, `Completed · 214`
@@ -83,7 +75,7 @@ export const TodoGroupedList = ({
       `p-2` keeps the outermost pills off the Card's edge (§4.3); the gaps
       hold the rows' own outlines apart (§8.7).
     */
-    <div className="flex flex-col gap-1.5 p-2">
+    <div className={LIST_CONTAINER}>
       {groups.map((group, index) => (
         <section key={group.id} className="flex flex-col gap-1.5">
           {showHeadings ? (
@@ -98,7 +90,7 @@ export const TodoGroupedList = ({
                 `typography--h2` semibold weight finally has something to sit
                 against. Contrast rises, so there is no a11y exposure here.
               */}
-              <Typography.Heading level={2} className={GROUP_HEADING_CLASS}>
+              <Typography.Heading level={2} className={SECTION_HEADING}>
                 {group.heading}
                 <GroupCount count={group.todos.length} />
               </Typography.Heading>

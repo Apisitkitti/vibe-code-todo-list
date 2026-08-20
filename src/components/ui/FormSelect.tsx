@@ -2,6 +2,8 @@
 
 import { FieldError, Label, ListBox, Select } from "@heroui/react";
 
+import { FIELD_GROUP_STACK } from "@/lib/styles";
+
 export interface FormSelectOption {
   id: string;
   label: string;
@@ -37,7 +39,7 @@ export const FormSelect = ({
       onSelectionChange={(key) => onChange(String(key))}
       onBlur={onBlur}
       isDisabled={isDisabled}
-      className="flex flex-col gap-1.5"
+      className={FIELD_GROUP_STACK}
     >
       <Label>{label}</Label>
       <Select.Trigger>

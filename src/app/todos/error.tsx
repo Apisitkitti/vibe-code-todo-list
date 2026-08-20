@@ -3,6 +3,7 @@
 import { Alert, Button } from "@heroui/react";
 
 import { TRY_AGAIN_LABEL } from "@/app/todos/constants";
+import { LABELLED_CONTROL_SIZING, TODOS_PAGE_SHELL } from "@/lib/styles";
 
 export interface TodosErrorProps {
   reset: () => void;
@@ -14,7 +15,7 @@ export interface TodosErrorProps {
  */
 const TodosError = ({ reset }: TodosErrorProps) => {
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+    <main className={TODOS_PAGE_SHELL}>
       <Alert status="danger">
         <Alert.Indicator />
         <Alert.Content>
@@ -27,7 +28,7 @@ const TodosError = ({ reset }: TodosErrorProps) => {
       <Button
         variant="secondary"
         size="sm"
-        className="min-h-11 self-start sm:min-h-9"
+        className={`${LABELLED_CONTROL_SIZING} self-start`}
         onPress={reset}
       >
         {TRY_AGAIN_LABEL}

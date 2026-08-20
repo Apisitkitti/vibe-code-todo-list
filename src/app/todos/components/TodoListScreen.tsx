@@ -34,6 +34,7 @@ import {
   type TodoItemData,
   type TodoListFilters,
 } from "@/lib/todo";
+import { LABELLED_CONTROL_SIZING, PAGE_HEADING_ROW } from "@/lib/styles";
 import { groupTodos, type TodoGroup } from "@/lib/todoGroups";
 import {
   applyCompletion,
@@ -1071,7 +1072,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
           <Button
             variant="secondary"
             size="sm"
-            className="min-h-11 sm:min-h-9"
+            className={LABELLED_CONTROL_SIZING}
             onPress={retry}
           >
             {TRY_AGAIN_LABEL}
@@ -1170,7 +1171,7 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
 
   return (
     <>
-      <div className="flex items-baseline justify-between gap-4">
+      <div className={PAGE_HEADING_ROW}>
         <Typography.Heading level={1}>{PAGE_HEADING}</Typography.Heading>
         {hasTodos ? (
           <Typography type="body-sm" color="muted">
