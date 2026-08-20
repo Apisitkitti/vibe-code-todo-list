@@ -83,7 +83,7 @@ export const auth = betterAuth({
     // it is load-bearing rather than incidental: the e2e suite signs up an
     // account per test and the limiter keys on `ip|path`, so all 248 tests
     // share one bucket from 127.0.0.1. Enabled outside production, the suite
-    // would rate-limit itself. See `tests/lib/auth.rateLimit.test.ts`, which
+    // would rate-limit itself. See `tests/api/rateLimit.test.ts`, which
     // builds its own instance rather than turning this on globally.
     enabled: isProduction,
 
@@ -95,6 +95,35 @@ export const auth = betterAuth({
     // atomic. It is why `prisma/migrations/0001_add_rate_limit` exists.
     storage: "database",
     customRules: RATE_LIMIT_RULES,
+  },
+
+  /**
+   * **The limiter is only per-user if the client IP resolves, and the failure
+   * mode is an outage rather than a weaker limit.** better-auth keys buckets on
+   * `ip|path`; when it cannot establish a trustworthy IP it falls back to one
+   * shared `no-trusted-ip` bucket per path, which would make the rule above ten
+   * sign-ins per ten minutes *for the entire application*.
+   *
+   * The default is `x-forwarded-for` alone, and `getIPFromHeader` deliberately
+   * returns `null` for a multi-hop chain unless `trustedProxies` is set —
+   * anything else would let a caller spoof the leftmost entry and get a fresh
+   * bucket per request. So a header carrying more than one hop resolves to
+   * nothing, and the fallback is what a login page would feel.
+   *
+   * Vercel's own header carries a single client address, so it is preferred and
+   * `x-forwarded-for` is kept as the fallback for local and any other runtime.
+   * An unknown header name simply does not match and costs nothing.
+   *
+   * **Unverified against production — this is the one thing here that could not
+   * be checked locally.** better-auth logs "Rate limiting could not determine a
+   * client IP" exactly once per process when it falls back; that line appearing
+   * in the Vercel logs after the first deploy is the signal that this list is
+   * wrong, and it should be looked for deliberately rather than waited for.
+   */
+  advanced: {
+    ipAddress: {
+      ipAddressHeaders: ["x-vercel-forwarded-for", "x-real-ip", "x-forwarded-for"],
+    },
   },
   database: prismaAdapter(prisma, {
     provider: "postgresql",
