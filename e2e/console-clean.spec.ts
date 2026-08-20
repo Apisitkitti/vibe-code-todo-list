@@ -106,3 +106,42 @@ test("the todos screen and its create modal log nothing to the console", async (
 
   expect(messages).toEqual([]);
 });
+
+/**
+ * The board, for the one thing that only this file can catch.
+ *
+ * The board is chosen by a media query, and a media query is a fact the server
+ * does not have. HeroUI's `useMediaQuery` reads `matchMedia` during the *first
+ * client render* by default, so the server rendered a list and the client built
+ * a board over the top of it — React discarded the whole subtree with
+ * "Hydration failed", and **every board test still passed**, because a
+ * regenerated tree renders the same thing a moment later. Nothing but a console
+ * assertion sees it.
+ *
+ * The fix is `initializeWithValue: false`, which makes the first client render
+ * agree with the server and lets the hook's layout effect flip it before paint.
+ * Restoring the default reintroduces the error here, which is the point of
+ * pinning it.
+ */
+test("the board logs nothing to the console", async ({
+  todos,
+  signedIn: page,
+  isMobile,
+}) => {
+  test.skip(isMobile === true, "the board needs a desktop viewport");
+
+  await todos.quickAdd("Board console check");
+  await expect(todos.row("Board console check")).toBeVisible();
+
+  const messages = captureConsole(page);
+
+  // A full navigation, so the listener sees the server-rendered document being
+  // hydrated — which is the moment the mismatch happens.
+  await page.goto("/todos?view=board");
+  await expect(page.getByRole("heading", { name: "Your todos" })).toBeVisible();
+  await expect(
+    page.locator("main").getByRole("listitem").filter({ hasText: "Board console check" }),
+  ).toBeVisible();
+
+  expect(messages).toEqual([]);
+});
