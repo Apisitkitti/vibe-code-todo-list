@@ -117,7 +117,44 @@ export const TodoFilters = ({
       >
         <SearchField.Group className={LABELLED_CONTROL_SIZING}>
           <SearchField.SearchIcon />
-          <SearchField.Input placeholder="Search todos" />
+          {/*
+            `min-w-0` is what keeps the clear button reachable, and it is not a
+            cosmetic tweak — see `e2e/a11y-targets.spec.ts`.
+
+            A flex item's automatic minimum size is its min-content width, and
+            an `<input>`'s min-content is its default intrinsic width (`size=20`
+            worth of glyphs), which is a *font metric*, not a layout choice.
+            Without `min-w-0` the input refuses to shrink below it, so once the
+            group's content — icon 28 + input min-content + the button's 44px
+            margin box (36 wide at `sm:`, plus its 8px end margin) — exceeds
+            the `sm:max-w-64` cap of 256px, the surplus is pushed off the end of
+            the group. The group computes `overflow: hidden`, and overflow
+            clipping clips *hit-testing*, so the clear button stops taking the
+            pointer on the right-hand side first and then entirely. It has 8px
+            of headroom (its `margin-inline-end`) before that starts.
+
+            Measured: min-content is 242px, so 14px of slack. Forcing the input
+            to `monospace` takes the group's `scrollWidth` to 261 against a
+            `clientWidth` of 256 — already overflowing — and cuts the button's
+            headroom from 8px to 3px — so the overflow is reachable by
+            construction. **What tipped it over on CI is not established.** A
+            fallback face while `next/font` settles was the first guess and it
+            does not survive measurement: no face reaches the cliff at this
+            width. Left unknown deliberately rather than filled in.
+
+            `min-w-0` puts the group's cap back in charge: the input yields, the
+            button keeps its place, and no font can push the content out. The
+            cost is that a very narrow field shows fewer characters of the query
+            at once — which is the right thing to give up, and the only thing
+            the group can give up without taking width from the filter row.
+
+            Not fixed by removing `overflow: hidden`: the group carries the 12px
+            field radius and its children are deliberately squared against it
+            (`search-field__input` zeroes its own corner radii, and the focus
+            and autofill backgrounds paint to the edge), so the clip is what
+            makes the rounded field rounded.
+          */}
+          <SearchField.Input className="min-w-0" placeholder="Search todos" />
           {/*
             HeroUI ships this control at 20×20 — `padding: 4px` around a 12px
             icon and no min-size. That is below NFR-05's 44×44 and, alone in
@@ -127,10 +164,13 @@ export const TodoFilters = ({
 
             The same `ICON_BUTTON_SIZING` step the row actions use (§6.3): 44
             on phones, relaxing to 36 for pointer input. The group is given the
-            matching floor so the field grows with the button rather than the
-            button escaping it — and that also lines the search box up with the
-            status toggles and the priority select beside it, which were
-            already `LABELLED_CONTROL_SIZING`.
+            matching *height* floor so the field grows with the button rather
+            than the button escaping it vertically — and that also lines the
+            search box up with the status toggles and the priority select
+            beside it, which were already `LABELLED_CONTROL_SIZING`. The
+            horizontal half of that is the input's `min-w-0` above; the group
+            has no width floor and cannot be given one without taking width
+            from the rest of the row.
 
             `aria-label` last, because `CloseButton` hardcodes `aria-label="Close"`
             before spreading its props: "Close" describes dismissing something,
