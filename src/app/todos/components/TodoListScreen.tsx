@@ -88,13 +88,29 @@ const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
  * than the menu it replaces (§8.1 makes this argument for the checkbox; it is
  * the same argument).
  *
+ * **`(pointer: fine)` as well as the width, because the width alone left half
+ * of this argument reasoned about and not implemented.** The paragraph above
+ * rules the board out on a phone for two reasons — five columns do not fit,
+ * *and* HTML5 drag does not fire from touch — but a query on width alone only
+ * enforces the first. An iPad in landscape is wider than `lg` and has no fine
+ * pointer, so it was being handed a board whose cards cannot be dragged:
+ * pulling one scrolls the page instead, nothing happens, and nothing on screen
+ * says why. That is worse than not offering the view, because the affordance
+ * is visibly there.
+ *
+ * The *primary* pointer is the right thing to ask about rather than
+ * `any-pointer`, which answers "is any fine pointer available" — true of a
+ * tablet with a stylus in a drawer or a trackpad in a case, while the user's
+ * hands are on the glass. `hover: hover` would be a proxy for the same thing
+ * and says less about whether a drag can be started.
+ *
  * `?view=board` in the URL is **kept** while this is showing the list, rather
  * than rewritten to `view=list`. The user did not change their mind; their
  * window is narrow. Rotating a tablet or widening a window puts the board back
  * without them having to ask twice, and a link shared from a phone still opens
  * as a board on a desktop.
  */
-const BOARD_MEDIA_QUERY = "(min-width: 1024px)";
+const BOARD_MEDIA_QUERY = "(min-width: 1024px) and (pointer: fine)";
 
 /**
  * How long an Undo stays offered. HeroUI's 4s default is a reasonable life for
