@@ -1,8 +1,10 @@
 import type { Page, Request } from "@playwright/test";
 
 import {
+  BOARD_VIEW_LABEL,
   STATUS_FILTER_ARIA_LABEL,
   STATUS_FILTER_LABELS,
+  VIEW_TOGGLE_ARIA_LABEL,
 } from "./support/copy";
 import { expect, test } from "./support/fixtures";
 
@@ -337,5 +339,151 @@ test.describe("the search field owns its own value", () => {
     await expect(
       signedIn.getByRole("searchbox", { name: "Search todos" }),
     ).toHaveValue("something");
+  });
+});
+
+/**
+ * The view is a fourth piece of URL state, and it races the other three.
+ *
+ * `?view=board` joined `status`, `priority` and `q` in US-14, written by a
+ * second control that is not the filter row — and for a while by a second
+ * *writer*, which is what these two tests are really about. Each direction is
+ * the same defect wearing the other's clothes: whichever of the two controls
+ * acts second rebuilds its push from a URL that does not yet know about the
+ * first, and deletes it.
+ *
+ * Both are asserted on the request the press makes rather than on where the
+ * screen settles, for the reason the status tests give: the search field has
+ * local state and re-pushes what it notices missing, so a settle-and-look test
+ * can pass while the push site is still wrong. The view has no such state —
+ * `ViewToggle` renders `view` straight from the prop — so when a view change is
+ * dropped there is nothing left that remembers it happened, and the toggle
+ * simply springs back.
+ */
+test.describe("the URL survives two controls writing it at once", () => {
+  /*
+    The view toggle is not in the document below `lg` and the board needs a
+    fine pointer, so the mobile project has no control to press. `e2e/board.spec.ts`
+    skips the same way rather than silently.
+  */
+  test.skip(({ isMobile }) => isMobile === true, "the view toggle needs a desktop viewport");
+
+  const viewToggle = (page: Page, label: string) =>
+    page
+      .getByRole("radiogroup", { name: VIEW_TOGGLE_ARIA_LABEL })
+      .getByRole("radio", { name: label, exact: true });
+
+  test("a view change carries typing that has not landed yet", async ({
+    signedIn,
+    todos,
+  }) => {
+    await todos.quickAdd("something to search for");
+    await expect(
+      signedIn.locator("main").getByText("something to search for"),
+    ).toBeVisible();
+
+    const search = signedIn.getByRole("searchbox", { name: "Search todos" });
+
+    let releaseNavigation = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseNavigation = resolve;
+    });
+    let heldCount = 0;
+
+    // Holds the search push alone: `q` present, `view` absent.
+    await signedIn.route(
+      (url) =>
+        url.pathname === "/todos" &&
+        url.searchParams.get("q") !== null &&
+        url.searchParams.get("view") === null,
+      async (route) => {
+        heldCount += 1;
+
+        await held;
+        await route.continue();
+      },
+    );
+
+    const viewNavigation = signedIn.waitForRequest((request) => {
+      const url = new URL(request.url());
+
+      return (
+        url.pathname === "/todos" && url.searchParams.get("view") === "board"
+      );
+    });
+
+    await search.fill("something");
+
+    // The search push is in the air; the URL's `q` is provably still empty.
+    await expect.poll(() => heldCount).toBeGreaterThan(0);
+
+    await viewToggle(signedIn, BOARD_VIEW_LABEL).click();
+
+    const pushed = new URL((await viewNavigation).url());
+
+    // The assertion a second, unaware writer fails: `q` is absent entirely.
+    expect(pushed.searchParams.get("q")).toBe("something");
+
+    releaseNavigation();
+    await expect(search).toHaveValue("something");
+  });
+
+  test("typing does not discard a view change that has not landed yet", async ({
+    signedIn,
+    todos,
+  }) => {
+    /*
+      The worse direction, and the one with no recovery. A dropped `q` is
+      noticed by the field and re-pushed; a dropped `view` is simply gone, and
+      the user who pressed Board is looking at the list.
+    */
+    await todos.quickAdd("something to search for");
+    await expect(
+      signedIn.locator("main").getByText("something to search for"),
+    ).toBeVisible();
+
+    const search = signedIn.getByRole("searchbox", { name: "Search todos" });
+
+    let releaseNavigation = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseNavigation = resolve;
+    });
+    let heldCount = 0;
+
+    // Holds the view press alone: `view` present, `q` absent.
+    await signedIn.route(
+      (url) =>
+        url.pathname === "/todos" &&
+        url.searchParams.get("view") === "board" &&
+        url.searchParams.get("q") === null,
+      async (route) => {
+        heldCount += 1;
+
+        await held;
+        await route.continue();
+      },
+    );
+
+    const searchNavigation = signedIn.waitForRequest((request) => {
+      const url = new URL(request.url());
+
+      return (
+        url.pathname === "/todos" && url.searchParams.get("q") === "something"
+      );
+    });
+
+    await viewToggle(signedIn, BOARD_VIEW_LABEL).click();
+
+    // The press is in the air; the URL's `view` is provably still `list`.
+    await expect.poll(() => heldCount).toBeGreaterThan(0);
+
+    await search.fill("something");
+
+    const pushed = new URL((await searchNavigation).url());
+
+    // The assertion the unaware push site fails: `view` is absent entirely.
+    expect(pushed.searchParams.get("view")).toBe("board");
+
+    releaseNavigation();
   });
 });

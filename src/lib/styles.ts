@@ -143,8 +143,29 @@ export const SECONDARY_ACTION_SIZING = "min-h-11 sm:min-h-8";
  * vertical rhythm, and its classes interleave, so it is deliberately not
  * composed from this: see the note there.
  */
-export const TODOS_PAGE_SHELL =
-  "mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8";
+const TODOS_PAGE_SHELL_BASE =
+  "mx-auto flex w-full flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8";
+
+export const TODOS_PAGE_SHELL = `${TODOS_PAGE_SHELL_BASE} max-w-2xl`;
+
+/**
+ * The same shell at the width the board needs (US-14).
+ *
+ * §2.2 caps `/todos` at `max-w-2xl` so a line of text stays readable, which is
+ * right for the list and wrong for five columns — inside 672px they would be
+ * 130px each. So the width, and only the width, follows the view.
+ *
+ * A separate constant rather than `` `${TODOS_PAGE_SHELL} max-w-7xl` ``,
+ * because appending would not reliably win: two `max-w-*` utilities on one
+ * element are resolved by their order in the generated stylesheet, not by
+ * their order in the attribute. Sharing `TODOS_PAGE_SHELL_BASE` is what keeps
+ * the other four §2.2 rules from drifting between the two.
+ *
+ * `loading.tsx` and `error.tsx` stay on the list width deliberately: neither
+ * reads the view, and a skeleton that guessed board width would jump when the
+ * route settled to a list.
+ */
+export const TODOS_BOARD_PAGE_SHELL = `${TODOS_PAGE_SHELL_BASE} max-w-7xl`;
 
 /** The auth routes' shell: a centred card, §2.2's `px-4` gutter, `py-8`. */
 export const AUTH_PAGE_SHELL = "flex-1 grid place-items-center px-4 py-8";

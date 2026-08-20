@@ -8,6 +8,7 @@ import type {
 import { groupTodos } from "@/lib/todoGroups";
 import {
   applyCompletion,
+  applyDueDate,
   replaceTodo,
   todoMatchesFilters,
   todoMatchesStatusFilter,
@@ -603,5 +604,104 @@ describe("todoMatchesFilters", () => {
         filters({ status: "active", priority: "low", query: "milk" }),
       ),
     ).toBe(false);
+  });
+});
+
+/**
+ * The board's optimistic half (`docs/DESIGN.md` §8.8).
+ *
+ * A drag has to move the card the moment the user lets go, and the client is
+ * not allowed to choose where in the column it lands. `applyDueDate` is the
+ * line between those two, and the properties below are the whole of the claim:
+ * it moves a card between **columns** and it does not move it in the
+ * **sequence**. A verifier is the point — a browser can watch a card change
+ * column, but only this can show that nothing was re-sequenced on the way.
+ */
+describe("applyDueDate — the board's column move", () => {
+  test("moves the card to the column its new date names", () => {
+    const before = listOf([
+      todo({ id: "a", dueAt: dueAt("2026-08-18") }),
+      todo({ id: "b", dueAt: dueAt("2026-08-20") }),
+    ]);
+
+    expect(sectionOf(before, "b")).toBe("upcoming");
+
+    const after = applyDueDate(before, "b", "2026-08-16");
+
+    expect(sectionOf(after, "b")).toBe("today");
+  });
+
+  test("clearing the date moves it to No date", () => {
+    const before = listOf([todo({ id: "a", dueAt: dueAt("2026-08-20") })]);
+
+    expect(sectionOf(applyDueDate(before, "a", null), "a")).toBe("no-date");
+  });
+
+  /**
+   * Invariant 1, and the reason the board draws no insertion point: the client
+   * genuinely does not decide where the card sits among its new neighbours. It
+   * keeps the index the server gave it, and the refetch re-sequences.
+   */
+  test("never changes the sequence, only the section cut", () => {
+    const before = listOf([
+      todo({ id: "a", dueAt: dueAt("2026-08-14") }),
+      todo({ id: "b", dueAt: dueAt("2026-08-20") }),
+      todo({ id: "c", dueAt: dueAt("2026-08-22") }),
+    ]);
+
+    const after = applyDueDate(before, "c", "2026-08-16");
+
+    expect(idsOf(after)).toEqual(idsOf(before));
+  });
+
+  /** Invariant 2. A card that is not on screen is not put on screen. */
+  test("does not add a row that is not there", () => {
+    const before = listOf([todo({ id: "a" })]);
+
+    expect(applyDueDate(before, "missing", "2026-08-16")).toBe(before);
+  });
+
+  /** Invariant 3, which is what makes a revert with nothing to undo free. */
+  test("a no-op returns the identical object", () => {
+    const before = listOf([todo({ id: "a", dueAt: dueAt("2026-08-20") })]);
+
+    expect(applyDueDate(before, "a", dueAt("2026-08-20"))).toBe(before);
+  });
+
+  /**
+   * Neither count describes due dates, so neither may move. A drag that
+   * quietly changed `N of M done` would be reporting a completion that never
+   * happened.
+   */
+  test("leaves both counts alone", () => {
+    const before = listOf(
+      [todo({ id: "a", dueAt: dueAt("2026-08-20") }), todo({ id: "b", completed: true })],
+      { totalCount: 9, completedCount: 4 },
+    );
+
+    const after = applyDueDate(before, "a", "2026-08-16");
+
+    expect(after.totalCount).toBe(9);
+    expect(after.completedCount).toBe(4);
+  });
+
+  /**
+   * The revert, which is the only correctness property optimistic state has.
+   * The caller writes back the value the card held, so nothing is derived —
+   * the same rule `applyCompletion`'s revert follows.
+   */
+  test("reverting restores the exact date and the exact section", () => {
+    const original = dueAt("2026-08-20");
+    const before = listOf([
+      todo({ id: "a" }),
+      todo({ id: "b", dueAt: original }),
+    ]);
+
+    const moved = applyDueDate(before, "b", "2026-08-16");
+    const reverted = applyDueDate(moved, "b", original);
+
+    expect(reverted.todos.find((item) => item.id === "b")?.dueAt).toBe(original);
+    expect(sectionOf(reverted, "b")).toBe(sectionOf(before, "b"));
+    expect(idsOf(reverted)).toEqual(idsOf(before));
   });
 });

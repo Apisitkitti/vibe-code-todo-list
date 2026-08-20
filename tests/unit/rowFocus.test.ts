@@ -10,6 +10,9 @@ import {
   RESCHEDULE_TRIGGER_ATTRIBUTE,
   rescheduleTriggerProps,
   restoreRescheduleFocus,
+  restoreToggleFocus,
+  TOGGLE_TARGET_ATTRIBUTE,
+  toggleTargetProps,
   UNDO_TOKEN_ATTRIBUTE,
   undoTokenProps,
 } from "@/lib/rowFocus";
@@ -539,5 +542,123 @@ describe("restoreRescheduleFocus", () => {
       [RESCHEDULE_TRIGGER_ATTRIBUTE]: "todo-42",
     });
     expect(RESCHEDULE_TRIGGER_ATTRIBUTE.startsWith("data-")).toBe(true);
+  });
+});
+
+/**
+ * The board's toggle loses the control the user pressed for the same reason a
+ * reschedule does — the card moves to another **column**, columns are separate
+ * subtrees, React rebuilds the card — and the answer is the same restoration
+ * rather than the list's redirect into the toast (`docs/DESIGN.md` §8.8).
+ *
+ * The three properties are the ones `restoreRescheduleFocus` is held to, and
+ * they are re-asserted rather than assumed shared: the two now run the same
+ * loop, and a test that only covered one of them would go on passing if a
+ * future change gave them separate ones again.
+ */
+describe("restoreToggleFocus", () => {
+  const makeToggle = (name: string) => {
+    const world: { active: unknown; body: unknown } = { active: null, body: {} };
+
+    const toggle = {
+      name,
+      focus: () => {
+        world.active = toggle;
+      },
+    };
+
+    return { toggle, world };
+  };
+
+  it("waits for the rebuilt checkbox instead of giving up on the first frame", async () => {
+    const { toggle, world } = makeToggle("rebuilt");
+
+    world.active = world.body;
+
+    let frames = 0;
+    const REBUILD_LANDS_ON_FRAME = 3;
+
+    const restored = await restoreToggleFocus("todo-1", {
+      findToggle: () => (frames < REBUILD_LANDS_ON_FRAME ? null : toggle),
+      getActiveElement: () => world.active,
+      getBody: () => world.body,
+      waitFrame: async () => {
+        frames += 1;
+      },
+    });
+
+    expect(restored).toBe(true);
+    expect(frames).toBe(REBUILD_LANDS_ON_FRAME);
+    expect(world.active).toBe(toggle);
+  });
+
+  /**
+   * A card that did not change column keeps its DOM node, so focus never left
+   * the checkbox. Firing here would be a redundant focus call on a control the
+   * user is already standing on.
+   */
+  it("declines while focus is still on the checkbox", async () => {
+    const { toggle, world } = makeToggle("untouched");
+    const stillThere = { name: "same-checkbox", focus: () => {} };
+
+    world.active = stillThere;
+
+    const restored = await restoreToggleFocus("todo-1", {
+      findToggle: () => toggle,
+      getActiveElement: () => world.active,
+      getBody: () => world.body,
+      waitFrame: async () => {},
+    });
+
+    expect(restored).toBe(false);
+    expect(world.active).toBe(stillThere);
+  });
+
+  it("never takes focus the user has moved somewhere else", async () => {
+    const { toggle, world } = makeToggle("not-mine");
+    const elsewhere = { name: "quick-add-input", focus: () => {} };
+
+    world.active = elsewhere;
+
+    const restored = await restoreToggleFocus("todo-1", {
+      findToggle: () => toggle,
+      getActiveElement: () => world.active,
+      getBody: () => world.body,
+      waitFrame: async () => {},
+    });
+
+    expect(restored).toBe(false);
+    expect(world.active).toBe(elsewhere);
+  });
+
+  it("gives up rather than spinning when the card never comes back", async () => {
+    const { world } = makeToggle("never-arrives");
+
+    world.active = world.body;
+
+    let frames = 0;
+
+    const restored = await restoreToggleFocus("todo-1", {
+      findToggle: () => null,
+      getActiveElement: () => world.active,
+      getBody: () => world.body,
+      waitFrame: async () => {
+        frames += 1;
+      },
+    });
+
+    expect(restored).toBe(false);
+    expect(frames).toBe(MAX_WAIT_FRAMES);
+  });
+
+  /**
+   * The anchor is an identity, not a position — the same lesson DEF-25 records
+   * for the Undo token. It has to be, because the checkbox's own accessible
+   * name changes with the press that moves the card.
+   */
+  it("names the card rather than describing it", () => {
+    expect(toggleTargetProps("todo-9")).toEqual({
+      [TOGGLE_TARGET_ATTRIBUTE]: "todo-9",
+    });
   });
 });

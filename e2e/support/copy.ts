@@ -272,3 +272,31 @@ export const AXIOS_LEAK_PATTERNS = [
   /AxiosError/i,
   /ERR_[A-Z_]+/,
 ];
+
+/**
+ * §7.20 — the board view (`docs/PRD.md` US-14).
+ *
+ * The column headings are §7.16's, unchanged and deliberately so: the board is
+ * the list's own sections laid out sideways, and a second set of names for the
+ * same five groups would be the first sign it had become a second opinion
+ * about where a todo belongs.
+ */
+export const VIEW_TOGGLE_ARIA_LABEL = "Choose a view";
+export const LIST_VIEW_LABEL = "List";
+export const BOARD_VIEW_LABEL = "Board";
+
+/** §7.20 — what an empty column says, per column. */
+export const BOARD_EMPTY_COLUMN = {
+  overdue: "Nothing overdue.",
+  today: "Nothing due today.",
+  upcoming: "Nothing scheduled ahead.",
+  "no-date": "Every todo has a date.",
+  completed: "Nothing completed yet.",
+} as const;
+
+/**
+ * §7.20 — the line under the columns, and the one place the app states what
+ * §8.8 decided: a drop chooses a column, not a place inside it.
+ */
+export const BOARD_ORDER_NOTE =
+  "Cards are ordered by due date within each column. Dropping a card chooses its column, not its place in it.";

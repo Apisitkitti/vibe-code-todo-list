@@ -181,6 +181,53 @@ export const applyCompletion = (
 };
 
 /**
+ * Moves a todo into another **column** without moving it in the sequence — the
+ * board's optimistic half (`docs/DESIGN.md` §8.8).
+ *
+ * The board drags a card from one column to another, and a card that snaps
+ * back to where it was until the server answers is the one thing direct
+ * manipulation must not do. But a due date is the second sort key, so the
+ * client genuinely does not know where the row lands. Both of those are true
+ * at once, and this function is the line between them: **it changes which
+ * column the card is in and says nothing about where in the column it sits.**
+ *
+ * That is invariant 1 honoured rather than bent. `dueAt` is rewritten in place
+ * and `todos` keeps the server's exact sequence, so `groupTodos` / `boardColumns`
+ * re-cut the card into its new column on the next render while its index — and
+ * therefore its position among its new neighbours — is whatever the old
+ * sequence already implied. No arithmetic anywhere decides a position, and the
+ * refetch that follows replaces the guess with the order the server chose.
+ *
+ * The visible cost, stated rather than hidden: a card can settle at a different
+ * index inside its new column when the refetch lands. The board never draws an
+ * insertion point, so it never promised otherwise — see §8.8.
+ *
+ * Reverting is the same call with the value the card held before the drop,
+ * exactly as `applyCompletion`'s revert is: the caller knows it, so nothing has
+ * to be derived. A row that is not on screen is not added (invariant 2), and a
+ * no-op returns the identical object (invariant 3).
+ *
+ * Counts are untouched. Neither count describes due dates.
+ */
+export const applyDueDate = (
+  result: TodoListResult,
+  todoId: string,
+  dueAt: string | null,
+): TodoListResult => {
+  const current = result.todos.find((todo) => todo.id === todoId);
+
+  if (!current || current.dueAt === dueAt) return result;
+
+  return {
+    todos: result.todos.map((todo) =>
+      todo.id === todoId ? { ...todo, dueAt } : todo,
+    ),
+    totalCount: result.totalCount,
+    completedCount: result.completedCount,
+  };
+};
+
+/**
  * Reconciles the optimistic guess with the row the server actually wrote.
  *
  * `PATCH /api/todos/[id]/status` already returns the authoritative
