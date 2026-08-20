@@ -24,6 +24,13 @@ Never read a command's result through a pipe — `cmd > /tmp/x.log 2>&1; echo
 `E2E_PORT`, unique per worktree. Verify `.env` before database commands.
 `nvm use 24`. `rm -rf .next` → build → tsc in that order.
 
+## Distrust what you remember about a library
+
+Read `_shared-rules.md`. It matters doubly here: a test harness pinned to a
+remembered API fails in the direction that looks like a product bug. Check
+the installed version's own documentation before reaching for a matcher, a
+fixture API or a config option you have not used in this repo.
+
 ## What to hunt
 
 **Tests that cannot fail.** Ask of each: what would have to break for this to

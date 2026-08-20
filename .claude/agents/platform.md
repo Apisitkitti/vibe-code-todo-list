@@ -44,6 +44,14 @@ use 24`. Verify `.env` before any database command and pin `--url` on Prisma
 commands; a worktree copy was once found pointing at Neon and nobody could
 explain it.
 
+## Distrust what you remember about a tool
+
+Read `_shared-rules.md`. Your commands touch production, so a flag that was
+removed between majors is not a typo, it is an outage waiting for a hurry.
+`prisma db push --skip-generate` and `prisma migrate diff --from-url` were
+both used here from memory and both are gone. Read the installed version's
+help output before you run anything against a real database.
+
 ## How to work
 
 **Production changes are the user's call, not yours.** Applying DDL, rotating
