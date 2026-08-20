@@ -6,6 +6,7 @@ import {
   parseView,
   type TodoListFilters,
 } from "@/lib/todo";
+import { TODOS_BOARD_PAGE_SHELL, TODOS_PAGE_SHELL } from "@/lib/styles";
 import { QUERY_PARAM, VIEW_PARAM } from "@/lib/todosUrl";
 
 import { TodoListScreen } from "./components/TodoListScreen";
@@ -49,9 +50,7 @@ const TodosPage = async ({ searchParams }: PageProps<"/todos">) => {
   */
   return (
     <main
-      className={`mx-auto flex w-full flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8 ${
-        view === "board" ? "max-w-7xl" : "max-w-2xl"
-      }`}
+      className={view === "board" ? TODOS_BOARD_PAGE_SHELL : TODOS_PAGE_SHELL}
     >
       <TodoListScreen filters={filters} view={view} />
     </main>

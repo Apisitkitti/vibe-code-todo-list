@@ -14,6 +14,7 @@ import {
   type TodosUrlState,
 } from "@/lib/filterSync";
 import type { TodoListFilters, TodoView } from "@/lib/todo";
+import { CLEARED_FILTERS } from "@/lib/todosUrl";
 
 /**
  * The filter row's ownership rules, driven through the interleavings that
@@ -332,6 +333,35 @@ describe("filterSync", () => {
     expect(landed.pending).toHaveLength(0);
     // The older push is no longer predictive, but is still ours if it lands.
     expect(landed.disowned).toEqual([url({ query: "abc" })]);
+  });
+
+  it("clears the search text when the change says to, not what the field says", () => {
+    /*
+      The `Clear filters` path, and the one place a push does not take the
+      search text from the field.
+
+      Clearing empties the field and pushes in the same tick, and the emptying
+      is queued state — so a push that read `state.query` would carry the value
+      being cleared and put `?q=` straight back. `CLEARED_FILTERS` names the
+      text explicitly for exactly that reason, and this pins it: the field
+      still holds `abc` here, and the pushed tuple must not.
+
+      The consequence of getting it wrong is transient — the debounce notices
+      and re-pushes ~300ms later — which is why nothing at any other level
+      catches it. It is still a new failure mode: the URL-writing helper this
+      replaced had no queued state to be wrong about.
+
+      The view is deliberately absent from `CLEARED_FILTERS`, so it survives on
+      the settled target. That is the product ruling, not a side effect.
+    */
+    let state = createFilterSync(url({ view: "board" }));
+
+    state = types(state, "abc");
+
+    const { pushed } = pushes(state, CLEARED_FILTERS);
+
+    expect(pushed).toEqual(url({ view: "board" }));
+    expect(pushed.filters.query).toBe("");
   });
 
   /* ── the view, which is in the URL but is not a filter ──────────────────── */

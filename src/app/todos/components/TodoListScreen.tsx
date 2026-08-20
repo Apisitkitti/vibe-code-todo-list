@@ -61,6 +61,8 @@ import { QuickAddBar } from "./QuickAddBar";
 import { TodoBoard } from "./TodoBoard";
 import { TodoBoardSkeleton } from "./TodoBoardSkeleton";
 import { TodoEmptyState } from "./TodoEmptyState";
+import { LABELLED_CONTROL_SIZING, PAGE_HEADING_ROW } from "@/lib/styles";
+
 import { useTodosUrlSync } from "@/app/todos/hooks/useTodosUrlSync";
 
 import { TodoFilters } from "./TodoFilters";
@@ -1216,7 +1218,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
           <Button
             variant="secondary"
             size="sm"
-            className="min-h-11 sm:min-h-9"
+            className={LABELLED_CONTROL_SIZING}
             onPress={retry}
           >
             {TRY_AGAIN_LABEL}
@@ -1347,7 +1349,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
 
   return (
     <>
-      <div className="flex items-baseline justify-between gap-4">
+      <div className={PAGE_HEADING_ROW}>
         <Typography.Heading level={1}>{PAGE_HEADING}</Typography.Heading>
         {hasTodos ? (
           <Typography type="body-sm" color="muted">

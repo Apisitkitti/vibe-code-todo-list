@@ -3,6 +3,7 @@
 import { Checkbox, Typography } from "@heroui/react";
 
 import { toggleTargetProps } from "@/lib/rowFocus";
+import { ICON_BUTTON_SIZING } from "@/lib/styles";
 import type { TodoItemData } from "@/lib/todo";
 
 import { PriorityChip } from "./PriorityChip";
@@ -136,7 +137,9 @@ export const TodoCard = ({
                 : `Mark "${todo.title}" as complete`
             }
           >
-            <Checkbox.Content className="flex min-h-11 min-w-11 items-center justify-start sm:min-h-9 sm:min-w-9">
+            <Checkbox.Content
+              className={`${ICON_BUTTON_SIZING} flex items-center justify-start`}
+            >
               {/* The §4.4 / DEF-08 border, unchanged from the row. */}
               <Checkbox.Control className="border border-[color-mix(in_srgb,var(--foreground)_50%,transparent)]">
                 <Checkbox.Indicator />

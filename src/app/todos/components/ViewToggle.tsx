@@ -7,6 +7,7 @@ import {
   LIST_VIEW_LABEL,
   VIEW_TOGGLE_ARIA_LABEL,
 } from "@/app/todos/constants";
+import { LABELLED_CONTROL_SIZING } from "@/lib/styles";
 import { VIEW_VALUES, type TodoView } from "@/lib/todo";
 
 /**
@@ -65,7 +66,11 @@ export const ViewToggle = ({ view, onSelectView }: ViewToggleProps) => {
       size="sm"
     >
       {VIEW_VALUES.map((value) => (
-        <ToggleButton key={value} id={value} className="min-h-11 sm:min-h-9">
+        <ToggleButton
+          key={value}
+          id={value}
+          className={LABELLED_CONTROL_SIZING}
+        >
           {VIEW_LABELS[value]}
         </ToggleButton>
       ))}

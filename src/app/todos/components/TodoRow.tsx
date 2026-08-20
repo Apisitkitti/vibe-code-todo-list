@@ -2,31 +2,12 @@
 
 import { Checkbox, Typography } from "@heroui/react";
 
+import { ICON_BUTTON_SIZING, ROW_TITLE_LAYOUT } from "@/lib/styles";
 import type { TodoItemData } from "@/lib/todo";
 
 import { PriorityChip } from "./PriorityChip";
 import { TodoActions } from "./TodoActions";
 import { TodoDueDate } from "./TodoDueDate";
-
-/**
- * The title takes the slack at `sm:` and up, which is what reserves the
- * metadata column (`docs/DESIGN.md` §1: *"Nothing reflows between rows; a row
- * with no due date leaves the slot empty rather than shifting"*).
- *
- * Without `flex-1` the title is sized by its own content, so the chip/date/note
- * cluster hugged the end of each title and landed somewhere different on every
- * row — the list had no column to scan down. With it, the cluster is pushed to
- * a consistent right edge and a row missing a date leaves the gap rather than
- * sliding everything left.
- *
- * `min-w-0` alongside it, or the flex item refuses to shrink below its content
- * width and `truncate` never fires. The trade is that long titles truncate
- * sooner, which is the trade §1 already made.
- *
- * `sm:` only: below that the row is `flex-col`, where `flex-1` would stretch
- * the title vertically instead and there is no column to reserve.
- */
-const TITLE_SIZING = "sm:min-w-0 sm:flex-1";
 
 export interface TodoRowProps {
   todo: TodoItemData;
@@ -135,7 +116,7 @@ export const TodoRow = ({
             : `Mark "${todo.title}" as complete`
         }
       >
-        <Checkbox.Content className="flex min-h-11 min-w-11 items-center justify-start sm:min-h-9 sm:min-w-9">
+        <Checkbox.Content className={`${ICON_BUTTON_SIZING} flex items-center justify-start`}>
           {/*
             HeroUI's theme gives form fields no border by default
             (`--field-border-width: 0px`), relying on the field background to
@@ -169,8 +150,8 @@ export const TodoRow = ({
           truncate
           className={
             todo.completed
-              ? `${TITLE_SIZING} text-muted line-through`
-              : TITLE_SIZING
+              ? `${ROW_TITLE_LAYOUT} text-muted line-through`
+              : ROW_TITLE_LAYOUT
           }
         >
           {todo.title}

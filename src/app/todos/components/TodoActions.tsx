@@ -11,6 +11,7 @@ import {
   rescheduleDay,
 } from "@/lib/date";
 import { rescheduleTriggerProps } from "@/lib/rowFocus";
+import { ICON_BUTTON_SIZING } from "@/lib/styles";
 import type { TodoItemData } from "@/lib/todo";
 
 /**
@@ -31,7 +32,6 @@ import type { TodoItemData } from "@/lib/todo";
  * the decisions they record.
  */
 
-export const ICON_BUTTON_SIZING = "min-h-11 min-w-11 sm:min-h-9 sm:min-w-9";
 
 /**
  * The reschedule menu's copy (`docs/DESIGN.md` §7.19). The three quick days

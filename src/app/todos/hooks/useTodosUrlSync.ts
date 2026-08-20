@@ -24,9 +24,23 @@ import { CLEARED_FILTERS, todosUrl } from "@/lib/todosUrl";
  * **Why this is a hook on the screen rather than state inside `TodoFilters`.**
  * The filters were the only thing in the URL when the guard was written, so
  * living beside the search box was the same thing as living beside the URL.
- * The view broke that: `ViewToggle` writes the same query string, sits outside
- * the filter row, and renders when `TodoFilters` does not (there is no filter
- * row until there are todos). Two components writing one URL is the shape
+ * The view broke that, and for two structural reasons rather than one.
+ *
+ * `ViewToggle` and the empty state's `Clear filters` are **siblings** of
+ * `TodoFilters`, not children of it, so state held inside the filter row
+ * cannot reach either of them however it is exposed. And `ViewToggle` is
+ * **conditionally mounted** — `hasTodos && isWideEnoughForBoard`, which is
+ * strictly narrower than the filter row's `hasTodos` — so state held inside
+ * *it* would be destroyed every time the viewport crossed `lg` or the last
+ * todo was deleted. Neither component can own this; the screen is the nearest
+ * thing that outlives both.
+ *
+ * (An earlier version of this paragraph said `ViewToggle` renders when
+ * `TodoFilters` does not. That is backwards — it renders strictly less often —
+ * and it was never measured. The conclusion is unchanged, but the reason
+ * above is the true one.)
+ *
+ * Two components writing one URL is the shape
  * `src/lib/todosUrl.ts` was already built to survive — it takes the whole state
  * so no writer can omit what it does not know about — but that only fixes the
  * *string*. It does nothing about the *timing*, and the timing is where this
@@ -117,7 +131,22 @@ export const useTodosUrlSync = (
     });
   };
 
-  // Typing should not push a history entry per keystroke.
+  /*
+    Typing should not push a history entry per keystroke.
+
+    **`view` is in the dependency list on purpose and no test covers it.** It
+    matters only when the URL's view changes while a push of ours is pending:
+    the debounce has to re-ask `isPushNeeded` against the new URL, or the text
+    is left owed to a URL nobody will tell it about. Every path that changes
+    the view *from here* goes through `push`, which is why removing this dep
+    leaves the suite green — the case it exists for needs an outside navigation
+    to `/todos`, and this module's own doc records that the app has none today.
+
+    So it is here for the same reason the pending list matches anywhere rather
+    than at the head: the guard does not rest on "that cannot happen". Do not
+    tidy it away as unused — if you are about to, the thing to add first is the
+    outside navigation that would prove it.
+  */
   useEffect(() => {
     if (!isPushNeeded(synced, { filters, view })) return;
 
