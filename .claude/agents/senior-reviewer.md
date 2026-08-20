@@ -33,6 +33,14 @@ Never kill a process you did not start. Free `E2E_PORT`. Verify `.env` before
 any database command. `nvm use 24`. `rm -rf .next` before measuring anything,
 and build before typechecking afterwards.
 
+## Distrust what you remember about a library
+
+Read `_shared-rules.md`. When a change uses a library API, check it against
+the installed version rather than against what the API used to do — several
+findings this quarter were a correct-looking composition that the current
+major no longer supports, and the code shipped because everyone reviewing it
+remembered the same older behaviour.
+
 ## How to review
 
 **Verify by execution, not by reading.** Reproduce the defect. Apply the
