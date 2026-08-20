@@ -13,7 +13,7 @@ import {
 
 import { CANCEL_LABEL } from "@/app/todos/constants";
 import { getErrorMessage } from "@/lib/getErrorMessage";
-import { DIALOG_ACTION_SIZING, DIALOG_FOOTER_LAYOUT } from "@/lib/styles";
+import { DIALOG_FOOTER_LAYOUT, FULL_WIDTH_ACTION_SIZING } from "@/lib/styles";
 import { toDueDateInputValue, type TodoItemData } from "@/lib/todo";
 import { createTodo, updateTodo } from "@/service/todo.service";
 
@@ -215,7 +215,7 @@ export const TodoFormModal = ({
           <Modal.Footer className={DIALOG_FOOTER_LAYOUT}>
             <Button
               variant="tertiary"
-              className={DIALOG_ACTION_SIZING}
+              className={FULL_WIDTH_ACTION_SIZING}
               isDisabled={isPending}
               onPress={closeForm}
             >
@@ -225,7 +225,7 @@ export const TodoFormModal = ({
               type="submit"
               form={FORM_ID}
               variant="primary"
-              className={DIALOG_ACTION_SIZING}
+              className={FULL_WIDTH_ACTION_SIZING}
               isDisabled={isPending}
             >
               {isPending ? (

@@ -552,7 +552,13 @@ copy that belongs to that route; these do not belong to a route.
 - it is a numbered rule from `docs/DESIGN.md` — §2.2's spacing steps, §2.4's
   type scale, §6.3's 44×44 tap floor;
 - a second file has to match it or something visibly breaks, e.g. a loading
-  skeleton against the component it stands in for (§4.8).
+  skeleton against the component it stands in for (§4.8);
+- it is a **documented deviation** from one of those rules. `CHIP_SIZING` and
+  `SECONDARY_ACTION_SIZING` are each used exactly once and by the tests above
+  would stay inline. They are here because they are the app's only two
+  controls sitting below §6.3's 36px pointer step, and a deviation from a rule
+  belongs where someone auditing that rule will look, not in the component
+  that quietly takes it.
 
 **Otherwise it stays inline.** Two components that arrive at the same string
 for *different reasons* are not a duplicate and must not be merged:

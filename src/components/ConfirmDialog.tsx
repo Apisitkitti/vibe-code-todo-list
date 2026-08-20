@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 
 import { AlertDialog, Button, Spinner } from "@heroui/react";
 
-import { DIALOG_ACTION_SIZING, DIALOG_FOOTER_LAYOUT } from "@/lib/styles";
+import { DIALOG_FOOTER_LAYOUT, FULL_WIDTH_ACTION_SIZING } from "@/lib/styles";
 
 const CANCEL_LABEL = "Cancel";
 
@@ -60,7 +60,7 @@ export const ConfirmDialog = ({
           <AlertDialog.Footer className={DIALOG_FOOTER_LAYOUT}>
             <Button
               variant="tertiary"
-              className={DIALOG_ACTION_SIZING}
+              className={FULL_WIDTH_ACTION_SIZING}
               isDisabled={isPending}
               autoFocus={isDestructive}
               onPress={() => onOpenChange(false)}
@@ -69,7 +69,7 @@ export const ConfirmDialog = ({
             </Button>
             <Button
               variant={isDestructive ? "danger" : "primary"}
-              className={DIALOG_ACTION_SIZING}
+              className={FULL_WIDTH_ACTION_SIZING}
               isDisabled={isPending}
               autoFocus={!isDestructive}
               onPress={onConfirm}

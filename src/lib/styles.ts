@@ -76,20 +76,58 @@ export const LABELLED_CONTROL_SIZING = "min-h-11 sm:min-h-9";
 export const FORM_ACTION_SIZING = "min-h-11";
 
 /**
- * A dialog's footer buttons: the floor above, plus the full-width-on-mobile
- * treatment that the stacked footer needs. Composed from `FORM_ACTION_SIZING`
- * so the floor has exactly one definition.
+ * An action button that takes the full width on mobile and hugs its label on
+ * pointer: the floor above, plus `w-full sm:w-auto`. Composed from
+ * `FORM_ACTION_SIZING` so the floor has exactly one definition.
+ *
+ * Named for the shape rather than for a dialog, because it is not only a
+ * dialog's: `TodoFormModal` and `ConfirmDialog` use it in a stacked footer,
+ * and `QuickAddForm`'s submit uses it inline in the list screen, where there
+ * is no dialog at all. An earlier name said `DIALOG_` and was wrong at that
+ * third site — the same mistake this file's own rule warns about, that two
+ * places reaching one string for different reasons must not be given a name
+ * that claims only one of the reasons.
  */
-export const DIALOG_ACTION_SIZING = `${FORM_ACTION_SIZING} w-full sm:w-auto`;
+export const FULL_WIDTH_ACTION_SIZING = `${FORM_ACTION_SIZING} w-full sm:w-auto`;
+
+/*
+ * The two constants below hold the same string and are deliberately not
+ * merged, because the controls do not take the step for the same reason.
+ *
+ * Both sit on a 32px pointer step (`sm:min-h-8`) rather than the 36px one the
+ * rest of the app relaxes to. That is **below the app's own pointer floor**
+ * and above WCAG 2.2 SC 2.5.8's 24×24, which is the floor that actually
+ * binds. It is pre-existing behaviour, not something this file introduced,
+ * and no test pins either value: emptying them leaves the suite green. Treat
+ * the 32px step as tolerated, not as sanctioned — if either control is
+ * restyled, moving it up to `sm:min-h-9` needs no justification and keeping
+ * it at 32 does.
+ *
+ * Each is used in exactly one place, which by the rule at the top of this file
+ * would leave it inline. They are here anyway, and the exception is the point:
+ * these are the app's only two deviations from §6.3's pointer floor, and a
+ * deviation from a rule belongs where someone auditing that rule will look,
+ * not hidden in the component that takes it.
+ */
 
 /**
- * The quick-add parser's chips. They relax further than a control does — to
- * `sm:min-h-8` (32px) rather than `sm:min-h-9` — because a chip is a readout
- * that happens to be pressable, not a primary control. Below the app's own
- * 36px pointer step but above WCAG 2.2 SC 2.5.8's 24×24, which is the floor
- * that actually binds.
+ * The quick-add parser's chips — `pay rent`, `friday`, `high` — each a
+ * readout of what the parser took from the typed text, which happens to be
+ * pressable so it can be dismissed. A readout is not a control the user goes
+ * looking for, which is the case for sizing it under the pointer floor.
  */
 export const CHIP_SIZING = "min-h-11 sm:min-h-8";
+
+/**
+ * The quick-add bar's **More options** button, which opens the full todo
+ * form. This is a real control and the reasoning above does not cover it —
+ * it is at 32px because it sits in the chip row and matches the chips, which
+ * is an alignment argument rather than an accessibility one. Kept separate
+ * from `CHIP_SIZING` so that raising this one does not silently raise the
+ * chips, and so the weaker justification stays attached to the control it
+ * actually applies to.
+ */
+export const SECONDARY_ACTION_SIZING = "min-h-11 sm:min-h-8";
 
 /* ------------------------------------------------------------------ shell  */
 

@@ -217,7 +217,11 @@ point inward and `src/lib` is the floor.
 - it is a numbered rule from `docs/DESIGN.md` (the §2.2 spacing steps, §2.4's
   type scale, §6.3's 44×44 tap floor);
 - a second file has to match it or something visibly breaks — a skeleton
-  against the thing it stands in for (§4.8).
+  against the thing it stands in for (§4.8);
+- it is a **documented deviation** from one of those rules. `CHIP_SIZING` and
+  `SECONDARY_ACTION_SIZING` are each used once and would otherwise stay
+  inline; they are the app's only two controls below §6.3's pointer floor, and
+  a deviation belongs where someone auditing the rule will look.
 
 **A value stays inline when** it appears once, in the component it belongs to,
 describing that component's own layout. Two components arriving at the same
