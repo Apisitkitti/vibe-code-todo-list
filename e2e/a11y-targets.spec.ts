@@ -52,9 +52,15 @@ const CLICK_DELIVERY_ATTEMPTS = 2;
  * the corners, so a real regression is reported on the first pass and never
  * re-read.
  *
- * Four attempts at 100ms is a tenth of a second of tolerance, chosen to be
- * shorter than anything a person would notice and long enough to cover a
- * fault measured at roughly 0.5–3% of runs.
+ * Four re-reads at 100ms is **400ms** of settling. The fault's duration is
+ * **unknown** — 220 instrumented sweeps against a healthy component never fired
+ * the retry once, so there is nothing to fit a number to, and a rate tells you
+ * nothing about a duration. This is a bound, not a fit.
+ *
+ * What justifies it is the baseline rather than the fault: `develop` already
+ * ships four re-reads with no delay between them, spanning under 15ms in total.
+ * This is strictly more tolerant than the merge target, so the release does not
+ * regress on the axis in question.
  */
 const MAX_SWEEP_ATTEMPTS = 4;
 const SWEEP_RETRY_MS = 100;
@@ -293,10 +299,14 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
       gates on. Clipping lands probes on `main` (or `body` at extreme squeezes)
       and takes the right-hand pair first, because the clip has an edge. This
       one lands every probe on `<html>` at once, with the control present,
-      correctly sized and unmoved. The loop re-reads only while the **centre**
-      misses, which is this failure and never the clip's — and it cannot mask a
+      correctly sized and unmoved.
+
+      The loop re-reads only while the **centre** misses. It cannot mask a
       genuinely undersized control, because a small control still hits dead
-      centre and fails the corners on the first pass.
+      centre and fails the corners on the first pass — measured, with zero
+      retries consumed. It is not true that the loop never fires for the clip:
+      at a full clip the centre misses too and all four retries are spent,
+      costing 435ms and masking nothing.
 
       So this is a workaround for something unexplained, kept deliberately
       rather than because it is understood. What is known: it survives the
@@ -308,30 +318,39 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
       is finding what `<html>` means here when nothing is clipped.
     */
     let sweep = await sweepHitTest(signedIn, WCAG_MIN);
+    let retriesUsed = 0;
 
-    for (
-      let attempt = 0;
-      attempt < MAX_SWEEP_ATTEMPTS &&
+    while (
+      retriesUsed < MAX_SWEEP_ATTEMPTS &&
       sweep !== null &&
-      sweep.probes.some((probe) => probe.name === "centre" && !probe.hits);
-      attempt += 1
+      sweep.probes.some((probe) => probe.name === "centre" && !probe.hits)
     ) {
+      retriesUsed += 1;
+
       await signedIn.waitForTimeout(SWEEP_RETRY_MS);
 
       sweep = await sweepHitTest(signedIn, WCAG_MIN);
     }
 
+    /*
+      Reported on every failure, because without it a red cannot tell you
+      whether the budget was spent and lost or the fault was there on the first
+      read — and those want opposite responses. Nobody should have to re-derive
+      this to tune the numbers above.
+    */
+    const budget = `retries used: ${retriesUsed} of ${MAX_SWEEP_ATTEMPTS}`;
+
     expect(sweep, "the clear button is not rendered").not.toBeNull();
 
     for (const probe of sweep?.probes ?? []) {
       expect
-        .soft(probe.hits, `probe ${probe.name}\n${describeSweep(sweep)}`)
+        .soft(probe.hits, `probe ${probe.name}\n${budget}\n${describeSweep(sweep)}`)
         .toBe(true);
     }
 
     expect(
       sweep?.probes.every((probe) => probe.hits),
-      `not every probe landed on the clear button\n${describeSweep(sweep)}`,
+      `not every probe landed on the clear button\n${budget}\n${describeSweep(sweep)}`,
     ).toBe(true);
   });
 

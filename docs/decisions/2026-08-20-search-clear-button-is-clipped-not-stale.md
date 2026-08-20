@@ -1,4 +1,4 @@
-# The search clear button was clipped, not stale
+# The search clear button was clipped — and that is not the whole story
 
 *2026-08-20 — Junior dev, closing the intermittent reds on
 `e2e/a11y-targets.spec.ts`.*
@@ -7,11 +7,12 @@
 group's width cap governs its layout instead of the input's intrinsic width.
 `overflow: hidden` stays on the group, the group gets no width floor, and the
 hit-test sweep in `e2e/a11y-targets.spec.ts` records **what** each probe landed
-on rather than only whether it landed. The sweep's re-read loop is **removed**,
-and the effect test's click retry is cut from five attempts to two.
+on rather than only whether it landed. The sweep's re-read loop is **kept**,
+retitled as a workaround for a fault that is still undiagnosed, and the effect
+test's click retry is cut from five attempts to two.
 
-**What raised it:** three failures that were chased separately for days and are
-one bug.
+**What raised it:** three failures chased separately for days. **Two of them are
+this bug. The third is not, and is still open** — see the correction below.
 
 - All five probes missing at once, with `elementFromPoint` answering `<html>`.
 - A press whose `pointerdown`/`mousedown` land on the button and whose
@@ -51,17 +52,20 @@ One continuum, three reported symptoms. The group's min-content is 242px against
 the 256px cap, so there are 14px of slack and 8px of them are the button's
 `margin-inline-end`. Forcing the input to `monospace` takes the group's
 `scrollWidth` to 261 against a `clientWidth` of 256 — already overflowing — and
-cuts the button's headroom from 8px to 3px. Geist arrives through `next/font`,
-**Correction, from review.** A fallback face while `next/font` settles was the
-first guess at what tips it over, and it does not survive measurement: at the
-app's real width no face reaches the cliff — Geist and seven others sit at
-256/256, monospace at 261/256, Courier New at 260/256, every probe hitting. The
-CI signature needs content near 278. The overflow is reachable by construction
-and the trigger that reached it on CI is **unknown**. What follows is the
-original guess, kept for the record rather than as fact.
+cuts the button's headroom from 8px to 3px.
 
-The original guess was that
-metrics on CI's headless Linux, and transiently during swap locally.
+> **Correction, from review.** The original guess, kept here for the record
+> rather than as fact, was: *"Geist arrives through `next/font`, so a fallback
+> face is measuring the field until the webfont settles — different metrics on
+> CI's headless Linux, and transiently during swap locally."*
+>
+> It does not survive measurement. At the app's real width no face reaches the
+> cliff: Geist and seven others sit at 256/256, monospace at 261/256, Courier
+> New at 260/256, and every probe hits in all of them. The CI signature needs
+> content near 278, about 17px beyond the widest face available.
+>
+> So the overflow is **reachable by construction** and the trigger that reached
+> it on CI is **unknown**. Recorded as unknown deliberately.
 
 ## Two standing hypotheses that are now refuted, and must not come back
 
@@ -103,35 +107,53 @@ because the input is now the thing that shrinks. That is the right thing to give
 up: it is recoverable by scrolling within the input, and it is the only thing
 the field can give up without taking width from the row beside it.
 
-## Why the re-sweep is gone
+## Why the re-sweep stays
 
-The sweep looped while the **centre** probe missed. That was correct for what it
-targeted and it never fired for the right-only case, so it never covered the CI
-failure at all. The sharper point is that if the cause is clipping rather than
-staleness, **re-sweeping a still-overflowed layout returns the same answer** —
-**Correction, from review.** The loop was restored. Review reproduced the
-historical signature on the fixed tree — 119 of 120 at `--repeat-each=20`, all
-five probes on `<html>`, with **overhang −8 and zero group overflow**. Nothing
-was clipped, so the clip is not that failure's cause and the two families do
-not unify. The clip lands probes on `main` and takes the right pair first; the
-undiagnosed fault lands all five on `<html>` at once. The loop gates on the
-centre, which is the second and never the first. It is kept as a workaround for
-something unexplained, said plainly in the test.
+It was deleted once, and restoring it is the most important correction in this
+record.
 
-The original reasoning for deleting it was that
-curing anything. It was a sleep with a condition attached.
+> **Correction, from review.** The original reasoning for deleting it was:
+> *"re-sweeping a still-overflowed layout returns the same answer, so where the
+> loop appeared to help it was waiting out a font swap rather than curing
+> anything — a sleep with a condition attached."*
+>
+> Review reproduced the historical signature on the **fixed** tree: 119 of 120
+> at `--repeat-each=20`, all five probes landing on `<html>`, with **overhang
+> −8 and zero group overflow**. Nothing was clipped. The clip is not that
+> failure's cause, and the two families do not unify.
 
-With the cap governing, there is no swap to wait out: the button cannot leave the
-group at any font metric. Keeping the loop would only suppress the signal the new
-gate exists to produce. The click retry in the effect test was the same
-tolerance for the same bug and is cut to two attempts — the one remaining clause
-covers React Aria's `usePress` firing on `pointerup`, where a press takes effect
-without a `click` and a second `click()` would aim at a button that no longer
-exists.
+So there are two faults, and they are distinguishable:
 
-Evidence that nothing was load-bearing: the three previously intermittent
-assertions ran **120/120 green with no retries** (`--repeat-each=20`, both
-projects). The historical rate was ~3%, which would have produced 3–4 failures.
+- **The clip.** Probes land on `main` (or `body` at extreme squeezes) and the
+  right-hand pair goes first, because a clip has an edge. Diagnosed, fixed by
+  `min-w-0`, and gated by the squeeze test.
+- **The `<html>` fault.** All five probes miss at once and every one lands on
+  `<html>`, with the control present, correctly sized and unmoved. **Still
+  undiagnosed.** Roughly 0.5–3% of runs, load-dependent — one reviewer saw it
+  once in ~186 runs and then not once in 220.
+
+The loop gates on the **centre** probe. That is the right gate because an
+undersized control still hits dead centre and fails only the corners, so a real
+DEF-16 regression is reported on the first pass having consumed no retries —
+measured: `used=0, centreHit=true, corners=4`. It is not true, as an earlier
+draft of this record claimed, that the loop never fires for the clip: at a full
+clip the centre misses too and all four retries are consumed, costing 435ms and
+masking nothing.
+
+The budget is four re-reads at 100ms, so **400ms** of settling. The fault's
+duration is **unknown** — 220 instrumented sweeps against a healthy component
+never fired the retry once, so there is no measurement to fit. The number is a
+bound, not a fit. What justifies it is the baseline: `develop` ships four
+re-reads with no delay between them, spanning under 15ms in total, so this is
+strictly more tolerant than the merge target rather than a new indulgence.
+
+The click retry in the effect test is cut to two attempts. The one remaining
+clause covers React Aria's `usePress` firing on `pointerup`, where a press takes
+effect without a `click` — and a second `click()` would then aim at a button the
+empty state has made inert. `search-field.css` gives the cleared field's button
+`pointer-events-none opacity-0` and leaves the node in place, so the retry would
+burn a 20s action timeout on "does not receive pointer events" rather than on
+anything true.
 
 ## Why the suite could not see this, and what changed
 
