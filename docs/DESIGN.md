@@ -1104,6 +1104,47 @@ double-presses on the *key* rather than on the toast's presence.
 
 ---
 
+### 4.11 `/todos` — board view
+
+The same todos as §4.3, laid out as five columns instead of five stacked
+sections (`docs/PRD.md` US-14). Chosen with a `ToggleButtonGroup` above the
+list, matching the status filter beside it, and remembered in the URL as
+`view=board`.
+
+| Part | Treatment |
+|---|---|
+| Container | `max-w-7xl` instead of §2.2's `max-w-2xl`, and only for this view — five columns inside 672px would be 130px each |
+| Grid | `grid-cols-5`, equal columns, `gap-2`, `items-start` |
+| Column | `<section>` with an `<h2>` and its own `<ul>` — the same structure §7.16 gives the list's sections, so switching views does not reshape the heading tree |
+| Column heading | The §7.16 heading and its `aria-hidden` count, at `--foreground`. **No colour, no fill, no per-column accent** — the columns are structure, and §3's one-saturated-element budget is not spent on decoration |
+| Empty column | One muted line (§7.20), never hidden — an empty column is a drop target |
+| Card | `TodoCard`: checkbox and title on the first line, chip / date / note marker and the three actions on the second. `rounded-2xl border border-border-secondary`, the row's own §8.7 outline |
+| Card title | Wraps to at most three lines, where the row truncates. A row truncates because it is scanned against its neighbours down a shared right edge (§1); a card has no such column to keep |
+| Card actions | Always visible, where the row hides them until hover at `lg:`. A card is a discrete object with room around it |
+| Drag affordance | The carried card and the column that would take it are outlined `--accent` with an 8–12% tint. Both are **transient** — present only while a drag is in progress — and the moved card's settle ring lasts 2.5s. Nothing on this screen is accent-tinted at rest |
+| Loading | Five skeleton columns, two card outlines each (§4.8) |
+| Empty account / filter | The §4.7 empty state, not five empty columns — five columns saying "nothing" say nothing, and would push the call to action off the bottom |
+| Error | One §4.9 alert above the columns. One `GET` backs all five, so five identical alerts would be five lies about five failures |
+
+**On the accent budget.** §3 allows one saturated element at rest, and `/todos`
+is already over it (§8.4). This view adds nothing at rest: the column headings
+inherit §7.16's `--foreground` weight-plus-count treatment exactly, the cards
+carry the same `--border-secondary` outline the rows do, and every accent use
+above appears only while the user is holding a card or for a moment after they
+let go. The view toggle is a second `ToggleButtonGroup` beside the status
+filter — the same control with the same selected treatment, not a new one — and
+it is gated on `hasTodos`, so it never appears on the empty screen where the
+existing over-spend lives.
+
+**Below `lg` (1024px) this view renders the list.** Five columns do not fit, and
+HTML5 drag does not fire on touch at all — so a phone gets the same five groups
+stacked, with the same reschedule menu, which is the whole of the board's write
+vocabulary. The toggle is hidden there rather than shown inert: a control
+reporting `Board` while the list is on screen is a control lying about the state
+it shows. The URL keeps `view=board`, so widening the window restores it.
+
+---
+
 ## 5. Component usage table
 
 Import path is `@heroui/react` for every row (single barrel, verified at
@@ -2013,6 +2054,43 @@ the kind of thing that can be derived wrongly. A later write to the same todo
 dismisses the toast (`dismissUndo`, keyed per todo id) so an Undo can never
 reach past a change the user made after it.
 
+### 7.20 Board view
+
+`docs/PRD.md` US-14. The column headings are §7.16's, unchanged — the board is
+the list's own sections laid out sideways, and a second set of names for the
+same five groups would be the first sign it had become a second opinion about
+where a todo belongs.
+
+| Slot | String |
+|---|---|
+| View toggle `aria-label` | `Choose a view` |
+| Toggle option 1 | `List` |
+| Toggle option 2 | `Board` |
+| Column headings | §7.16's five, with §7.16's `aria-hidden` count |
+| Empty `Overdue` | `Nothing overdue.` |
+| Empty `Today` | `Nothing due today.` |
+| Empty `Upcoming` | `Nothing scheduled ahead.` |
+| Empty `No date` | `Every todo has a date.` |
+| Empty `Completed` | `Nothing completed yet.` |
+| Order note, under the columns | `Cards are ordered by due date within each column. Dropping a card chooses its column, not its place in it.` |
+| Drag picked up | `Picked up “{title}”. Drop it on {columns, comma-separated}.` |
+| Drag picked up, nowhere to go | `Picked up “{title}”. There is nowhere to move it.` |
+| Drag dropped | `Dropped “{title}” on {column}.` |
+| Drag abandoned | `Move cancelled.` |
+| Anything written | §7.19's and §7.13's toasts, unchanged |
+
+**Two empty columns are good news and are worded as such.** `Nothing overdue.`
+and `Nothing due today.` are not the same kind of statement as
+`Every todo has a date.`, and five identical "Nothing here" lines would say
+nothing at all.
+
+**The drag messages describe the gesture; the toasts describe the write.** They
+are split that way so nothing is announced twice: a keyboard user never drags —
+their equivalent is the card's reschedule menu — and only ever hears the toast,
+while a pointer user with a screen reader hears the pick-up and the drop, which
+no toast covers, because a drag that is picked up and put down again writes
+nothing at all.
+
 ---
 
 ## 8. Design note: drag-and-drop and the completion control
@@ -2342,3 +2420,29 @@ already: it is a *field* default, and this is a plain border utility on an
 border width the theme zeroed out from under us. Any future boundary drawn on a
 HeroUI field — not on our own element — has to set its width explicitly and be
 measured, not assumed.
+
+
+### 8.8 The board — what §8.1 does and does not cover
+
+*2026-08-20 — Junior dev, implementing `docs/PRD.md` US-14.*
+
+**§8.1 declined drag-and-drop *reordering*, and that decision stands untouched.**
+US-14 ships a drag that reorders nothing: the columns are the five urgency
+groups `groupTodos` already computes, and a drop writes a **due date** or a
+**completion** through the two routes that already exist. No `position` column,
+no within-column reordering, no schema change, **no new ordering authority** —
+order inside a column is the server's, exactly as in the list.
+
+So the two are compatible rather than contradictory, and the reason is worth
+stating in one line: §8.1's objection is that manual position and due-date order
+are rival authorities and only one can win. This board has no position at all.
+Nothing in it should be read as permission to add one.
+
+The full reasoning — the column-to-date mapping, why `Overdue` takes no drops,
+the drop-position problem and the three options weighed against it, the keyboard
+story, and what would change the decision — is a decision record, per
+`docs/decisions/README.md`:
+**`docs/decisions/2026-08-20-board-is-a-view-not-an-order.md`**.
+
+The specification for what shipped is §4.11 (screen), §7.20 (copy) and
+`docs/PRD.md` US-14.
