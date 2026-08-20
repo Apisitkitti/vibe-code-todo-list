@@ -161,8 +161,43 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
         true,
       );
     }
+  });
 
-    // And it really clears — the probes prove reach, this proves effect.
+  /*
+    Split out of the probe test above, where it used to be a two-line tail
+    ("the probes prove reach, this proves effect").
+
+    It was not paying for itself there. This assertion — and only this
+    assertion — failed for four different people, and because it failed inside
+    a test named for a 24×24 region taking a press, all four read it as
+    geometry: a 24 probe in a 36px circle leaves about a pixel of margin, so a
+    tap-target regression was always the plausible story, and the run gave no
+    evidence against it. Nobody was measuring anything. All five geometry
+    probes passed every time.
+
+    The real cause is a product race with nothing to do with tap targets: the
+    field's own debounced push of `?q=…` landed after the clear and refilled
+    the box, permanently. That is `e2e/search-clear-race.spec.ts`, which holds
+    the navigation open and so pins the interleaving on every run instead of
+    roughly twice in eighteen.
+
+    What is left here is worth keeping — reach without effect is not a target,
+    and this is the only place that closes that gap for the clear button — but
+    it needs to fail under its own name. If it goes red and the spec above is
+    green, the shape of the control is not the problem; start from the race.
+  */
+  test("the press actually empties the field", async ({ signedIn, todos }) => {
+    await todos.quickAdd("something to search for");
+    await expect(
+      signedIn.locator("main").getByText("something to search for"),
+    ).toBeVisible();
+
+    const search = signedIn.getByRole("searchbox", { name: "Search todos" });
+    const clear = signedIn.locator('[data-slot="search-field-clear-button"]');
+
+    await search.fill("something");
+    await expect(clear).toBeVisible();
+
     await clear.click();
     await expect(search).toHaveValue("");
   });
