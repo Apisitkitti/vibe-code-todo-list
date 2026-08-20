@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import { todoFormSchema } from "@/app/todos/components/form";
 import { NOTE_MAX_LENGTH, TITLE_MAX_LENGTH } from "@/lib/todo";
+import { todoFormSchema } from "@/lib/todo.schema";
 
 /**
  * The schema is the trust boundary: the route handlers re-parse every body

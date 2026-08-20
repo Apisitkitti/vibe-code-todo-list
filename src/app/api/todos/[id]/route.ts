@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { todoFormSchema } from "@/app/todos/components/form";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { parseDueDate } from "@/lib/todo";
+import { todoFormSchema } from "@/lib/todo.schema";
 
 import {
   badRequestResponse,

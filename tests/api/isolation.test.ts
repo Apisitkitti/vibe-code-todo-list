@@ -19,6 +19,7 @@ vi.mock("next/headers", () => ({
   headers: async () => currentRequestHeaders(),
 }));
 
+import { PATCH as patchDue } from "@/app/api/todos/[id]/due/route";
 import { DELETE as deleteTodo, PATCH as patchFields } from "@/app/api/todos/[id]/route";
 import { PATCH as patchStatus } from "@/app/api/todos/[id]/status/route";
 import { GET, POST } from "@/app/api/todos/route";
@@ -71,7 +72,7 @@ let userA: TestUser;
 let userB: TestUser;
 
 /** A's row, recreated before each test so one test cannot mask another. */
-let todoOfA: { id: string; title: string; completed: boolean };
+let todoOfA: { id: string; title: string; completed: boolean; dueAt: Date | null };
 let todoOfB: { id: string };
 
 const A_TITLE = "Buy milk";
@@ -86,6 +87,14 @@ const B_TITLE = "B's own errand";
 const B_NOTE = "Ring the caterer before Friday";
 
 const NONEXISTENT_ID = "totally-made-up-id-xyz";
+
+/**
+ * A's own due date, and the value B tries to move it to. They differ, so a
+ * write that lands is visible — seeding no date at all would let a dropped
+ * scope pass whenever B happened to write `null`.
+ */
+const A_DUE_AT = new Date("2026-08-16T00:00:00.000Z");
+const B_ATTEMPTED_DUE_DAY = "2027-01-01";
 
 const asUser = (user: TestUser) =>
   setRequestHeaders(headersWithCookie(user.cookie));
@@ -111,6 +120,7 @@ beforeEach(async () => {
     title: A_TITLE,
     note: A_NOTE,
     priority: "high",
+    dueAt: A_DUE_AT,
   });
   todoOfB = await createTodo(userB.id, {
     title: B_TITLE,
@@ -164,6 +174,39 @@ describe("B cannot reach A's todo", () => {
     expect((await readTodo(todoOfA.id))?.completed).toBe(false);
   });
 
+  test("PATCH /api/todos/[id]/due is a 404 and does not move the date", async () => {
+    const response = await patchDue(
+      jsonRequest(`/api/todos/${todoOfA.id}/due`, "PATCH", {
+        dueAt: B_ATTEMPTED_DUE_DAY,
+      }),
+      idContext(todoOfA.id),
+    );
+
+    expect(response.status).toBe(404);
+    expect((await readError(response)).code).toBe("NOT_FOUND");
+    expect((await readTodo(todoOfA.id))?.dueAt?.toISOString()).toBe(
+      A_DUE_AT.toISOString(),
+    );
+  });
+
+  /**
+   * Clearing is the destructive half of this route and deserves its own case: a
+   * dropped scope on a `null` write erases somebody else's date, and the row it
+   * erased still answers 404 because the 404 comes from the scoped re-read
+   * afterwards.
+   */
+  test("PATCH /api/todos/[id]/due with null is a 404 and does not clear the date", async () => {
+    const response = await patchDue(
+      jsonRequest(`/api/todos/${todoOfA.id}/due`, "PATCH", { dueAt: null }),
+      idContext(todoOfA.id),
+    );
+
+    expect(response.status).toBe(404);
+    expect((await readTodo(todoOfA.id))?.dueAt?.toISOString()).toBe(
+      A_DUE_AT.toISOString(),
+    );
+  });
+
   test("DELETE /api/todos/[id] is a 404 and the row survives", async () => {
     const response = await deleteTodo(
       deleteRequest(`/api/todos/${todoOfA.id}`),
@@ -187,13 +230,21 @@ describe("B cannot reach A's todo", () => {
         }),
         idContext(todoOfA.id),
       ),
+      patchDue(
+        jsonRequest(`/api/todos/${todoOfA.id}/due`, "PATCH", {
+          dueAt: B_ATTEMPTED_DUE_DAY,
+        }),
+        idContext(todoOfA.id),
+      ),
       deleteTodo(
         deleteRequest(`/api/todos/${todoOfA.id}`),
         idContext(todoOfA.id),
       ),
     ]);
 
-    expect(responses.map((response) => response.status)).toEqual([404, 404, 404]);
+    expect(responses.map((response) => response.status)).toEqual([
+      404, 404, 404, 404,
+    ]);
   });
 });
 
@@ -239,6 +290,30 @@ describe("a foreign id is indistinguishable from a nonexistent one", () => {
     expect(foreign.status).toBe(missing.status);
     expect(await readError(foreign)).toEqual(await readError(missing));
     expect((await readTodo(todoOfA.id))?.completed).toBe(false);
+  });
+
+  test("PATCH /api/todos/[id]/due answers identically", async () => {
+    const foreign = await patchDue(
+      jsonRequest(`/api/todos/${todoOfA.id}/due`, "PATCH", {
+        dueAt: B_ATTEMPTED_DUE_DAY,
+      }),
+      idContext(todoOfA.id),
+    );
+    const missing = await patchDue(
+      jsonRequest(`/api/todos/${NONEXISTENT_ID}/due`, "PATCH", {
+        dueAt: B_ATTEMPTED_DUE_DAY,
+      }),
+      idContext(NONEXISTENT_ID),
+    );
+
+    expect(foreign.status).toBe(missing.status);
+    expect(await readError(foreign)).toEqual(await readError(missing));
+    // Matching each other is not enough: with `userId` dropped from the
+    // `updateMany`, both still answer 404 — that 404 comes from the scoped
+    // re-read that follows — while the foreign one has already moved the date.
+    expect((await readTodo(todoOfA.id))?.dueAt?.toISOString()).toBe(
+      A_DUE_AT.toISOString(),
+    );
   });
 
   test("DELETE /api/todos/[id] answers identically", async () => {
@@ -385,6 +460,21 @@ describe("signed out, every endpoint refuses and writes nothing", () => {
 
     expect(response.status).toBe(401);
     expect((await readTodo(todoOfA.id))?.completed).toBe(false);
+  });
+
+  test("PATCH /api/todos/[id]/due is a 401 and the date is untouched", async () => {
+    const response = await patchDue(
+      jsonRequest(`/api/todos/${todoOfA.id}/due`, "PATCH", {
+        dueAt: B_ATTEMPTED_DUE_DAY,
+      }),
+      idContext(todoOfA.id),
+    );
+
+    expect(response.status).toBe(401);
+    expect((await readError(response)).code).toBe("UNAUTHORIZED");
+    expect((await readTodo(todoOfA.id))?.dueAt?.toISOString()).toBe(
+      A_DUE_AT.toISOString(),
+    );
   });
 
   test("DELETE /api/todos/[id] is a 401 and the row survives", async () => {

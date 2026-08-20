@@ -17,6 +17,7 @@ import { useFocusVisible } from "react-aria";
 import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
 import { useTodoList } from "@/app/todos/hooks/useTodoList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { formatDueDate } from "@/lib/date";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { createHandoff } from "@/lib/handoff";
 import {
@@ -25,23 +26,40 @@ import {
   focusUndoAction,
   nextUndoToken,
   readFocusedRow,
+  restoreRescheduleFocus,
   undoTokenProps,
 } from "@/lib/rowFocus";
-import type { TodoItemData, TodoListFilters } from "@/lib/todo";
+import {
+  toDueDateInputValue,
+  type TodoItemData,
+  type TodoListFilters,
+} from "@/lib/todo";
+import { groupTodos, type TodoGroup } from "@/lib/todoGroups";
 import {
   applyCompletion,
   replaceTodo,
   todoMatchesFilters,
   todoMatchesStatusFilter,
 } from "@/lib/todoListState";
-import { deleteTodo, toggleTodo, updateTodo } from "@/service/todo.service";
+import {
+  deleteTodo,
+  rescheduleTodo,
+  toggleTodo,
+  updateTodo,
+} from "@/service/todo.service";
 
-import type { TodoFormValues } from "./form";
+/*
+  The schema's real home, not the form barrel. `TodoFormValues` is the write
+  contract — the route handlers re-parse with it — and this screen wants the
+  contract, not a form component, so it says so.
+*/
+import type { TodoFormValues } from "@/lib/todo.schema";
 import { QuickAddBar } from "./QuickAddBar";
 import { TodoEmptyState } from "./TodoEmptyState";
 import { TodoFilters } from "./TodoFilters";
 import { TodoFormModal } from "./TodoFormModal";
 import { TodoGroupedList } from "./TodoGroupedList";
+import { TodoListHeaderLine } from "./TodoListHeaderLine";
 import { TodoListSkeleton } from "./TodoListSkeleton";
 
 const TODOS_PATH = "/todos";
@@ -75,6 +93,7 @@ const ADD_TODO_LABEL = "Add a todo";
  * Undo share one code path, and both kinds of Undo report the same wording.
  */
 const TOGGLE_FAILURE_MESSAGE = "Couldn’t update the todo. Try again.";
+const RESCHEDULE_FAILURE_MESSAGE = "Couldn’t change the due date. Try again.";
 const UNDO_FAILURE_MESSAGE = "Couldn’t undo that. Try again.";
 
 /** The word on the button (`docs/DESIGN.md` §7.13, §7.15). */
@@ -109,6 +128,12 @@ interface ToggleOutcome {
    * choose the §2 position it returns to.
    */
   reloadOnSuccess: boolean;
+}
+
+/** What a reschedule and its Undo do differently; everything else is shared. */
+interface RescheduleOutcome {
+  onSuccess: (saved: TodoItemData) => void;
+  failureMessage: string;
 }
 
 interface EmptyStateCopy {
@@ -764,6 +789,162 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     await running;
   };
 
+  /**
+   * What the toast says a reschedule did, in the row's own words.
+   *
+   * Built from `formatDueDate` — the same function the row's label uses — so
+   * the toast and the row can never describe one date two ways, and `Today`
+   * means the viewer's today in both places rather than in one of them
+   * (`src/lib/date.ts`). §7.11's pattern holds: it names the record and says
+   * what happened to it.
+   */
+  const rescheduledMessage = (title: string, dueAt: string | null) =>
+    dueAt === null
+      ? `Todo “${title}” due date cleared`
+      : `Todo “${title}” due ${formatDueDate(dueAt).label}`;
+
+  /**
+   * The one path a reschedule and its Undo both take. Undo is a reschedule —
+   * same endpoint, same authorization, a different value written to the same
+   * column — so it gets the same code rather than a parallel copy that can
+   * drift (`docs/CONVENTIONS.md` → Mutation UX). What differs is passed in.
+   *
+   * **Deliberately not optimistic, unlike the toggle.** A completion flip
+   * changes a boolean on a row that stays where it is; a due date changes the
+   * row's place in the §2 sequence, and local state is forbidden from
+   * re-sequencing (`src/lib/todoListState.ts`, invariants 1 and 2) because the
+   * server owns the order. So an optimistic reschedule could only ever move the
+   * row into the right *section* at the wrong position, and then correct itself
+   * — a second visible move for a press that happens a few times a day, not
+   * fifty. The row says it is busy through `aria-busy` and its disabled
+   * controls, and the change appears once, where it belongs, when the refetch
+   * lands.
+   */
+  const runReschedule = async (
+    todo: TodoItemData,
+    dueAt: string | null,
+    { onSuccess, failureMessage }: RescheduleOutcome,
+  ) => {
+    markPending(todo.id);
+
+    try {
+      const saved = await rescheduleTodo(todo.id, dueAt);
+
+      onSuccess(saved);
+      // Only the server can say where the row goes now, so this is the same
+      // refetch a restored row gets — see `runToggle`'s note on §2 position.
+      reloadSilently();
+    } catch (error) {
+      toast.danger(getErrorMessage(error, failureMessage));
+    } finally {
+      clearPending(todo.id);
+    }
+  };
+
+  /** Reports the restored date with the same §7.19 toast, and arms no further Undo. */
+  const undoReschedule = async (
+    todo: TodoItemData,
+    previousDueAt: string | null,
+  ) => {
+    await runReschedule(todo, previousDueAt, {
+      onSuccess: (saved) => {
+        toast.success(rescheduledMessage(saved.title, saved.dueAt));
+      },
+      failureMessage: UNDO_FAILURE_MESSAGE,
+    });
+  };
+
+  /**
+   * A due date is trivially reversible, so it fires immediately and offers Undo
+   * rather than opening a confirm dialog (`docs/CONVENTIONS.md` → Mutation UX:
+   * confirm what cannot be undone).
+   */
+  const handleReschedule = async (todo: TodoItemData, dueAt: string | null) => {
+    /*
+      The lock, and it lives here now rather than on the control (review F1).
+
+      `pendingTodoIds` has always been the lock — `useTodoList` says so — but
+      what *enforced* it was `isDisabled` on the row's buttons, and the
+      reschedule trigger no longer carries that: a disabled control is blurred
+      by the browser, which is the whole of F1. So the refusal moves to the one
+      place that can see the pending set.
+
+      It is not redundant with the menu's own open guard, and the difference is
+      measurable. react-aria closes the menu *asynchronously* after an item is
+      actioned — measured at more than 28ms in `next dev` — so `Enter` pressed
+      twice in quick succession re-activates the item on a menu that is still
+      open and never asks to open anything. Two `PATCH`es to the same column,
+      free to land in either order. The open guard cannot see that press; this
+      one can. Pinned by `e2e/reschedule.spec.ts`, which presses both inside
+      that window and after it.
+    */
+    if (pendingTodoIds.has(todo.id)) return;
+
+    // Before the write, like the toggle's: the row's outstanding Undo describes
+    // a date it is leaving (review M-1, M-2).
+    dismissUndo(todo.id);
+
+    /*
+      The value Undo puts back, read from the row **before** the write and never
+      recomputed afterwards — recomputing "the date it used to have" is the same
+      class of mistake as computing "next week" from the wrong anchor.
+
+      `toDueDateInputValue` takes the calendar day off the stored instant by
+      slicing the ISO string, so this is the *UTC* day the column already holds
+      and no local conversion happens on this path. That is correct and it is
+      the only place on this feature where local time must not be consulted: the
+      previous value is a fact about the record, not about the viewer.
+    */
+    const previousDay = toDueDateInputValue(todo.dueAt);
+    /*
+      `""` is `toDueDateInputValue`'s answer for "no date", and it is the one
+      spelling this route refuses — folding it to `null` here is what keeps the
+      client from ever being the caller that sends it. Written as a check on
+      the *value* rather than on `todo.dueAt` being `null`, because the value is
+      what goes on the wire: guarding the input leaves any other falsy reading
+      (an empty ISO string from a future response shape) to fall through as
+      `""` and come back a 400 the user cannot act on.
+    */
+    const previousDueAt = previousDay === "" ? null : previousDay;
+
+    await runReschedule(todo, dueAt, {
+      onSuccess: (saved) => {
+        showUndoableSuccess(
+          saved.id,
+          rescheduledMessage(saved.title, saved.dueAt),
+          () => {
+            void undoReschedule(saved, previousDueAt);
+          },
+        );
+      },
+      failureMessage: RESCHEDULE_FAILURE_MESSAGE,
+    });
+
+    /*
+      Focus, and the decision is to **restore rather than redirect**
+      (`src/lib/rowFocus.ts` → `restoreRescheduleFocus`).
+
+      A reschedule can move the row into a different section, and sections are
+      different `<section>` subtrees, so React rebuilds the row rather than
+      moving it — taking the trigger the user is standing on with it, and
+      dropping focus to `<body>` with nothing on screen to show for it. The
+      toggle's answer to that is to move focus to the toast's Undo, and it is
+      the right answer *there*, where the row is gone and the toast is the only
+      route back. Here the row is still on screen and still the user's, so the
+      right place for focus is the button they pressed — moving them to a toast
+      instead would arm an Undo under their next `Space` and cost them the §6.8
+      surprise for nothing.
+
+      Keyboard only, on the same reasoning §6.8 gives: a pointer user's focus is
+      not a place they are standing. Awaited after the write so the refetch that
+      moves the row has been asked for; the helper itself waits for the row to
+      actually be rebuilt and declines unless focus is on the floor, so a row
+      that did not change section leaves focus exactly where react-aria's menu
+      put it.
+    */
+    if (isFocusVisible) await restoreRescheduleFocus(todo.id);
+  };
+
   const handleDelete = async () => {
     if (!pendingDelete) return;
 
@@ -855,6 +1036,25 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     return noMatchingFilters();
   };
 
+  /**
+   * The sections, cut once per render and shared by the list and the header
+   * line above it (US-12).
+   *
+   * `null` while the list has not loaded and while it is showing a load
+   * failure. Both are cases where `result.todos` is not what is on screen — a
+   * filter change keeps the previous rows in `result` until the new ones land,
+   * so counting them would report the old filter's numbers under the new
+   * filter's heading — and US-12 asks for the date alone in the first case
+   * anyway, so the counts never render as zero and then change.
+   */
+  const visibleGroups = (): TodoGroup[] | null => {
+    if (isLoading || loadError !== null) return null;
+
+    return groupTodos(result.todos);
+  };
+
+  const groups = visibleGroups();
+
   const renderList = () => {
     if (isLoading) return <TodoListSkeleton />;
 
@@ -905,7 +1105,18 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
     */
     return (
       <TodoGroupedList
-        todos={result.todos}
+        /*
+          The same array the header line above is counting — one `groupTodos`
+          call per render feeding both, which is what makes "the line and the
+          list can never disagree" (US-12) a property of the code rather than
+          something a test has to keep catching.
+
+          Non-null by the time this line runs: `groups` is `null` only while
+          loading or while showing a load failure, and both of those branches
+          have already returned above. The `?? []` is the type narrowing, not a
+          fallback anybody expects to take.
+        */
+        groups={groups ?? []}
         pendingTodoIds={rowPendingIds()}
         /*
           The one row §8.3.2 still gives a row-level pending treatment to: a
@@ -919,6 +1130,9 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
           void handleToggle(target, nextCompleted);
         }}
         onEdit={openEdit}
+        onReschedule={(target, dueAt) => {
+          void handleReschedule(target, dueAt);
+        }}
         onDelete={setPendingDelete}
       />
     );
@@ -964,6 +1178,15 @@ export const TodoListScreen = ({ filters }: TodoListScreenProps) => {
           </Typography>
         ) : null}
       </div>
+
+      {/*
+        US-12. One plain-text line, below the app bar and above the list,
+        reporting the viewer's today and the sizes of the two sections that
+        answer "what now?". It is not gated on `hasTodos`: the date alone is
+        the specified state for an empty list and for a list still loading, and
+        a line that came and went would be a fourth thing moving on the page.
+      */}
+      <TodoListHeaderLine groups={groups} />
 
       {/*
         Never gated on `hasTodos`, unlike the filter bar below it and unlike

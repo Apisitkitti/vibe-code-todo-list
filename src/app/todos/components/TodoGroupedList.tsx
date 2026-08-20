@@ -3,7 +3,7 @@
 import { Separator, Typography } from "@heroui/react";
 
 import type { TodoItemData } from "@/lib/todo";
-import { groupTodos } from "@/lib/todoGroups";
+import type { TodoGroup } from "@/lib/todoGroups";
 
 import { TodoRow } from "./TodoRow";
 
@@ -16,14 +16,41 @@ import { TodoRow } from "./TodoRow";
  */
 const GROUP_HEADING_CLASS = "px-2 pt-1 text-sm leading-6";
 
+/**
+ * The count clause appended to each heading — `Overdue · 3`, `Completed · 214`
+ * (`docs/DESIGN.md` §7.16). `·` per §7.18's punctuation note.
+ *
+ * **`aria-hidden`, deliberately, so the accessible name stays exactly the
+ * §7.16 string.** The `<ul>` under each heading already reports its own size
+ * to assistive technology — "list, 3 items" — natively and more precisely than
+ * a numeral behind a middle dot, which a screen reader may read out as
+ * punctuation or swallow depending on its verbosity setting. Putting it in the
+ * name buys a duplicate reading of something AT already has, and pays for it
+ * by making heading-to-heading navigation noisier. The count is a sighted
+ * scanning aid; the list semantics are the AT answer, and they cannot drift
+ * apart because both come from the same array.
+ */
+const GroupCount = ({ count }: { count: number }) => {
+  return <span aria-hidden="true">{` · ${count}`}</span>;
+};
+
 export interface TodoGroupedListProps {
-  todos: TodoItemData[];
+  /**
+   * The sections, already cut. Passed in rather than computed here since
+   * US-12: the header line above the list reports the sizes of the `Today` and
+   * `Overdue` sections, and the only way the line and the list cannot disagree
+   * is for both to be drawing the same array. `TodoListScreen` calls
+   * `groupTodos` once and gives it to both.
+   */
+  groups: TodoGroup[];
   pendingTodoIds: ReadonlySet<string>;
   /** The row a confirmed delete is running against, if any (§8.3.2). */
   vanishingTodoId: string | null;
   showTooltips: boolean;
   onToggle: (todo: TodoItemData, nextCompleted: boolean) => void;
   onEdit: (todo: TodoItemData) => void;
+  /** `dueAt` is the `YYYY-MM-DD` wire day, or `null` to clear it. */
+  onReschedule: (todo: TodoItemData, dueAt: string | null) => void;
   onDelete: (todo: TodoItemData) => void;
 }
 
@@ -40,15 +67,15 @@ export interface TodoGroupedListProps {
  * to what shipped before this change — one `<ul>` of rows.
  */
 export const TodoGroupedList = ({
-  todos,
+  groups,
   pendingTodoIds,
   vanishingTodoId,
   showTooltips,
   onToggle,
   onEdit,
+  onReschedule,
   onDelete,
 }: TodoGroupedListProps) => {
-  const groups = groupTodos(todos);
   const showHeadings = groups.length > 1;
 
   return (
@@ -63,12 +90,17 @@ export const TodoGroupedList = ({
             <>
               {/* Between sections only — never above the first. */}
               {index > 0 ? <Separator className="my-1" /> : null}
-              <Typography.Heading
-                level={2}
-                color="muted"
-                className={GROUP_HEADING_CLASS}
-              >
+              {/*
+                No `color="muted"`. The heading was the same `body-sm` size
+                *and* the same token as the due dates in the rows beneath it —
+                both 4.83:1 on the Card — so a section name was visually
+                indistinguishable from row metadata. At `--foreground` the
+                `typography--h2` semibold weight finally has something to sit
+                against. Contrast rises, so there is no a11y exposure here.
+              */}
+              <Typography.Heading level={2} className={GROUP_HEADING_CLASS}>
                 {group.heading}
+                <GroupCount count={group.todos.length} />
               </Typography.Heading>
             </>
           ) : null}
@@ -83,6 +115,7 @@ export const TodoGroupedList = ({
                 showTooltips={showTooltips}
                 onToggle={onToggle}
                 onEdit={onEdit}
+                onReschedule={onReschedule}
                 onDelete={onDelete}
               />
             ))}

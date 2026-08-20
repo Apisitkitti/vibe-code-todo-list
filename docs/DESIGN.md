@@ -57,9 +57,9 @@ Reference them in Tailwind v4 arbitrary-value syntax, e.g.
 | Accent tint | `--accent-soft` / `--accent-soft-foreground` | Selected filter chip. |
 | Danger | `--danger` / `--danger-foreground` | Delete confirm button. |
 | Danger tint | `--danger-soft` / `--danger-soft-foreground` | High-priority chip, error text. |
-| Warning tint | `--warning-soft` / `--warning-soft-foreground` | Medium-priority chip, overdue date. |
+| Warning tint | `--warning-soft` / `--warning-soft-foreground` | Overdue date. **No longer the medium-priority chip** — see §4.4. |
 | Success tint | `--success-soft` / `--success-soft-foreground` | Completed-state affordances. |
-| Neutral tint | `--default-soft` / `--default-soft-foreground` | Low-priority chip. |
+| Neutral tint | `--default-soft` / `--default-soft-foreground` | Unused since §4.4 took the low/medium chips to `tertiary`, which has no fill. |
 | Overlay (modal/menu) | `--overlay` / `--overlay-foreground` | Handled by HeroUI. |
 | Backdrop | `--backdrop` | Handled by `Modal.Backdrop`. |
 | Focus ring | `--focus` | Aliased to `--accent`. Do not restyle. |
@@ -306,11 +306,17 @@ Identical structure to `/sign-in`. Differences only:
 <Header>                         ← app bar, full-bleed, sticky
 <main className="flex-1 w-full max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8 flex flex-col gap-6">
   ├─ Page heading + count
-  ├─ Add-todo affordance
-  ├─ Filter bar
-  └─ Card (the list)
+  ├─ Dated header line          ← US-12, §7.19; plain text, always present
+  ├─ Quick-add bar              ← §7.17; always present, never gated on hasTodos
+  ├─ Filter bar                 ← only once the account has todos
+  └─ Card (the list, cut into urgency sections — §7.16)
 </main>
 ```
+
+*Amended twice while it was being worked in: the "Add-todo affordance" row is
+the quick-add bar of §7.17, not the retired `New todo` button, and the list
+inside the Card is the sectioned list of §7.16 rather than one flat `<ul>`.
+Both were already true in the code; this diagram had not been told.*
 
 **App bar.** Use `Header` — note it is **not** compound: the exported `Header`
 has no `.Root`, `.Title` etc. It is a single element that renders RAC's
@@ -467,7 +473,14 @@ border.
 
 ### 4.4 Todo item row
 
-Fixed left-to-right order: **checkbox → title (+ note) → priority → due date → edit → delete.**
+Fixed left-to-right order: **checkbox → title (+ note) → priority → due date →
+reschedule → edit → delete.** Reschedule sits first in the actions cluster
+because it belongs with the due date it changes, and Delete stays last because
+it is the destructive one.
+
+**Below 457px the actions cluster takes a line of its own** — which is every
+phone width the app supports. See *Three targets and 320px* below: this is a
+layout decision taken to keep three 44×44 targets, not a fallback.
 
 **The row is an outlined pill.** `rounded-2xl border border-border-secondary
 px-4 py-3.5`, with `hover:bg-surface-hover` as a hover *state* layered on top —
@@ -494,8 +507,9 @@ dark, and no surface token can beat 1.20:1.
   </Checkbox>
 
   <div className="min-w-0 flex-1 flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+    {/* `sm:min-w-0 sm:flex-1` is what reserves the metadata column — see below. */}
     <Typography type="body" weight="medium" truncate
-      className={todo.completed ? "line-through text-[var(--muted)]" : undefined}>
+      className={todo.completed ? "sm:min-w-0 sm:flex-1 line-through text-[var(--muted)]" : "sm:min-w-0 sm:flex-1"}>
       {todo.title}
     </Typography>
     <div className="flex items-center gap-2 shrink-0">
@@ -524,8 +538,8 @@ pass `aria-label`.
 | `priority` | Chip props | Glyph prefix | Label |
 |---|---|---|---|
 | `high` | `color="danger" variant="soft" size="sm"` | `▲` | `High` |
-| `medium` | `color="warning" variant="soft" size="sm"` | `■` | `Medium` |
-| `low` | `color="default" variant="soft" size="sm"` | `▼` | `Low` |
+| `medium` | `color="default" variant="tertiary" size="sm"` | `■` | `Medium` |
+| `low` | `color="default" variant="tertiary" size="sm"` | `▼` | `Low` |
 
 ```tsx
 <Chip color="danger" variant="soft" size="sm">
@@ -536,6 +550,37 @@ pass `aria-label`.
 The glyph is decorative (`aria-hidden`); the word carries the meaning for
 screen readers and for colour-blind sighted users alike.
 
+**Only `High` is loud** (§8.4.2, taken). This table used to give all three
+`variant="soft"`, and `medium` is the schema default, so a real list was a
+column of near-identical warning-tinted chips with nothing for `High` to stand
+out against. `low` and `medium` are now `tertiary`.
+
+`medium` loses `color="warning"` along with the variant, and that is forced by
+the CSS rather than chosen: `chip--tertiary` sets only
+`--chip-bg: transparent` (`@heroui/styles/dist/components/chip.css`) while
+`--chip-fg` still comes from the *colour* class, so
+`variant="tertiary" color="warning"` is orange text with the fill taken away —
+louder against a quiet row, not quieter. `default` is the pairing that makes
+the chip recede.
+
+**§6.4 is untouched**: the word and the shape glyph are unchanged, so colour is
+still not carrying the meaning. No token is overridden, so §3's exception is
+not engaged. Measured through the browser's parser, label against the composited
+backdrop:
+
+| Level | Light, before → after | Dark, before → after |
+|---|---|---|
+| `high` | 5.49 : 1 → **5.49 : 1** (unchanged) | 5.51 : 1 → **5.51 : 1** (unchanged) |
+| `medium` | 5.16 : 1 → **17.72 : 1** | 9.21 : 1 → **17.27 : 1** |
+| `low` | 16.25 : 1 → **17.72 : 1** | 15.86 : 1 → **17.27 : 1** |
+
+Contrast rises on both levels that moved, because a tertiary chip's label is
+`--default-foreground` on the row rather than a soft-tint foreground on a soft
+fill. Pinned in `e2e/a11y-contrast.spec.ts`, which measures all three levels in
+both themes **and** asserts the fill itself — a ratio alone would have passed
+just as happily on the column of identical soft chips this change exists to
+break up.
+
 **Due date.** `<Typography type="body-sm" color="muted">` inside a `<time>`:
 
 ```tsx
@@ -545,12 +590,33 @@ screen readers and for colour-blind sighted users alike.
 ```
 
 Format: `Today`, `Tomorrow`, `Yesterday`, otherwise `MMM d` (same year) or
-`MMM d, yyyy`. **Overdue and not completed:** prefix with `⚠` (aria-hidden) and
+`MMM d, yyyy`. **Overdue:** prefix with `⚠` (aria-hidden) and
 use `className="text-[var(--warning-soft-foreground)]"` on the `Typography`,
 plus a visually-hidden `Overdue —` before the date. If `dueAt` is null render
 nothing — no "No due date" placeholder, which is noise.
 
-**Actions.** Two icon-only buttons. HeroUI ships no pencil or trash icon
+**A completed row goes quiet: no priority chip and no due date** (§8.5, taken,
+and widened from the chip to the date). `src/lib/todoGroups.ts` already argues
+the date half — *"a completed todo is done, so its date has nothing left to
+say"* — and the row rendered it anyway, so a finished task sat under
+`Completed` announcing `Aug 12`. The priority goes for the same reason: once a
+todo is done its level is history and it is competing for attention with the
+active rows above it.
+
+The overdue treatment therefore no longer needs a "and not completed" clause,
+and `TodoDueDate` no longer takes a `completed` prop: a date that is not drawn
+cannot be drawn as overdue, and keeping the prop would leave a second, weaker
+answer to the same question in the code.
+
+**Kept, deliberately:** the checkbox, the struck-through muted title, the `✎`
+note marker (a note is still there to read) and both actions. §6.4 is
+unaffected — completion is carried by `aria-checked` and `line-through`, never
+by the chip or the date, so nothing that carried meaning was removed. Pinned in
+`e2e/grouping.spec.ts`, which asserts the absences *and* every one of the
+retentions.
+
+**Actions.** Three icon-only buttons — reschedule, edit, delete. HeroUI ships
+no pencil or trash icon
 (the icon set is `IconChevronDown/Up/Left/Right`, `IconPlus`, `IconMinus`,
 `IconSearch`, `IconCalendar`, `CloseIcon`, `InfoIcon`, `WarningIcon`,
 `DangerIcon`, `SuccessIcon`, `CircleDashedIcon`, `ExternalLinkIcon` —
@@ -558,6 +624,7 @@ verified in `dist/components/icons.d.ts`). Use inline `<svg>` with
 `stroke="currentColor"`, `width={16} height={16}`, `aria-hidden="true"`.
 
 ```tsx
+<Button variant="ghost" size="sm" isIconOnly aria-label={`Reschedule "${todo.title}"`}>…</Button>
 <Button variant="ghost" size="sm" isIconOnly aria-label={`Edit "${todo.title}"`} onPress={…}>…</Button>
 <Button variant="ghost" size="sm" isIconOnly aria-label={`Delete "${todo.title}"`} onPress={…}>…</Button>
 ```
@@ -566,9 +633,117 @@ Wrap each in a `Tooltip` (`.Root`, `.Trigger`, `.Content`, `.Arrow`) on
 `sm:` and up only; tooltips are useless on touch. The `aria-label` is the
 accessible name regardless.
 
+**The metadata column is reserved, at `sm:` and up.** The title carries
+`sm:min-w-0 sm:flex-1`, so it takes the slack and the chip/date/note cluster is
+pushed to a consistent right edge. Without it the title was sized by its own
+content and the cluster hugged the end of each title, landing somewhere
+different on every row — which is §1's *"Nothing reflows between rows; a row
+with no due date leaves the slot empty rather than shifting"* not being
+delivered by the code that quotes it.
+
+`min-w-0` is not decoration alongside `flex-1`: without it the flex item
+refuses to shrink below its content width and `truncate` never fires. The cost
+is that long titles truncate sooner, which is the trade §1 already made.
+
+`sm:` only. Below that the row is `flex-col`, where `flex-1` would stretch the
+title down the row and there is no column to reserve.
+
+Pinned in `e2e/row-layout.spec.ts`, which drives both viewport widths itself
+rather than relying on the project's own: the claim is about a breakpoint, so a
+test that sees one side of it checks half of it. It measures the cluster's
+**right** edge — with the title taking the slack, that is the fixed edge, and a
+row carrying less metadata is legitimately narrower on the left.
+
+The cluster uses `gap-2`, not `gap-1`. §6.3 asks for ≥8px between adjacent
+targets and this cluster shipped with 4px — survivable while it held two
+controls, and the thing that makes a mis-tap likely once it holds three.
+
+**Reschedule — the third action.** An icon-only `Button` opening a `Dropdown`,
+so the most common single edit does not cost the modal (`docs/PM-PROPOSAL.md`
+§3 #5, `docs/PRD.md` US-13). Five items in two sections:
+
+| Item | Effect |
+|---|---|
+| `Today` | `dueAt` = the viewer's today |
+| `Tomorrow` | the viewer's today + 1 day |
+| `Next week` | the viewer's today + **7** days |
+| `Pick a date…` | opens the existing edit modal (§4.5) — not a second picker |
+| `Clear due date` | `dueAt` = `null`; **disabled** when the todo has no date |
+
+The three quick days render their resolved date beside the label — `Next week`
+`Aug 26` — so the reading is visible at the moment of the decision rather than
+discoverable after it. §7.19 has the copy and §2 of `docs/PRD.md` has why
+`Next week` is `+7` rather than "the start of next week".
+
+Two implementation constraints, both learned the hard way on this branch:
+
+- **The trigger is a plain `Button`, not `Dropdown.Trigger`.** `Dropdown.Trigger`
+  is the bare react-aria `Button` with none of the `button--ghost` /
+  `button--icon-only` styling, so it cannot match the two controls beside it
+  without hand-rebuilding them. `Dropdown`'s root is react-aria's `MenuTrigger`,
+  which publishes its trigger props through a `PressResponder` exactly as
+  `Tooltip` does, so a `Button` anywhere beneath it registers — and nested
+  `PressResponder`s merge, so the `Tooltip` in between is harmless and DEF-02's
+  warning does not return.
+- **The date preview must not be a `Typography`.** react-aria's `MenuItem`
+  publishes a `TextContext` whose `label` slot carries the id its
+  `aria-labelledby` points at, and `Typography` consumes it — so the preview
+  became the item's *entire* accessible name and `Today` was announced as
+  `Aug 19`. Use a plain `<span>`; the name is then the item's full text.
+
+**Three targets and 320px — the decision.** Three 44×44 buttons, a 44×44
+checkbox and a readable title do not fit on one line at 320px:
+`32 (px-4) + 44 + 12 + 148 (3×44 + 2×gap-2) + 12 = 248`, leaving 72px for a
+title, a priority chip and a date. Shrinking the targets was not available —
+§6.3's 44×44 is a defect the team has already fixed once — and hiding an action
+behind a "more" menu would demote Edit or Delete to pay for Reschedule.
+
+So the row is `flex-wrap` and the content column carries `min-w-32`: the title
+may be squeezed to 128px and no further, and flexbox breaks the line rather
+than going below it. The actions cluster then takes a line of its own,
+right-aligned by `ml-auto`, and the row is one line taller.
+
+**Nothing in the CSS names a width**, and the threshold is a consequence of the
+floors rather than a breakpoint to keep in step with this document:
+
+```
+surrounding padding = 32 (main px-4) + 32 (Card px-4) + 16 (list p-2) + 32 (row px-4)
+                    = 112                     ← measured, not assumed
+row content         = viewport − 112
+needed              = 44 (checkbox) + 12 + 128 (title floor) + 12 + 148 (3×44 + 2×8)
+                    = 344
+```
+
+so the line breaks below **457px** (`112 + 344 = 456`, and 456 wraps while 458
+does not). Swept at 2px steps from 440 to 476, and at 320 / 360 / 390 / 412 /
+480 / 560 / 639 / 640 / 768: no horizontal overflow at any width, and the title
+never below 128px — at 458 it is exactly 128px, which is `min-w-32` binding as
+designed.
+
+**The `Card`'s own `px-4` is the term that is easy to miss** — `Card.Content`
+is `p-0` here, which reads like the Card contributes nothing, but the padding
+sits on the `.card` root. An earlier draft of this section omitted it and
+published 424px, a number 33px wrong that no test could contradict because
+both user-facing claims below it happened to survive. If this arithmetic is
+edited, re-measure rather than re-derive.
+
+**That means the actions wrap on every phone, and that is the outcome, not a
+regression.** The alternative — a lower title floor, so a 412px phone keeps one
+line — buys a shorter row by handing the title about 84px, roughly nine
+characters before the ellipsis. A feature whose entire purpose is to stop due
+dates going stale should not pay for itself by making the todo unreadable.
+Above 640px the targets relax to 36px and the question does not arise.
+
+Pinned by `e2e/reschedule.spec.ts`, which at a 320px viewport measures all
+three targets, the gaps between them, `document.scrollWidth` against
+`clientWidth`, and the rendered width of the title — because a layout that
+fits by crushing the title to nothing is not a layout that fits.
+
 **Responsive.** Mobile: the title and the priority/date cluster stack (`flex-col`),
-actions column stays on the right, always at full opacity. Tablet+: one line
-(`sm:flex-row sm:items-center`). Desktop: actions hidden until hover/focus-within.
+the actions cluster wraps below them once the row is too narrow to hold it
+(below 457px, so on every phone), always at full opacity. Tablet+: one line
+(`sm:flex-row sm:items-center`), with the reserved column above and targets relaxed to 36px. Desktop: actions hidden
+until hover/focus-within.
 
 ---
 
@@ -957,6 +1132,7 @@ relative to `node_modules/@heroui/react/dist/components/`.
 | todo row | `Checkbox` (`.Root .Content .Control .Indicator`) | `@heroui/react` | yes — `checkbox/index.d.ts`, `checkbox/checkbox.d.ts` |
 | todo row | `Chip` (`.Root .Label`) | `@heroui/react` | yes — `chip/index.d.ts`, `chip/chip.d.ts` |
 | todo row | `Tooltip` (`.Root .Trigger .Content .Arrow`) | `@heroui/react` | yes — `tooltip/index.d.ts` |
+| todo row | `Dropdown` (`.Root .Trigger .Popover .Menu .Section .Item`) — the reschedule menu, §4.4 | `@heroui/react` | yes — `dropdown/index.d.ts`, `dropdown/dropdown.d.ts` |
 | create/edit | `Modal` (`.Root .Trigger .Backdrop .Container .Dialog .Header .Icon .Heading .Body .Footer .CloseTrigger`) | `@heroui/react` | yes — `modal/index.d.ts`, `modal/modal.d.ts` |
 | create/edit | `TextArea` (`.Root`) | `@heroui/react` | yes — `textarea/index.d.ts`, `textarea/textarea.d.ts` |
 | create/edit | `Select` (`.Root .Trigger .Value .Indicator .Popover`) | `@heroui/react` | yes — `select/index.d.ts`, `select/select.d.ts` |
@@ -1156,6 +1332,22 @@ Do not introduce them without updating this document.
    would be a route back to the list from the toast, not a retreat on the
    rescue.
 
+   **A reschedule restores focus instead of redirecting it, and that is a
+   different answer to a different question** (`docs/PRD.md` US-13,
+   `src/lib/rowFocus.ts` → `restoreRescheduleFocus`). Changing a due date moves
+   the row between sections, and sections are separate `<section>` subtrees, so
+   React rebuilds the row rather than moving the DOM node — the trigger the user
+   pressed is destroyed and rebuilt a few pixels away, and focus falls to
+   `<body>` with nothing on screen to show for it. The rescue above does not
+   apply: the row is still on screen and still theirs, so moving them into the
+   toast would arm an Undo under their next `Space` and charge them the surprise
+   above for nothing. Focus goes back onto the same row's own trigger, found by
+   the todo's id (`data-reschedule-for`) rather than by position — position is
+   exactly what a reschedule changes. It fires only when focus is already on
+   `<body>`, so a row that did not change section is left alone and a user who
+   has moved focus themselves keeps it. Same modality gate, same reasoning.
+   Pinned in `e2e/reschedule.spec.ts` and `tests/unit/rowFocus.test.ts`.
+
    **Keyboard only.** react-aria does not focus a control on pointer press, and
    a mouse user who has a row focused from earlier must not have Undo armed
    under a Space press they meant for that row. Gate on modality
@@ -1238,7 +1430,8 @@ a period.
 | Page heading | `Your todos` |
 | Count | `{done} of {total} done` |
 | Count (zero todos) | *(render nothing)* |
-| Add button | `New todo` |
+| Dated header line | see §7.19 |
+| ~~Add button~~ | ~~`New todo`~~ — **struck.** There is no such button; §7.17's quick-add bar replaced it and §7.18 renamed the empty state's action. |
 | Filter: all | `All` |
 | Filter: active | `Active` |
 | Filter: completed | `Completed` |
@@ -1267,6 +1460,8 @@ a period.
 | Edit tooltip | `Edit` |
 | Delete button `aria-label` | `Delete "{title}"` |
 | Delete tooltip | `Delete` |
+| Reschedule button `aria-label` | `Reschedule "{title}"` |
+| Reschedule tooltip | `Reschedule` |
 
 ### 7.5 Create / edit modal
 
@@ -1542,6 +1737,35 @@ polish:
 | Section heading: due later | `Upcoming` |
 | Section heading: no due date | `No date` |
 | Section heading: completed | `Completed` |
+| Section heading, rendered | `{heading} · {count}` — e.g. `Overdue · 3`, `Completed · 214` |
+
+**The heading has a voice and a count.** It keeps the `<h2>` and the `body-sm`
+size, and drops `color="muted"`, so it sits at `--foreground` with
+`typography--h2`'s semibold weight. It had to: at `body-sm` *and* `--muted` it
+was the same size and the same token as the due dates in the rows beneath it —
+measured identical, pixel for pixel, at **5.60:1 light / 6.75:1 dark** on the
+Card — so a section name was indistinguishable from row metadata. After:
+**17.72:1 light / 17.27:1 dark**. Contrast rises, so nothing in §6.6 is at
+risk; it is measured in `e2e/a11y-contrast.spec.ts` anyway, and measured
+*against the due date* rather than against a floor, because a floor would have
+passed on the defect too.
+
+(4.83:1 is the figure §8.4 and §4.8 quote for this token. It is stale: DEF-15's
+`--muted` correction moved light to 5.60:1. Nothing about the argument changes —
+the two were equal, which was the whole complaint.)
+
+The count uses `·`, per §7.18's punctuation note, and is rendered
+**`aria-hidden`, so the accessible name stays exactly the bare string above**.
+The `<ul>` under each heading already reports its own size to assistive
+technology — "list, 3 items" — natively and more precisely than a numeral
+behind a middle dot, which a screen reader may voice as punctuation or swallow
+depending on verbosity. Putting it in the name buys a duplicate of something AT
+already has and pays for it in heading-to-heading navigation noise. The count
+is a sighted scanning aid; the list semantics are the AT answer, and the two
+cannot drift because both are read from the same array.
+
+Both halves are pinned in `e2e/grouping.spec.ts` — the visible text *and* the
+accessible name — because either assertion alone passes on the wrong markup.
 
 ### 7.17 Quick-add bar
 
@@ -1667,9 +1891,127 @@ A row reading `Today` inside a section headed `Today` is a repetition, not a
 contradiction, and the alternative — inventing a second word for the same day —
 is worse.
 
+### 7.19 The dated header line
+
+Added for `docs/PRD.md` US-12: one plain-text line above the list and below the
+app bar, telling the user what day it is and how much is due before they read a
+single row.
+
+| Slot | String |
+|---|---|
+| Date | `dddd, D MMMM` — e.g. `Saturday, 16 August` |
+| Due-today clause | ` · {n} due today` |
+| Overdue clause | ` · {n} overdue` |
+| Both, in order | `Saturday, 16 August · 3 due today · 1 overdue` |
+| A clause whose count is zero | *(omitted entirely — never `0 due today`)* |
+| Loading, load failure, or nothing due | *(the date alone)* |
+
+Separator is `·` per §7.18's punctuation note. One wording for one and for
+many: `1 due today`, `3 due today` — no plural switch, and nothing that could
+produce `1 todos`.
+
+**Not a heading and not a control.** It summarises the sections, and the
+sections (§7.16, US-06) remain the place overdue work is actually conveyed.
+Rendered as `<Typography type="body-sm" color="muted">`, which is the same
+token and surface as the `{done} of {total} done` counter beside the page
+heading and is measured with it in `e2e/a11y-contrast.spec.ts`.
+
+**The counts are the sizes of the `Today` and `Overdue` sections, read from the
+sections themselves.** `TodoListScreen` calls `groupTodos` once per render and
+hands the one array to `TodoGroupedList` and to `formatListHeaderLine`
+(`src/lib/listHeaderLine.ts`). US-12 requires that the line and the list can
+never disagree, and one array shared by both is what makes that a property of
+the structure rather than something a test has to keep catching. A second pass
+over `todos` would be a second answer, and two answers computed from one input
+at two moments can differ — over a midnight boundary, or across an optimistic
+write that moved a row between the calls.
+
+Three things fall out of that rather than needing rules of their own:
+
+- **Completed todos are never counted.** `todoGroupId` puts completion first,
+  so a finished todo is in `Completed` whatever its date reads.
+- **A filter or a search is simply a shorter array** by the time it reaches
+  here, so the counts describe what is on screen with no filter logic in this
+  file at all.
+- **"Today" is decided once.** `groupTodos` goes through `dueDayOffset`
+  (`src/lib/date.ts`), the single place a UTC-midnight `dueAt` is reconciled
+  against the viewer's local calendar day. CI runs with `TZ=Pacific/Kiritimati`
+  to catch a second answer.
+
+**The date is shown alone while the list is loading and while a load has
+failed** — `groups` is `null` in both — so the counts never render as zero, or
+as the previous filter's numbers, and then change under the user. The loading
+case has teeth only on a *filter change*: `useTodoList` keeps the previous
+filter's rows in `result` until the new ones land, so a first load would look
+correct with no gate at all. `e2e/list-header.spec.ts` holds the filter
+change's `GET` open and asserts the line against exactly that window.
+
 Punctuation notes: use the typographic apostrophe (`'`) in contractions
 (`don't`, `can't`, `Couldn't`) and curly double quotes around interpolated
 titles in prose. Use the ellipsis character `…`.
+
+---
+
+### 7.19 Reschedule from the row
+
+Added for backlog #5 (`docs/PM-PROPOSAL.md` §3, `docs/PRD.md` US-13). The row
+gets a third action: a `Dropdown` that moves the due date without opening the
+modal. A due date is trivially reversible, so it fires immediately and reports
+with an Undo toast — no confirm dialog (`docs/CONVENTIONS.md` → Mutation UX).
+
+| Slot | String |
+|---|---|
+| Trigger `aria-label` | `Reschedule "{title}"` |
+| Trigger tooltip (`sm:` and up) | `Reschedule` |
+| Menu `aria-label` | `Reschedule "{title}"` — the trigger's name, reused |
+| Item 1 | `Today` |
+| Item 2 | `Tomorrow` |
+| Item 3 | `Next week` |
+| Quick-day date preview | the resolved day, `MMM d` (`MMM d, yyyy` in another year) |
+| Item 4 | `Pick a date…` |
+| Item 5 | `Clear due date` |
+| Success toast (a date was set) | `Todo “{title}” due {Today\|Tomorrow\|MMM d\|MMM d, yyyy}` |
+| Success toast (the date was cleared) | `Todo “{title}” due date cleared` |
+| Toast action | `Undo` |
+| Toast action `aria-label` | `Undo — {toast title}` (shared with §7.13) |
+| Undo succeeded | the same two toasts above, for the value it restored |
+| Failure toast | `Couldn’t change the due date. Try again.` |
+| Undo failure | `Couldn’t undo that. Try again.` (shared with §7.13) |
+
+**The day words are the row's own.** The toast reads its label out of
+`formatDueDate` — the same function that writes the date on the row — so a
+reschedule to today says `due Today` in both places and cannot drift into
+saying one thing in the toast and another two lines above it. It also means
+`Today` is the *viewer's* today in the toast for the same reason it is on the
+row (`src/lib/date.ts`).
+
+**Why the menu shows a date next to three of the items.** `Today` and
+`Tomorrow` need no gloss. `Next week` does: it means the same weekday seven days
+on, and nothing about the words says so. Printing `Next week` `Aug 26` states
+the decision where the decision is made, which is cheaper than a tooltip and
+truer than a convention nobody was told. The preview is decoration for the two
+obvious items and load-bearing for the third, so all three carry it — an option
+list where one row looks different reads as one row *meaning* something
+different.
+
+The preview is a plain `<span>`, never a `Typography`: react-aria's `MenuItem`
+labels itself from the `TextContext` `label` slot, `Typography` claims that
+slot, and the effect was that `Today` announced itself to a screen reader as
+`Aug 19`. §4.4 has the mechanism.
+
+**Both accessible names carry the todo's title**, the trigger's and the menu's.
+This is the lesson §7.13 records about Undo, applied before it could be
+re-learned: a screen of twenty rows is a screen of twenty `Reschedule` buttons,
+and `Reschedule, button` twenty times over is not a list a user can navigate.
+The menu borrows the trigger's name rather than inventing a second one.
+
+**The reschedule's Undo restores the value the row held before the press**,
+read off the row at the moment of the press and never recomputed. That is the
+same rule §7.15 states for an edit, and the reason is the same: a reversal that
+derives what to put back is guessing, and "the date it used to have" is exactly
+the kind of thing that can be derived wrongly. A later write to the same todo
+dismisses the toast (`dismissUndo`, keyed per todo id) so an Undo can never
+reach past a change the user made after it.
 
 ---
 
@@ -1823,6 +2165,14 @@ written** — this changes only how loud the tint is. Cheapest single change tha
 makes the list look considered, and it is the direct fix for "everything looks
 the same".
 
+> **Done — §4.4 is the spec, with one correction this note could not have
+> known.** `medium` had to give up `color="warning"` as well as the variant.
+> `chip--tertiary` sets only `--chip-bg: transparent`; the colour class still
+> supplies `--chip-fg`, so `tertiary` + `warning` is orange text with the fill
+> removed rather than a quieter chip. Both moved levels went *up* in contrast
+> (medium 5.16 → 17.72 light, 9.21 → 17.27 dark); the before/after table is in
+> §4.4 and the measurements are pinned in `e2e/a11y-contrast.spec.ts`.
+
 **3 — Give the list a shape: a completed section, with a real heading.**
 With `status=all`, completed rows simply appear below the active ones and a
 screen-reader user gets no signal that the list changed character halfway down.
@@ -1876,6 +2226,11 @@ priority is history and it is competing for attention with the active rows above
 it. Hiding it on completed rows only removes a chip from an already-struck-out
 title, and §6.4 is unaffected because completion is carried by the checkbox
 state and the `line-through`, not by the chip.
+
+> **Done, and widened by one field: the due date goes with it.** The argument
+> given here for the chip was already written down for the date, in
+> `src/lib/todoGroups.ts` — "a completed todo is done, so its date has nothing
+> left to say" — and the row rendered the date anyway. §4.4 is the spec.
 
 ### 8.6 What I would ask PM and QA
 
