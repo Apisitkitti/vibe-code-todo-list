@@ -1,14 +1,14 @@
-import type { TodoListFilters } from "@/lib/todo";
+import type { TodoListFilters, TodoView } from "@/lib/todo";
 
 /**
- * Who owns the filter row's values while a URL push of them is still in the
+ * Who owns the `/todos` query string while a URL push of it is still in the
  * air.
  *
- * `TodoFilters` keeps status, priority and the search text in the URL
- * (`docs/PRD.md` US-10), which makes every one of them a round trip: the user
- * acts, a push sets the query string, and the new values arrive back as props
- * some time later. Two things can move them, and only one is allowed to
- * overwrite what the user is looking at:
+ * The screen keeps status, priority and the search text in the URL
+ * (`docs/PRD.md` US-10) and the chosen view beside them (US-14), which makes
+ * every one of them a round trip: the user acts, a push sets the query string,
+ * and the new values arrive back as props some time later. Two things can move
+ * them, and only one is allowed to overwrite what the user is looking at:
  *
  *  - a navigation from **outside** this component — a link, Back, a fresh load
  *    — where the controls must follow the URL, and
@@ -42,11 +42,16 @@ import type { TodoListFilters } from "@/lib/todo";
  * navigation that happens to carry exactly the tuple we have in flight, and
  * will swallow it. `MAX_PENDING_PUSHES` bounds how long any recording can lurk,
  * but the reason this is not reachable today is a property of the app rather
- * than of this module: nothing links to `/todos`, `clearFilters` pushes no
- * `q`, and every filter change is a `replace`, so no history entry is laid
- * down to go Back to. **Nothing pins that property.** If a `/todos` link, a
- * `push`, or a second writer of these params appears, re-read this paragraph
- * before assuming the guard still holds.
+ * than of this module: nothing links to `/todos`, and every write of these
+ * params is a `replace`, so no history entry is laid down to go Back to.
+ * **Nothing pins that property**, so re-read this paragraph if a `/todos` link
+ * or a `push` appears.
+ *
+ * A previous version of this paragraph also rested on there being a single
+ * writer. That stopped being true when the view toggle arrived, and the answer
+ * was not to add a caveat but to remove the second writer: every control that
+ * writes these params now pushes through one owner of this state, so there is
+ * again exactly one place that predicts the URL. See `useTodosUrlSync`.
  *
  * It lives here as pure functions, rather than inline in the component, for
  * the reason `todoListState.ts` gives: the interleavings that break it are
@@ -74,24 +79,50 @@ import type { TodoListFilters } from "@/lib/todo";
  */
 export const MAX_PENDING_PUSHES = 8;
 
+/**
+ * Everything this app keeps in the `/todos` query string, as one value.
+ *
+ * **The view is here and is deliberately not in `TodoListFilters`.** That type
+ * is the query the API is asked — `getTodoList` hands it to axios as
+ * `params: filters`, spreading it wholesale — so a presentation choice folded
+ * into it would travel to a route handler that has no business seeing it
+ * (`src/app/todos/page.tsx` makes the same point where it parses them apart).
+ *
+ * Nesting the filters rather than flattening `view` alongside them is what
+ * makes that structural instead of a convention: a `TodosUrlState` will not
+ * typecheck where a `TodoListFilters` is wanted, so the leak cannot be
+ * reintroduced by someone passing the wrong variable.
+ *
+ * What the view *does* share with the filters is the round trip, and that is
+ * why it belongs in this module's tuple. It is written to the URL by a
+ * `replace`, it comes back as a prop, and in between it is in flight exactly
+ * as `q` is. A guard that tracked only the filters would see a view push land
+ * as a stranger's navigation and a filter push overwrite a view change that
+ * had not landed yet.
+ */
+export interface TodosUrlState {
+  readonly filters: TodoListFilters;
+  readonly view: TodoView;
+}
+
 export interface FilterSync {
   /**
    * What the search box shows. Nothing but the user's own typing and an
-   * outside navigation may change it.
+   * outside navigation that actually changes `q` may change it.
    *
    * Held raw, untrimmed — the field is allowed a trailing space the URL cannot
-   * carry. Status and priority need no equivalent: they have no intermediate
-   * state a user can be halfway through, so the pushed tuple is the whole of
-   * what is pending about them.
+   * carry. Status, priority and the view need no equivalent: they have no
+   * intermediate state a user can be halfway through, so the pushed tuple is
+   * the whole of what is pending about them.
    */
   readonly query: string;
-  /** The URL's filters as of the last change this state was reconciled against. */
-  readonly applied: TodoListFilters;
+  /** The URL as of the last change this state was reconciled against. */
+  readonly applied: TodosUrlState;
   /**
    * The tuples pushed from here whose navigation has not been seen landing
    * yet, oldest first.
    */
-  readonly pending: readonly TodoListFilters[];
+  readonly pending: readonly TodosUrlState[];
   /**
    * Tuples this component pushed and has stopped waiting for, oldest first.
    *
@@ -115,7 +146,7 @@ export interface FilterSync {
    * a stranger's navigation loses one adoption, adopting a stale push of our
    * own loses the user's typing for good.
    */
-  readonly disowned: readonly TodoListFilters[];
+  readonly disowned: readonly TodosUrlState[];
 }
 
 /**
@@ -131,12 +162,15 @@ export interface FilterSync {
  */
 export const normalizeSearchQuery = (query: string): string => query.trim();
 
-const sameFilters = (a: TodoListFilters, b: TodoListFilters): boolean =>
-  a.status === b.status && a.priority === b.priority && a.query === b.query;
+const sameUrlState = (a: TodosUrlState, b: TodosUrlState): boolean =>
+  a.view === b.view &&
+  a.filters.status === b.filters.status &&
+  a.filters.priority === b.filters.priority &&
+  a.filters.query === b.filters.query;
 
-export const createFilterSync = (urlFilters: TodoListFilters): FilterSync => ({
-  query: urlFilters.query,
-  applied: urlFilters,
+export const createFilterSync = (url: TodosUrlState): FilterSync => ({
+  query: url.filters.query,
+  applied: url,
   pending: [],
   disowned: [],
 });
@@ -149,43 +183,63 @@ export const createFilterSync = (urlFilters: TodoListFilters): FilterSync => ({
  */
 const disown = (
   state: FilterSync,
-  abandoned: readonly TodoListFilters[],
-): readonly TodoListFilters[] =>
+  abandoned: readonly TodosUrlState[],
+): readonly TodosUrlState[] =>
   abandoned.length === 0
     ? state.disowned
     : [...state.disowned, ...abandoned].slice(-MAX_PENDING_PUSHES);
 
 /**
- * The filters the URL will hold once everything already pushed has landed.
+ * The URL as it will be once everything already pushed has landed.
  *
  * This, and not `applied`, is what a new push must build on. Spreading the
- * URL's tuple instead is the defect this module's second half exists to stop:
- * press Active and type inside the window and the debounced push spreads a
- * `status` the press has already superseded, discarding it at the push site.
+ * URL's own values instead is the defect this module's second half exists to
+ * stop: press Active and type inside the window and the debounced push spreads
+ * a `status` the press has already superseded, discarding it at the push site.
  */
-const settled = (state: FilterSync): TodoListFilters =>
+const settled = (state: FilterSync): TodosUrlState =>
   state.pending.at(-1) ?? state.applied;
 
 /** The user typed. The field is the only authority on its own value. */
 export const setSearchQuery = (state: FilterSync, query: string): FilterSync =>
   query === state.query ? state : { ...state, query };
 
+/** A change one control wants to make, laid over the settled target. */
+export interface UrlStateChange {
+  readonly status?: TodoListFilters["status"];
+  readonly priority?: TodoListFilters["priority"];
+  readonly view?: TodoView;
+  /**
+   * Only `Clear filters` passes this. Every other push takes the search text
+   * from the field, which is the only place it is authoritative.
+   */
+  readonly query?: string;
+}
+
 /**
  * The tuple a push should carry: the settled target, with the field's current
  * text and the caller's own change laid over it.
  *
- * Every push in the component goes through here, which is what makes the
- * symmetry hold — typing cannot drop a pending filter press and a filter press
- * cannot drop pending typing, because neither one reads the URL directly.
+ * Every push in the screen goes through here, which is what makes the
+ * directions symmetric — typing cannot drop a pending filter press or view
+ * change, and neither can drop pending typing, because no writer reads the URL
+ * directly.
  */
-export const nextFilters = (
+export const nextUrlState = (
   state: FilterSync,
-  changes: Partial<TodoListFilters> = {},
-): TodoListFilters => ({
-  ...settled(state),
-  query: normalizeSearchQuery(state.query),
-  ...changes,
-});
+  change: UrlStateChange = {},
+): TodosUrlState => {
+  const base = settled(state);
+
+  return {
+    filters: {
+      status: change.status ?? base.filters.status,
+      priority: change.priority ?? base.filters.priority,
+      query: change.query ?? normalizeSearchQuery(state.query),
+    },
+    view: change.view ?? base.view,
+  };
+};
 
 /**
  * A push of `pushed` has just been handed to the router.
@@ -195,9 +249,9 @@ export const nextFilters = (
  */
 export const recordPush = (
   state: FilterSync,
-  pushed: TodoListFilters,
+  pushed: TodosUrlState,
 ): FilterSync =>
-  sameFilters(pushed, settled(state))
+  sameUrlState(pushed, settled(state))
     ? state
     : {
         ...state,
@@ -225,7 +279,7 @@ export const abandonPendingPushes = (state: FilterSync): FilterSync =>
     : { ...state, pending: [], disowned: disown(state, state.pending) };
 
 /**
- * The URL's filters are now `urlFilters`. Decide whether the controls follow.
+ * The URL is now `url`. Decide whether the controls follow.
  *
  * Returns the identical state when there is nothing to reconcile, so this can
  * be called on every render and its result compared by identity — the same
@@ -246,10 +300,10 @@ export const abandonPendingPushes = (state: FilterSync): FilterSync =>
  */
 export const syncToUrl = (
   state: FilterSync,
-  urlFilters: TodoListFilters,
+  url: TodosUrlState,
 ): FilterSync => {
   const echoIndex = state.pending.findIndex((pushed) =>
-    sameFilters(pushed, urlFilters),
+    sameUrlState(pushed, url),
   );
 
   /*
@@ -264,14 +318,14 @@ export const syncToUrl = (
   if (echoIndex !== -1) {
     return {
       ...state,
-      applied: urlFilters,
+      applied: url,
       pending: state.pending.slice(echoIndex + 1),
       disowned: disown(state, state.pending.slice(0, echoIndex)),
     };
   }
 
   const disownedIndex = state.disowned.findIndex((pushed) =>
-    sameFilters(pushed, urlFilters),
+    sameUrlState(pushed, url),
   );
 
   /*
@@ -282,20 +336,34 @@ export const syncToUrl = (
   if (disownedIndex !== -1) {
     return {
       ...state,
-      applied: urlFilters,
+      applied: url,
       disowned: state.disowned.slice(disownedIndex + 1),
     };
   }
 
-  if (sameFilters(urlFilters, state.applied)) return state;
+  if (sameUrlState(url, state.applied)) return state;
 
   /*
     Somebody else navigated. The controls follow — but both lists are kept,
     because our own pushes are still in the air and must still be recognisable
     when they land. Dropping them here would turn the next echo into an
     "outside navigation" and reintroduce the defect one step later.
+
+    **The search box follows only if the URL's own `q` moved.** Once the view
+    joined this tuple, "somebody else navigated" stopped implying "the search
+    text changed": a view toggle is an outside navigation to this state, and
+    reaching into the field on the strength of it would delete whatever the
+    user had typed but not yet pushed. So the field is left alone unless the
+    parameter that owns it actually differs.
   */
-  return { ...state, query: urlFilters.query, applied: urlFilters };
+  return {
+    ...state,
+    query:
+      url.filters.query === state.applied.filters.query
+        ? state.query
+        : url.filters.query,
+    applied: url,
+  };
 };
 
 /**
@@ -316,7 +384,5 @@ export const syncToUrl = (
  *    landed — which is the trap `abandonPendingPushes` deliberately routes
  *    around by way of an explicit attempt counter.
  */
-export const isPushNeeded = (
-  state: FilterSync,
-  urlFilters: TodoListFilters,
-): boolean => !sameFilters(nextFilters(state), urlFilters);
+export const isPushNeeded = (state: FilterSync, url: TodosUrlState): boolean =>
+  !sameUrlState(nextUrlState(state), url);

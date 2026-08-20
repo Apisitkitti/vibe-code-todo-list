@@ -328,6 +328,42 @@ Changing only the due date is the most common single edit in daily use, and toda
 - Given a reschedule moves the row into a different due-date section, When the list re-renders, Then focus is on that same row's reschedule control — not lost to the page, and not moved into the toast. The row is still on screen, so there is nothing to rescue me from.
 - Given a 320px viewport (NFR-05), When a row renders, Then all three actions are at least 44×44 with at least 8px between them, the page does not scroll horizontally, and the title is still legible rather than crushed. The actions cluster takes a line of its own when the row is too narrow to hold everything on one.
 
+### US-14 — Board view of the same todos
+
+As a signed-in user, I want to see my todos as columns and drag one to another column, so that changing when something is due is a gesture instead of a menu.
+
+**This is a second way to look at the same data, not a second place to store it.** The columns are the urgency groups the list already computes (§2, US-06) — `Overdue`, `Today`, `Upcoming`, `No date`, `Completed` — and dragging a card writes the same fields the row's own controls write, through the routes that already exist. **It introduces no ordering of its own.** There is no `position` column, no within-column reordering, and nothing in this story should be read as permission to add one: manual order and due-date order are rival authorities and only one can win, which is the standing decision in `docs/DESIGN.md` §8.1 and `docs/PM-PROPOSAL.md` §4, and US-14 does not reopen it.
+
+**Acceptance criteria — the view**
+
+- Given I am on `/todos`, When I choose `Board`, Then the URL carries `view=board`, the same todos are laid out as five columns, and reloading, sharing the link or pressing Back all behave the way they do for a filter (US-10).
+- Given I change a filter or clear the filters, When the URL is rewritten, Then the chosen view is still in it — and given I switch views, Then the filters are still in it.
+- Given a column with no todos in it, When the board renders, Then the column is still on screen with a line saying so. Unlike the list, the board omits no column: an empty column is a drop target, and a drop target that is not rendered cannot be aimed at.
+- Given the list and the board are showing the same todos, When I compare them, Then every todo is in the column named by the section the list would put it under. The two are the same cut, made by the same function.
+- Given a viewport narrower than 1024px **or a device whose primary pointer is not fine** (a phone, or a tablet in landscape), When `view=board` is requested, Then the **list** renders and the view toggle is not offered — five columns do not fit, and HTML5 drag does not fire from touch, so a board there would show a drag affordance that cannot be used. Both conditions are enforced, not just the width. The URL keeps `view=board`, so opening the same link on a pointer device gives the board without asking again.
+
+**Acceptance criteria — what a drop does**
+
+- Given I drag a card onto `Today` or `Upcoming`, When I release it, Then the todo's due date becomes the user's today, or tomorrow, exactly as the row's `Today` and `Tomorrow` menu items would set it (US-13, §2) — and it is still there after a reload.
+- Given I drag a card onto `No date`, When I release it, Then the due date is cleared.
+- Given I drag a card onto `Completed`, When I release it, Then the todo is **completed** and its due date is untouched — a completion is not a reschedule, and the two go to different routes. Reopening the card returns it to the column its unchanged date names.
+- Given I drag a card onto `Overdue`, When I release it, Then nothing is written. `Upcoming` spans many days and a gesture cannot name one, so it takes that bucket's near edge, tomorrow; `Overdue`'s near edge is yesterday, where the same guess stops being a shorthand for intent and becomes a claim about the record — it invents a deadline already missed. **Past dates themselves remain ordinary supported data**: `Pick a date…` sets one, the schema accepts one, and the API stores one. What is refused is a gesture *guessing* one.
+- Given a completed card, When I drag it, Then the only column that accepts it is the one it returns to when reopened. Reopening writes no date, so any other target would land the card somewhere other than where I released it.
+- Given a write is already in flight for a card, When I try to drag it, Then the drag does not start.
+
+**Acceptance criteria — where the card lands**
+
+- Given I drop a card on a column, When I release it, Then it is in that column immediately, without waiting for the server.
+- Given I drop a card, When I look for a marker showing where inside the column it will land, Then there is none — a drop chooses a column, and the order inside a column is the server's (§2). The board says so in a line under the columns rather than drawing an insertion point it cannot honour.
+- Given the refetch lands and the card settles at a different index in its column, When I look for it, Then it is marked for a few seconds so I can see where it went.
+- Given the write fails, When the error returns, Then the card goes back to the column it came from and a toast says why.
+
+**Acceptance criteria — keyboard and announcement**
+
+- Given I am driving from the keyboard, When I want to make any move a drag can make, Then the card's own reschedule menu and checkbox do it — the same controls, the same wording and the same writes as the row's (US-13). **There is no move a pointer can make on this board that a keyboard cannot.**
+- Given a move puts a card in a different column, When the card is rebuilt, Then focus is on the control I pressed — the card's reschedule trigger, or its checkbox — and not lost to the page.
+- Given I am dragging with a pointer and a screen reader, When I pick a card up, drop it, or abandon the drag, Then a polite live region says so and names the columns the card can go to. The write itself is reported by the same toast a menu press raises, so nothing is announced twice.
+
 ---
 
 ## 4. Scope boundaries
@@ -386,7 +422,7 @@ Changing only the due date is the most common single edit in daily use, and toda
 - File or image attachments.
 - Email verification flow, password reset / forgot password, and account deletion.
 - Profile editing (name, avatar, password change).
-- Sorting controls — any UI letting the user choose or change the list order — drag-and-drop reordering, and pagination or infinite scroll. The order itself is due-date-aware (above); what stays out is a control over it.
+- Sorting controls — any UI letting the user choose or change the list order — drag-and-drop **reordering**, and pagination or infinite scroll. The order itself is due-date-aware (above); what stays out is a control over it. **US-14's board does not change this.** Its drag changes a todo's due date or its completion — fields the app already stores and the row's own menu already writes — and it adds no ordering key. Order inside a column is the same server order the list uses. A `position` column, a within-column reorder, or a drag that writes a sequence remains out of scope, for the reason `docs/PM-PROPOSAL.md` §4 gives: manual position and due-date order are rival authorities and only one can win.
 - Bulk actions (complete all, delete all, clear completed).
 - Trash / archive / soft delete.
 - Offline support, PWA install, native apps.
@@ -437,6 +473,7 @@ Changing only the due date is the most common single edit in daily use, and toda
 | US-11 | Empty state | Should |
 | US-12 | Dated list header | Should |
 | US-13 | Reschedule from the row | Should |
+| US-14 | Board view of the same todos | Could |
 
 Non-functional priorities: NFR-01, NFR-02, NFR-03, NFR-07, NFR-10 are **Must**. NFR-04, NFR-05, NFR-08 are **Must**. NFR-06 (dark mode) and NFR-09 (performance) are **Should**.
 

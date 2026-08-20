@@ -481,7 +481,17 @@ test.describe("DEF-14 — the primary button label clears 4.5:1", () => {
     await todos.quickAdd("accent regression row");
     await expect(todos.doneCounter).toBeVisible();
 
-    const selectedChip = signedIn.locator('[role="radio"][aria-checked="true"]');
+    /*
+      Scoped to the status filter by name. The screen carries a second
+      `ToggleButtonGroup` at `lg:` and above — the list/board view toggle — and
+      react-aria renders both as radiogroups, so an unscoped
+      `[role="radio"][aria-checked="true"]` matches two selected chips and trips
+      strict mode. The subject here has always been the status filter's chip;
+      it simply used to be the only one.
+    */
+    const selectedChip = signedIn
+      .getByRole("radiogroup", { name: "Filter todos by status" })
+      .locator('[role="radio"][aria-checked="true"]');
     const addButton = signedIn.getByRole("button", { name: "Add", exact: true });
 
     await expect(selectedChip).toBeVisible();

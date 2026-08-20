@@ -36,13 +36,30 @@ export type TodoCreatedVia = CreatedVia;
 export const STATUS_FILTER_VALUES = ["all", "active", "completed"] as const;
 export const PRIORITY_FILTER_VALUES = ["all", ...PRIORITY_VALUES] as const;
 
+/**
+ * The two ways of looking at the same todos (`docs/PRD.md` US-14).
+ *
+ * A *view*, not a filter: it changes nothing about which rows are asked for or
+ * which are shown, only how they are laid out. It sits beside the filters in
+ * the URL for the same reason they do — a link to a board is a link to a board,
+ * a reload keeps it, and the back button undoes it (US-10).
+ *
+ * It is deliberately **not** part of `TodoListFilters`: that interface is the
+ * query `GET /api/todos` is asked, and it is passed straight to the service as
+ * axios params. Folding a presentation choice into it would put `view=board` on
+ * the wire, where the handler has no business seeing it.
+ */
+export const VIEW_VALUES = ["list", "board"] as const;
+
 export const DEFAULT_PRIORITY = "medium";
 export const DEFAULT_STATUS_FILTER = "all";
 export const DEFAULT_PRIORITY_FILTER = "all";
+export const DEFAULT_VIEW = "list";
 
 export type TodoPriority = Priority;
 export type TodoStatusFilter = (typeof STATUS_FILTER_VALUES)[number];
 export type TodoPriorityFilter = (typeof PRIORITY_FILTER_VALUES)[number];
+export type TodoView = (typeof VIEW_VALUES)[number];
 
 export const PRIORITY_LABELS: Record<TodoPriority, string> = {
   low: "Low",
@@ -98,6 +115,17 @@ export const parsePriorityFilter = (value: unknown): TodoPriorityFilter => {
     (PRIORITY_FILTER_VALUES as readonly string[]).includes(value)
     ? (value as TodoPriorityFilter)
     : DEFAULT_PRIORITY_FILTER;
+};
+
+/**
+ * An unknown `view` is the list, silently. A URL is something people edit and
+ * share, so a typo has to degrade to the default rather than to an error page —
+ * the same ruling the two filter parsers above already make.
+ */
+export const parseView = (value: unknown): TodoView => {
+  return typeof value === "string" && (VIEW_VALUES as readonly string[]).includes(value)
+    ? (value as TodoView)
+    : DEFAULT_VIEW;
 };
 
 /**

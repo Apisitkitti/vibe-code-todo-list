@@ -6,13 +6,14 @@ import {
   type FilterSync,
   isPushNeeded,
   MAX_PENDING_PUSHES,
-  nextFilters,
+  nextUrlState,
   normalizeSearchQuery,
   recordPush,
   setSearchQuery,
   syncToUrl,
+  type TodosUrlState,
 } from "@/lib/filterSync";
-import type { TodoListFilters } from "@/lib/todo";
+import type { TodoListFilters, TodoView } from "@/lib/todo";
 
 /**
  * The filter row's ownership rules, driven through the interleavings that
@@ -31,25 +32,39 @@ import type { TodoListFilters } from "@/lib/todo";
  * anywhere in the sequence, and a browser cannot.
  */
 
-const url = (over: Partial<TodoListFilters> = {}): TodoListFilters => ({
-  status: "all",
-  priority: "all",
-  query: "",
-  ...over,
+/**
+ * A `/todos` URL, written flat because that is how it reads at a call site.
+ *
+ * The module's own shape nests the filters under `filters` so a URL state
+ * cannot be handed to `getTodoList`, which spreads its argument straight into
+ * axios params. That matters in the source and only gets in the way here.
+ */
+const url = (
+  over: Partial<TodoListFilters & { view: TodoView }> = {},
+): TodosUrlState => ({
+  filters: {
+    status: over.status ?? "all",
+    priority: over.priority ?? "all",
+    query: over.query ?? "",
+  },
+  view: over.view ?? "list",
 });
 
 const types = (state: FilterSync, value: string) =>
   setSearchQuery(state, value);
 
 /** The debounce, or a filter control, handing a tuple to the router. */
-const pushes = (state: FilterSync, changes: Partial<TodoListFilters> = {}) => {
-  const pushed = nextFilters(state, changes);
+const pushes = (
+  state: FilterSync,
+  changes: Parameters<typeof nextUrlState>[1] = {},
+) => {
+  const pushed = nextUrlState(state, changes);
 
   return { state: recordPush(state, pushed), pushed };
 };
 
-const lands = (state: FilterSync, urlFilters: TodoListFilters) =>
-  syncToUrl(state, urlFilters);
+const lands = (state: FilterSync, urlState: TodosUrlState) =>
+  syncToUrl(state, urlState);
 
 describe("filterSync", () => {
   it("follows a navigation that came from outside the component", () => {
@@ -64,8 +79,8 @@ describe("filterSync", () => {
       url({ status: "completed", priority: "high" }),
     );
 
-    expect(state.applied.status).toBe("completed");
-    expect(state.applied.priority).toBe("high");
+    expect(state.applied.filters.status).toBe("completed");
+    expect(state.applied.filters.priority).toBe("high");
   });
 
   it("does not undo a clear made while its own push was in flight", () => {
@@ -159,7 +174,7 @@ describe("filterSync", () => {
 
     const { state: recorded, pushed } = pushes(state);
 
-    expect(pushed.query).toBe("abc");
+    expect(pushed.filters.query).toBe("abc");
 
     state = lands(recorded, url({ query: "abc" }));
 
@@ -195,7 +210,7 @@ describe("filterSync", () => {
     // Active pressed inside the debounce window, before `?q=abc` lands.
     const { pushed } = pushes(state, { status: "active" });
 
-    expect(pushed).toEqual({ status: "active", priority: "all", query: "abc" });
+    expect(pushed).toEqual(url({ status: "active", query: "abc" }));
   });
 
   it("typing carries a filter press that has not landed yet", () => {
@@ -212,7 +227,7 @@ describe("filterSync", () => {
 
     const { pushed } = pushes(state);
 
-    expect(pushed).toEqual({ status: "active", priority: "all", query: "abc" });
+    expect(pushed).toEqual(url({ status: "active", query: "abc" }));
   });
 
   /* ── a push that never lands ────────────────────────────────────────────── */
@@ -242,10 +257,10 @@ describe("filterSync", () => {
     let state = createFilterSync(url());
 
     state = pushes(state, { status: "active" }).state;
-    expect(nextFilters(state).status).toBe("active");
+    expect(nextUrlState(state).filters.status).toBe("active");
 
     state = abandonPendingPushes(state);
-    expect(nextFilters(state).status).toBe("all");
+    expect(nextUrlState(state).filters.status).toBe("all");
   });
 
   it("recognises a push it gave up on, if it lands after all", () => {
@@ -316,9 +331,82 @@ describe("filterSync", () => {
     expect(landed).not.toBe(state);
     expect(landed.pending).toHaveLength(0);
     // The older push is no longer predictive, but is still ours if it lands.
-    expect(landed.disowned).toEqual([
-      { status: "all", priority: "all", query: "abc" },
-    ]);
+    expect(landed.disowned).toEqual([url({ query: "abc" })]);
+  });
+
+  /* ── the view, which is in the URL but is not a filter ──────────────────── */
+
+  it("recognises its own view push when it lands", () => {
+    /*
+      Identity is on the whole URL tuple, view included. If it were on the
+      filters alone, a push that changed only the view would land looking
+      exactly like the state we were already in — the recording would never be
+      consumed, `settled` would go on claiming it, and the strand would sit
+      there until the settle timer disowned it.
+    */
+    let state = createFilterSync(url());
+
+    state = pushes(state, { view: "board" }).state;
+    expect(state.pending).toHaveLength(1);
+
+    state = lands(state, url({ view: "board" }));
+
+    expect(state.pending).toHaveLength(0);
+    expect(state.applied.view).toBe("board");
+  });
+
+  it("a view change carries typing that has not landed yet", () => {
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+
+    const { pushed } = pushes(state, { view: "board" });
+
+    expect(pushed).toEqual(url({ query: "abc", view: "board" }));
+  });
+
+  it("typing carries a view change that has not landed yet", () => {
+    /*
+      The direction with no recovery. The search text has local state and
+      re-pushes what it notices missing; the view is rendered straight from the
+      prop, so a dropped view change leaves nothing that remembers it.
+    */
+    let state = createFilterSync(url());
+
+    state = pushes(state, { view: "board" }).state;
+    state = types(state, "abc");
+
+    const { pushed } = pushes(state);
+
+    expect(pushed).toEqual(url({ query: "abc", view: "board" }));
+  });
+
+  it("a navigation that moved only the view does not reach into the search box", () => {
+    /*
+      An outside navigation is allowed to overwrite the field, and before the
+      view joined the tuple that was unambiguous: the only reason to see one
+      was that somebody had set `q`. Now a view toggle is also an outside
+      navigation to this state, and adopting on the strength of *any*
+      difference would delete text the user had typed and not yet pushed.
+    */
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+    state = lands(state, url({ view: "board" }));
+
+    expect(state.query).toBe("abc");
+    expect(state.applied.view).toBe("board");
+    // …and the text is still owed to the URL.
+    expect(isPushNeeded(state, url({ view: "board" }))).toBe(true);
+  });
+
+  it("still follows an outside navigation that does change the search text", () => {
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+    state = lands(state, url({ query: "from a link", view: "board" }));
+
+    expect(state.query).toBe("from a link");
   });
 
   it("returns the identical state when there is nothing to reconcile", () => {
@@ -339,7 +427,7 @@ describe("filterSync", () => {
 
     expect(state.pending.length).toBeLessThanOrEqual(MAX_PENDING_PUSHES);
     // The newest is always kept — it is the one still most likely in flight.
-    expect(state.pending.at(-1)?.query).toBe("q39");
+    expect(state.pending.at(-1)?.filters.query).toBe("q39");
   });
 
   it("bounds the disowned list too, so it cannot refuse navigations forever", () => {

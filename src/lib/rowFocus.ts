@@ -394,6 +394,40 @@ const browserRestoreDeps: RestoreFocusDeps = {
 };
 
 /**
+ * The loop both restorations run, with only "which control" left to the caller.
+ *
+ * Extracted when the board gave the same problem a second shape, and it is the
+ * *conditions* that are worth sharing rather than the frame counting: act only
+ * on focus that is already on the floor, wait for the control to be
+ * **focusable** rather than merely present, and give up after
+ * `MAX_WAIT_FRAMES` instead of hanging. Each of those is a defect this project
+ * has already paid for once (review F1), and a second copy of the loop is a
+ * second place for one of them to be dropped.
+ */
+const restoreFocusTo = async (
+  findTarget: () => FocusTarget | null,
+  deps: Omit<RestoreFocusDeps, "findTrigger">,
+): Promise<boolean> => {
+  for (let frame = 0; frame < MAX_WAIT_FRAMES; frame += 1) {
+    const active = deps.getActiveElement();
+
+    if (active === null || active === deps.getBody()) {
+      const target = findTarget();
+
+      if (target !== null) {
+        target.focus();
+
+        if (deps.getActiveElement() === target) return true;
+      }
+    }
+
+    await deps.waitFrame();
+  }
+
+  return false;
+};
+
+/**
  * Puts focus back on the control the user pressed, after the row it lives on
  * has been rebuilt somewhere else in the list.
  *
@@ -439,23 +473,72 @@ export const restoreRescheduleFocus = async (
   todoId: string,
   deps: RestoreFocusDeps = browserRestoreDeps,
 ): Promise<boolean> => {
-  for (let frame = 0; frame < MAX_WAIT_FRAMES; frame += 1) {
-    const active = deps.getActiveElement();
+  return restoreFocusTo(() => deps.findTrigger(todoId), deps);
+};
 
-    if (active === null || active === deps.getBody()) {
-      const trigger = deps.findTrigger(todoId);
+/**
+ * Names a card's completion checkbox by the todo it belongs to — the board's
+ * equivalent of `RESCHEDULE_TRIGGER_ATTRIBUTE`, for the control beside it.
+ *
+ * **It is on a wrapper element, and the checkbox is found beneath it**, rather
+ * than on the checkbox itself. react-aria renders the real
+ * `<input type="checkbox">` visually hidden inside a `<label>`, and which of
+ * those elements a stray `data-*` prop lands on is HeroUI's business, not this
+ * app's; the input is the thing that takes focus. A wrapper this app owns is
+ * the one anchor that cannot move under a dependency upgrade.
+ *
+ * The accessible name is not usable as the anchor here, which is the whole
+ * reason an attribute is needed at all: the label reads `Mark "x" as complete`
+ * before the press and `Mark "x" as not complete` after it, so a selector built
+ * from it would be looking for the control the toggle just stopped being.
+ */
+export const TOGGLE_TARGET_ATTRIBUTE = "data-toggle-for";
 
-      if (trigger !== null) {
-        trigger.focus();
+/** The attribute as a spreadable prop; see `undoTokenProps` for why. */
+export const toggleTargetProps = (todoId: string): Record<string, string> => ({
+  [TOGGLE_TARGET_ATTRIBUTE]: todoId,
+});
 
-        if (deps.getActiveElement() === trigger) return true;
-      }
-    }
+const toggleTargetSelector = (todoId: string) =>
+  `main [${TOGGLE_TARGET_ATTRIBUTE}="${CSS.escape(todoId)}"] input[type="checkbox"]`;
 
-    await deps.waitFrame();
-  }
+/** What `restoreToggleFocus` reads the world through. */
+export interface RestoreToggleDeps extends Omit<RestoreFocusDeps, "findTrigger"> {
+  findToggle: (todoId: string) => FocusTarget | null;
+}
 
-  return false;
+const browserToggleDeps: RestoreToggleDeps = {
+  findToggle: (todoId) =>
+    document.querySelector<HTMLElement>(toggleTargetSelector(todoId)),
+  getActiveElement: () => document.activeElement,
+  getBody: () => document.body,
+  waitFrame: nextFrame,
+};
+
+/**
+ * Puts focus back on the checkbox the user ticked, after the card it lives on
+ * has been rebuilt in another column (`docs/DESIGN.md` §8.8).
+ *
+ * A **restoration**, like `restoreRescheduleFocus` and for the same reason —
+ * and deliberately not the toggle's list behaviour, which moves focus to the
+ * toast's Undo. That move is right on the list because the row is *gone*: a
+ * status filter removed it and the toast is the only route back. On the board
+ * the card is not gone, it has moved to `Completed` and is still on screen and
+ * still the user's, so the right place for focus is the control they pressed,
+ * where the next `Space` un-completes what they just completed. Dragging them
+ * into a toast instead would arm a different mutation under that keypress, for
+ * a row they can still see.
+ *
+ * The focus is lost for the reason the reschedule's is: columns are separate
+ * subtrees, so React unmounts the card and builds a new one rather than moving
+ * the DOM node. Nothing about that is visible — the card appears to slide —
+ * which is exactly the kind of loss only keyboard use finds.
+ */
+export const restoreToggleFocus = async (
+  todoId: string,
+  deps: RestoreToggleDeps = browserToggleDeps,
+): Promise<boolean> => {
+  return restoreFocusTo(() => deps.findToggle(todoId), deps);
 };
 
 /**

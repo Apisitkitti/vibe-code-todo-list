@@ -8,3 +8,4 @@
 export * from "./shared";
 export * from "./filters";
 export * from "./priority";
+export * from "./board";
