@@ -30,10 +30,23 @@ const globalSetup = async () => {
 
   const client = new Client({ connectionString: databaseUrl });
 
+  // `migrate deploy` rather than `db push`, so a developer's database is built
+  // the same way CI's and production's are. Neither Prisma command accepts a
+  // `--url` flag any more (7.9.1: only `db push` still has one), so the URL is
+  // pinned by setting DATABASE_URL for the command — `prisma.config.ts` reads
+  // it through `env()`, and `process.loadEnvFile` does not overwrite a
+  // variable that is already set, so this beats `.env` rather than losing to
+  // it.
   const setupHint =
     `Prepare it once with:\n` +
     `  createdb todo_app_test\n` +
-    `  DATABASE_URL='${databaseUrl}' npx prisma db push\n\n` +
+    `  DATABASE_URL='${databaseUrl}' npx prisma migrate deploy\n\n` +
+    `If the database already has these tables from the db-push era, it has ` +
+    `no migration history and the command above will stop with P3005. ` +
+    `Baseline it once, which records the migration as applied without ` +
+    `re-running it:\n` +
+    `  DATABASE_URL='${databaseUrl}' npx prisma migrate resolve --applied 0_init\n` +
+    `  DATABASE_URL='${databaseUrl}' npx prisma migrate deploy\n\n` +
     `Or point the suite elsewhere with TEST_DATABASE_URL (it must be a ` +
     `non-hosted host and named *_test).`;
 

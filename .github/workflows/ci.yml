@@ -79,8 +79,27 @@ jobs:
       # only has to create the tables. Prisma 7 reads the datasource URL from
       # `prisma.config.ts`, which falls through to `DATABASE_URL` when no
       # `.env` file exists — and none is committed.
-      - name: Push the schema to the test database
-        run: npx prisma db push
+      #
+      # `migrate deploy`, not `db push`, and the difference is the point. This
+      # is the same command the Vercel build runs, so every pull request now
+      # applies the migrations the way production will apply them. Under
+      # `db push` the migration files could be wrong — malformed SQL, a
+      # migration that does not reproduce the schema — and CI would still be
+      # green, because it built the tables from schema.prisma and never read
+      # them. The container is empty at this point, so this starts from zero
+      # and replays the whole history.
+      - name: Apply migrations to the test database
+        run: npx prisma migrate deploy
+
+      # Proves the migrations and schema.prisma still agree. `db push` made
+      # this unnecessary and impossible at the same time; now that CI builds
+      # the database from the migration files, a schema.prisma edit committed
+      # without its migration has to be caught here or it reaches the Vercel
+      # build, where the failure is a red deploy instead of a red check.
+      #
+      # --exit-code: 0 when the diff is empty, 2 when it is not.
+      - name: Check the migrations reproduce the schema
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
 
       - name: Lint
         run: npm run lint
@@ -159,8 +178,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Push the schema to the test database
-        run: npx prisma db push
+      - name: Apply migrations to the test database
+        run: npx prisma migrate deploy
 
       # Only Chromium: both projects in `playwright.config.ts` are Chromium
       # (desktop and an emulated Pixel 7), so the other engines would be

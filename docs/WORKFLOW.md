@@ -129,22 +129,72 @@ side edits files the other has open. Two things do not separate themselves:
 Never kill a process you did not start: a port that is busy belongs to someone,
 possibly to another project entirely.
 
-## Schema changes reach production by hand
+## Schema changes
 
-This project has no `prisma/migrations/`; it has always used `prisma db push`,
-and CI pushes the schema to a throwaway database. Vercel's build runs
-`prisma generate && next build` — **nothing applies schema to Neon**. A branch
-that adds a column therefore ships code that expects a column production does
-not have, and Prisma selects every scalar field, so a missing one does not
-degrade a feature: every list query 500s.
+The schema reaches every database — yours, CI's and production's — by the same
+route: files in `prisma/migrations/`, applied with `prisma migrate deploy`.
 
-So a schema change is two deploys' worth of care in one:
+This used to be a manual step. There was no `prisma/migrations/`, the app used
+`prisma db push`, and Vercel's build was `prisma generate && next build`, so
+**nothing applied schema to Neon**. A branch that added a column shipped code
+expecting a column production did not have, and because Prisma selects every
+scalar field, a missing one does not degrade a feature — every list query 500s,
+for everyone, on deploy. The control was this paragraph asking someone to
+remember `psql` first. `createdVia` was applied that way.
 
-1. Apply the DDL to Neon **before** merging to `main`, additively — a new
-   column nullable, no default, so existing rows are not backfilled with an
-   answer nobody measured.
-2. Record the exact DDL in the pull request, since the repo does not.
-3. Only then merge, and check the first write of that shape after the deploy.
+The deploy now applies it instead: `vercel.json` sets `buildCommand` to
+`prisma generate && prisma migrate deploy && next build`. The migration runs
+**before** `next build`, so a migration that fails fails the build and the
+currently deployed version keeps serving.
 
-`createdVia` was the first change where this mattered and it was applied this
-way. Anything that drops or renames needs more than this note.
+### Making a schema change
+
+```bash
+# Edit prisma/schema.prisma, then:
+npx prisma migrate dev --name add_the_thing
+```
+
+That writes `prisma/migrations/<timestamp>_add_the_thing/migration.sql`, applies
+it to your database, and regenerates the client. **Commit the migration
+directory with the schema change** — they are one commit, and CI fails them
+apart: a `migrate diff --exit-code` step checks that the migrations still
+reproduce `schema.prisma`.
+
+Keep changes additive and reversible. A new column is nullable with no default,
+so existing rows are not backfilled with an answer nobody measured — see the
+note on `createdVia` in `prisma/schema.prisma` for why that mattered. Anything
+that drops or renames a column needs more care than this section covers: the
+old code is still serving traffic while the new migration runs.
+
+### Preparing a database that predates migrations
+
+A database built by the old `db push` has the tables but no migration history,
+so `migrate deploy` stops with `P3005: The database schema is not empty`.
+Baseline it once — this records the first migration as applied without
+re-running its SQL:
+
+```bash
+DATABASE_URL='postgresql://postgres@127.0.0.1:5432/todo_app_dev' \
+  npx prisma migrate resolve --applied 0_init
+DATABASE_URL='postgresql://postgres@127.0.0.1:5432/todo_app_dev' \
+  npx prisma migrate deploy
+```
+
+**Check before you baseline.** `resolve --applied` writes a history row and runs
+no SQL, so if the database does not actually match the migration, it records a
+state that was never true and the drift never gets repaired. This is read-only
+and says whether they match — exit 0 for identical, exit 2 for drift, and
+`--script` instead of `--exit-code` prints the SQL that is still missing:
+
+```bash
+DATABASE_URL='...' npx prisma migrate diff \
+  --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+```
+
+### Pinning the database on a Prisma command
+
+In Prisma 7.9.1 only `db push` still takes `--url`; `migrate deploy`, `status`,
+`resolve` and `diff` all read the datasource from `prisma.config.ts`. Pin them
+by setting `DATABASE_URL` for the command, as above — `process.loadEnvFile`
+does not overwrite a variable that is already set, so the inline value wins over
+`.env` rather than losing to it. Verified, because the failure mode is silent.
