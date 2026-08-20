@@ -17,6 +17,14 @@ import {
   STATUS_FILTER_LABELS,
 } from "@/app/todos/constants";
 import {
+  createSearchQuerySync,
+  isSearchQueryPushNeeded,
+  normalizeSearchQuery,
+  recordQueryPush,
+  setSearchQuery,
+  syncSearchQueryToUrl,
+} from "@/lib/searchQuerySync";
+import {
   DEFAULT_PRIORITY_FILTER,
   DEFAULT_STATUS_FILTER,
   PRIORITY_FILTER_VALUES,
@@ -42,29 +50,46 @@ export interface TodoFiltersProps {
  * needs to read the search params itself.
  */
 export const TodoFilters = ({ filters }: TodoFiltersProps) => {
-  const [query, setQuery] = useState(filters.query);
-  const [lastAppliedQuery, setLastAppliedQuery] = useState(filters.query);
+  const [sync, setSync] = useState(() => createSearchQuerySync(filters.query));
   const [, startTransition] = useTransition();
 
   const router = useRouter();
 
-  // Adjusting state during render rather than in an effect: the search box
-  // follows the URL when navigation changes it from outside this component.
-  if (lastAppliedQuery !== filters.query) {
-    setLastAppliedQuery(filters.query);
-    setQuery(filters.query);
-  }
+  /*
+    Adjusted during render rather than in an effect: the search box follows the
+    URL when navigation changes it from outside this component.
+
+    What it must *not* follow is one of our own pushes landing, which arrives
+    through this same prop and is indistinguishable from an outside navigation
+    by its value alone — that is the revert `syncSearchQueryToUrl` exists to
+    stop. Reading the reconciled state below rather than `sync` keeps this
+    render on the answer just computed instead of the one being replaced.
+  */
+  const synced = syncSearchQueryToUrl(sync, filters.query);
+
+  if (synced !== sync) setSync(synced);
+
+  const { query } = synced;
 
   const pushFilters = (next: TodoListFilters) => {
     const params = new URLSearchParams();
+    /*
+      Trimmed here rather than left to the page, so the value recorded below is
+      the one that will come back — `src/app/todos/page.tsx` trims what it
+      reads, and an echo that does not match its recording is treated as an
+      outside navigation.
+    */
+    const pushedQuery = normalizeSearchQuery(next.query);
 
     if (next.status !== DEFAULT_STATUS_FILTER) params.set(STATUS_PARAM, next.status);
     if (next.priority !== DEFAULT_PRIORITY_FILTER) {
       params.set(PRIORITY_PARAM, next.priority);
     }
-    if (next.query !== "") params.set(QUERY_PARAM, next.query);
+    if (pushedQuery !== "") params.set(QUERY_PARAM, pushedQuery);
 
     const search = params.toString();
+
+    setSync((current) => recordQueryPush(current, pushedQuery));
 
     startTransition(() => {
       router.replace(search === "" ? TODOS_PATH : `${TODOS_PATH}?${search}`, {
@@ -75,7 +100,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
 
   // Typing should not push a history entry per keystroke.
   useEffect(() => {
-    if (query === filters.query) return;
+    if (!isSearchQueryPushNeeded(synced, filters.query)) return;
 
     const timer = setTimeout(() => {
       pushFilters({ ...filters, query });
@@ -97,7 +122,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
 
           if (typeof key !== "string") return;
 
-          pushFilters({ ...filters, status: key as TodoStatusFilter });
+          pushFilters({ ...filters, query, status: key as TodoStatusFilter });
         }}
         size="sm"
         className="w-full sm:w-auto"
@@ -126,7 +151,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
         onSelectionChange={(key) => {
           if (typeof key !== "string") return;
 
-          pushFilters({ ...filters, priority: key as TodoPriorityFilter });
+          pushFilters({ ...filters, query, priority: key as TodoPriorityFilter });
         }}
         className="flex w-full flex-col gap-1.5 sm:w-40"
       >
@@ -149,7 +174,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
       <SearchField
         aria-label="Search todos"
         value={query}
-        onChange={setQuery}
+        onChange={(value) => setSync((current) => setSearchQuery(current, value))}
         className="w-full sm:ml-auto sm:max-w-64"
       >
         <SearchField.Group className="min-h-11 sm:min-h-9">
