@@ -16,6 +16,7 @@ import {
   PRIORITY_FILTER_LABELS,
   STATUS_FILTER_LABELS,
 } from "@/app/todos/constants";
+import { ICON_BUTTON_SIZING, LABELLED_CONTROL_SIZING } from "@/lib/styles";
 import {
   DEFAULT_PRIORITY_FILTER,
   DEFAULT_STATUS_FILTER,
@@ -113,7 +114,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
           <ToggleButton
             key={status}
             id={status}
-            className="min-h-11 flex-1 sm:min-h-9 sm:flex-none"
+            className={`${LABELLED_CONTROL_SIZING} flex-1 sm:flex-none`}
           >
             {STATUS_FILTER_LABELS[status]}
           </ToggleButton>
@@ -131,7 +132,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
         className="flex w-full flex-col gap-1.5 sm:w-40"
       >
         <Label className="sr-only">Priority</Label>
-        <Select.Trigger className="min-h-11 sm:min-h-9">
+        <Select.Trigger className={LABELLED_CONTROL_SIZING}>
           <Select.Value />
           <Select.Indicator />
         </Select.Trigger>
@@ -152,7 +153,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
         onChange={setQuery}
         className="w-full sm:ml-auto sm:max-w-64"
       >
-        <SearchField.Group className="min-h-11 sm:min-h-9">
+        <SearchField.Group className={LABELLED_CONTROL_SIZING}>
           <SearchField.SearchIcon />
           <SearchField.Input placeholder="Search todos" />
           {/*
@@ -167,14 +168,14 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
             matching floor so the field grows with the button rather than the
             button escaping it — and that also lines the search box up with the
             status toggles and the priority select beside it, which were
-            already `min-h-11 sm:min-h-9`.
+            already `LABELLED_CONTROL_SIZING`.
 
             `aria-label` last, because `CloseButton` hardcodes `aria-label="Close"`
             before spreading its props: "Close" describes dismissing something,
             which is not what this does.
           */}
           <SearchField.ClearButton
-            className="min-h-11 min-w-11 sm:min-h-9 sm:min-w-9"
+            className={ICON_BUTTON_SIZING}
             aria-label="Clear search"
           />
         </SearchField.Group>

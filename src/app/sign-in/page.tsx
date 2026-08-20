@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import { TODOS_PATH, sanitiseNextPath } from "@/lib/routes";
 import { getSession } from "@/lib/session";
+import { AUTH_PAGE_SHELL } from "@/lib/styles";
 
 import { SignInForm } from "./components/form";
 
@@ -21,7 +22,7 @@ const SignInPage = async ({ searchParams }: PageProps<"/sign-in">) => {
   const params = await searchParams;
 
   return (
-    <main className="flex-1 grid place-items-center px-4 py-8">
+    <main className={AUTH_PAGE_SHELL}>
       <SignInForm nextPath={sanitiseNextPath(params.next) ?? TODOS_PATH} />
     </main>
   );

@@ -18,6 +18,7 @@ import { Controller, useForm } from "react-hook-form";
 
 import { FormTextField } from "@/components/ui";
 import { getErrorMessage } from "@/lib/getErrorMessage";
+import { AUTH_CARD_SIZING, FORM_ACTION_SIZING, FORM_FIELD_STACK } from "@/lib/styles";
 import { signInWithEmail } from "@/service/auth.service";
 
 import { signInFormSchema, type SignInFormValues } from "./schema";
@@ -78,7 +79,7 @@ export const SignInForm = ({ nextPath }: SignInFormProps) => {
   };
 
   return (
-    <Card className="w-full max-w-sm">
+    <Card className={AUTH_CARD_SIZING}>
       <Card.Header>
         <Card.Title>Welcome back</Card.Title>
         <Card.Description>Sign in to see your todos.</Card.Description>
@@ -87,7 +88,7 @@ export const SignInForm = ({ nextPath }: SignInFormProps) => {
           <Form
             validationBehavior="aria"
             onSubmit={handleSubmit(onSubmit)}
-            className="flex flex-col gap-4"
+            className={FORM_FIELD_STACK}
           >
             {formError ? (
               <Alert status="danger">
@@ -144,7 +145,7 @@ export const SignInForm = ({ nextPath }: SignInFormProps) => {
               type="submit"
               variant="primary"
               fullWidth
-              className="min-h-11"
+              className={FORM_ACTION_SIZING}
               isDisabled={isPending}
             >
               {isPending ? (

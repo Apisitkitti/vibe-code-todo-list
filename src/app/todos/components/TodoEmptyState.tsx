@@ -1,5 +1,7 @@
 import { Button, EmptyState, Typography } from "@heroui/react";
 
+import { LABELLED_CONTROL_SIZING } from "@/lib/styles";
+
 export interface TodoEmptyStateProps {
   heading: string;
   body: string;
@@ -45,7 +47,7 @@ export const TodoEmptyState = ({
         <Button
           variant="primary"
           size="sm"
-          className="min-h-11 sm:min-h-9"
+          className={LABELLED_CONTROL_SIZING}
           onPress={onAction}
         >
           {actionLabel}

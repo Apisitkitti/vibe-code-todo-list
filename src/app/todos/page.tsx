@@ -6,6 +6,8 @@ import {
   type TodoListFilters,
 } from "@/lib/todo";
 
+import { TODOS_PAGE_SHELL } from "@/lib/styles";
+
 import { TodoListScreen } from "./components/TodoListScreen";
 
 export const metadata: Metadata = {
@@ -33,7 +35,7 @@ const TodosPage = async ({ searchParams }: PageProps<"/todos">) => {
   };
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+    <main className={TODOS_PAGE_SHELL}>
       <TodoListScreen filters={filters} />
     </main>
   );

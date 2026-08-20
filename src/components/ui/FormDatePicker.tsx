@@ -11,6 +11,8 @@ import {
 import type { DateValue } from "@internationalized/date";
 import { parseDate } from "@internationalized/date";
 
+import { FIELD_GROUP_STACK } from "@/lib/styles";
+
 export interface FormDatePickerProps {
   name: string;
   label: string;
@@ -56,7 +58,7 @@ export const FormDatePicker = ({
       onChange={(date) => onChange(date ? date.toString() : "")}
       onBlur={onBlur}
       isDisabled={isDisabled}
-      className="flex flex-col gap-1.5"
+      className={FIELD_GROUP_STACK}
     >
       <Label>{label}</Label>
       <DateField.Group fullWidth>

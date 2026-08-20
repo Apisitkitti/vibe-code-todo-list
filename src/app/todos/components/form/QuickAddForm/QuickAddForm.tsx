@@ -21,6 +21,7 @@ import {
   type QuickAddRelease,
   type QuickAddTokenKind,
 } from "@/lib/quickAdd";
+import { CHIP_SIZING, DIALOG_ACTION_SIZING } from "@/lib/styles";
 import { todoFormSchema, type TodoFormValues } from "@/lib/todo.schema";
 
 import { quickAddSchema, type QuickAddValues } from "./schema";
@@ -310,7 +311,7 @@ export const QuickAddForm = ({
         <Button
           type="submit"
           variant="primary"
-          className="min-h-11 w-full sm:w-auto"
+          className={DIALOG_ACTION_SIZING}
           isDisabled={isPending}
         >
           {isPending ? (
@@ -341,7 +342,7 @@ export const QuickAddForm = ({
                 type="button"
                 variant="tertiary"
                 size="sm"
-                className="min-h-11 rounded-full sm:min-h-8"
+                className={`${CHIP_SIZING} rounded-full`}
                 aria-label={`${token.label} — keep "${token.text}" in the title`}
                 onPress={() => {
                   releaseKinds([token.kind]);
@@ -368,7 +369,7 @@ export const QuickAddForm = ({
           type="button"
           variant="tertiary"
           size="sm"
-          className="min-h-11 sm:ml-auto sm:min-h-8"
+          className={`${CHIP_SIZING} sm:ml-auto`}
           isDisabled={isPending}
           onPress={() => {
             void handleMoreOptions();
