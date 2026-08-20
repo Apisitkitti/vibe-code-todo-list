@@ -1,8 +1,8 @@
 # The team, as files
 
-Eight roles, written down so they stop being re-invented in a prompt each
-time. Each file is loaded by name — `pm`, `ux-designer`, `junior-dev`,
-`senior-reviewer`, `qa`, `sdet`, `platform`, `analyst`.
+Nine roles, written down so they stop being re-invented in a prompt each
+time. Each file is loaded by name — `pm`, `ux-designer`, `ui-designer`,
+`junior-dev`, `senior-reviewer`, `qa`, `sdet`, `platform`, `analyst`.
 
 Six of them are the team this project actually ran with. The last two were
 added because of where the failures came from, not to fill out a chart:
@@ -12,6 +12,12 @@ added because of where the failures came from, not to fill out a chart:
   query; nothing observes the deployed app; there is no rate limiting and no
   password reset, and those two compound into the worst outcome the product
   can produce.
+- **`ui-designer`** — the visual surface had no owner. `ux-designer` holds
+  behaviour and `docs/DESIGN.md`; this role holds type, spacing, colour and
+  density, and researches how other products solve the same surface before
+  proposing. The split matters because "what happens" and "how it reads" were
+  being decided in the same breath by someone whose evidence was all about the
+  first.
 - **`analyst`** — every ranking decision here was made by reasoning. The
   measures to check them were specified a quarter ago and never read, and when
   they finally were, one query contradicted the premise of two planning
