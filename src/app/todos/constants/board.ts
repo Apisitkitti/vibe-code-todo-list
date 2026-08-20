@@ -32,10 +32,15 @@ export const BOARD_COLUMN_EMPTY: Record<BoardColumnId, string> = {
  * that is picked up and put down again writes nothing, and has only these to
  * report it.
  */
+/*
+  No empty-list arm, because there is no card without a target: an active card
+  always has at least three (it can always be completed, and at least two of the
+  three dated columns are not the one it is in), and a completed card has
+  exactly one, the column it returns to. An arm for a case that cannot arise is
+  a branch nobody can test and a claim nobody can check.
+*/
 export const dragStartedMessage = (title: string, columns: string[]) =>
-  columns.length === 0
-    ? `Picked up “${title}”. There is nowhere to move it.`
-    : `Picked up “${title}”. Drop it on ${columns.join(", ")}.`;
+  `Picked up “${title}”. Drop it on ${columns.join(", ")}.`;
 
 export const dragDroppedMessage = (title: string, column: string) =>
   `Dropped “${title}” on ${column}.`;

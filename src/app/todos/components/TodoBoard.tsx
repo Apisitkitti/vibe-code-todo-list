@@ -102,7 +102,24 @@ export const TodoBoard = ({
   onDelete,
 }: TodoBoardProps) => {
   const [draggingTodo, setDraggingTodo] = useState<TodoItemData | null>(null);
-  const [settlingTodoId, setSettlingTodoId] = useState<string | null>(null);
+  /**
+   * The card wearing the settle ring, and **which drop put it there**.
+   *
+   * The sequence number is the whole of it: keyed on the id alone, dropping the
+   * same card twice inside the window wrote the value the state already held,
+   * so the effect below never re-ran and the ring expired on the *first* drop's
+   * timer — up to 2.5s early, and on the drop the user was actually watching.
+   * That is the one affordance covering "the card may settle at a different
+   * index", which is what the whole no-insertion-indicator decision rests on
+   * (`docs/decisions/2026-08-20-board-is-a-view-not-an-order.md`), so it losing
+   * its own restart is not a cosmetic bug.
+   *
+   * A counter rather than a timestamp because it only has to be *different*,
+   * and two drops inside one millisecond would not be.
+   */
+  const [settling, setSettling] = useState<{ id: string; seq: number } | null>(
+    null,
+  );
   /**
    * What the live region is currently saying.
    *
@@ -156,7 +173,10 @@ export const TodoBoard = ({
   const moveInto = (column: BoardColumnId): BoardMove | null => {
     if (draggingTodo === null) return null;
 
-    return boardMove(draggingTodo, column);
+    // The live row, so the column that lights up and the column that accepts
+    // the drop are decided from the same data. `handleDrop` re-asks rather than
+    // trusting this, because a render can land between the two.
+    return boardMove(liveTodo(draggingTodo), column);
   };
 
   const handleDragOver = (
@@ -176,12 +196,48 @@ export const TodoBoard = ({
     event.dataTransfer.dropEffect = "move";
   };
 
+  /**
+   * The card as it is **now**, looked up by id, rather than the snapshot taken
+   * at `dragstart`.
+   *
+   * `draggingTodo` is captured when the drag begins and is of unbounded age by
+   * the time it is dropped. Almost everything downstream reads it: `boardMove`
+   * decides from its `completed` and `dueAt`, and `handleReschedule` reads
+   * `todo.dueAt` for the value Undo will put back. This file's own standard —
+   * and `TodoListScreen`'s, in as many words — is that the previous value is
+   * read *from the row*, never derived; a snapshot is a derivation with a
+   * timestamp on it.
+   *
+   * Reaching a stale one takes a mutation already in flight when the drag
+   * starts (its `reloadSilently` lands mid-drag and replaces the row) plus a
+   * foreign writer having changed that row — the same three-precondition shape
+   * `runToggle` records as review MI-1, and not something a review could build
+   * a repro for with one pointer and one tab. It is closed here anyway because
+   * closing it is a lookup: arguing about the reachability of a stale read
+   * costs more than not taking one.
+   *
+   * Falls back to the snapshot when the id is gone from `columns`, which is a
+   * card deleted or filtered away mid-drag. `boardMove` and the write are both
+   * safe on a row that no longer exists — the write answers 404 and the toast
+   * reports it — and using the snapshot keeps the drop reporting the card the
+   * user was actually holding.
+   */
+  const liveTodo = (todo: TodoItemData): TodoItemData => {
+    for (const column of columns) {
+      const found = column.todos.find((candidate) => candidate.id === todo.id);
+
+      if (found) return found;
+    }
+
+    return todo;
+  };
+
   const handleDrop = (
     event: React.DragEvent<HTMLElement>,
     column: BoardColumn,
   ) => {
-    const todo = draggingTodo;
-    const move = moveInto(column.id);
+    const todo = draggingTodo === null ? null : liveTodo(draggingTodo);
+    const move = todo === null ? null : boardMove(todo, column.id);
 
     if (todo === null || move === null) return;
 
@@ -192,7 +248,7 @@ export const TodoBoard = ({
     wasDropped.current = true;
     setDraggingTodo(null);
     setDragAnnouncement(dragDroppedMessage(todo.title, column.heading));
-    setSettlingTodoId(todo.id);
+    setSettling((current) => ({ id: todo.id, seq: (current?.seq ?? 0) + 1 }));
 
     if (move.kind === "status") {
       onToggle(todo, move.completed);
@@ -204,12 +260,15 @@ export const TodoBoard = ({
   };
 
   useEffect(() => {
-    if (settlingTodoId === null) return;
+    if (settling === null) return;
 
-    const timer = setTimeout(() => setSettlingTodoId(null), SETTLE_HIGHLIGHT_MS);
+    const timer = setTimeout(() => setSettling(null), SETTLE_HIGHLIGHT_MS);
 
     return () => clearTimeout(timer);
-  }, [settlingTodoId]);
+    // The sequence number is in the dependency deliberately: a second drop of
+    // the same card has to cancel the first timer and start a fresh one, and
+    // the id alone cannot express "again".
+  }, [settling]);
 
   return (
     <div className="flex flex-col gap-3 p-2">
@@ -266,7 +325,7 @@ export const TodoBoard = ({
                       isPending={pendingTodoIds.has(todo.id)}
                       isVanishing={todo.id === vanishingTodoId}
                       isDragging={todo.id === draggingTodo?.id}
-                      isSettling={todo.id === settlingTodoId}
+                      isSettling={todo.id === settling?.id}
                       showTooltips={showTooltips}
                       onToggle={onToggle}
                       onEdit={onEdit}
