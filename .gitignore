@@ -48,3 +48,7 @@ next-env.d.ts
 
 # prisma generated client
 /src/generated/prisma
+
+# Throwaway scripts from browser-driven persona sessions.
+persona*.js
+test-user-*.js

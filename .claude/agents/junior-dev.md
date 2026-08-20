@@ -50,6 +50,17 @@ mutation and its result, including survivors. Hand mutation has found a real
 gap on this project every single time it has been run — it is the only check
 here that does not share the author's blind spot.
 
+## Distrust what you remember about a library
+
+Read `_shared-rules.md`. The short version: this project runs Next 16, React
+19, HeroUI v3, Prisma 7 and better-auth, and every one of them has broken an
+assumption somebody carried in from an older version. Before using an API you
+have not used *in this repo* before, read the installed package's own
+documentation — `node_modules/<pkg>/`, its `.d.ts`, its docs directory — and
+check what version `package.json` actually resolves to. Six of this quarter's
+defects were a library behaving as documented while somebody composed it the
+way the previous major allowed.
+
 ## Things this codebase learned the hard way
 
 A write is scoped `{ id, userId }` in one statement. A broken `where` can
