@@ -60,10 +60,14 @@ import type { TodoListFilters } from "@/lib/todo";
  *
  * A recording is normally consumed by the navigation it describes. One can be
  * stranded — a `replace` that a full page load or another navigation
- * supersedes before it lands — and a stranded recording would silently swallow
- * a later *outside* navigation carrying the same tuple. Bounding the list caps
- * how many can lurk at once; `abandonPendingPushes` is what actually clears
- * them, and is the reason a strand cannot outlive one settle window.
+ * supersedes before it lands — and a stranded recording silently swallows a
+ * later *outside* navigation carrying the same tuple.
+ *
+ * The bound is what caps that, and it is the only thing that does.
+ * `abandonPendingPushes` moves a strand to `disowned` rather than deleting it,
+ * so giving up stops the strand distorting `settled` but does not stop it
+ * suppressing adoption — deliberately, and for the reason `disowned` gives.
+ * Both lists carry this bound.
  *
  * Exported so the test that pins the bound reads the same number the module
  * enforces rather than a copy of it.
@@ -88,6 +92,30 @@ export interface FilterSync {
    * yet, oldest first.
    */
   readonly pending: readonly TodoListFilters[];
+  /**
+   * Tuples this component pushed and has stopped waiting for, oldest first.
+   *
+   * **Disowned, not forgotten, and the distinction is the whole point.** Two
+   * different things stop a push being pending: a settle timer giving up on
+   * it, and a newer push of ours landing ahead of it. In both cases we stop
+   * *building* on it — it can no longer be trusted to describe where the URL is
+   * going — but it is still a tuple **we** put on the wire, and if it turns up
+   * late it is still our echo and still must not overwrite what the user has
+   * typed since.
+   *
+   * Dropping the recording instead makes a merely-slow push indistinguishable
+   * from a stranger's navigation when it lands: it gets adopted, the user's
+   * newer text is overwritten, and `isPushNeeded` then reads false against it —
+   * state agreeing with itself at the wrong value, permanently, which is the
+   * exact shape this module exists to eliminate.
+   *
+   * The cost is that an outside navigation carrying one of these tuples is
+   * suppressed too. That is the same value-matching residual described above,
+   * bounded the same way, and it is the cheaper of the two mistakes: refusing
+   * a stranger's navigation loses one adoption, adopting a stale push of our
+   * own loses the user's typing for good.
+   */
+  readonly disowned: readonly TodoListFilters[];
 }
 
 /**
@@ -110,7 +138,22 @@ export const createFilterSync = (urlFilters: TodoListFilters): FilterSync => ({
   query: urlFilters.query,
   applied: urlFilters,
   pending: [],
+  disowned: [],
 });
+
+/**
+ * Move tuples out of `pending` without losing the fact that we pushed them.
+ *
+ * Bounded like `pending`, and for the same reason: these suppress adoption, so
+ * an unbounded list would go on refusing outside navigations forever.
+ */
+const disown = (
+  state: FilterSync,
+  abandoned: readonly TodoListFilters[],
+): readonly TodoListFilters[] =>
+  abandoned.length === 0
+    ? state.disowned
+    : [...state.disowned, ...abandoned].slice(-MAX_PENDING_PUSHES);
 
 /**
  * The filters the URL will hold once everything already pushed has landed.
@@ -162,18 +205,24 @@ export const recordPush = (
       };
 
 /**
- * Give up on every push still outstanding.
+ * Stop waiting for every push still outstanding.
  *
  * A `router.replace` that is dropped or superseded produces no navigation and
  * no error — nothing tells this component its push died. Without this, a
- * recording for it sits in `pending` forever: it makes `settled` claim a target
- * the URL will never reach, and it swallows the next outside navigation that
- * happens to carry the same tuple. Called on a timer by the component, after
- * which `isPushNeeded` sees the field disagreeing with the real URL again and
- * the debounce re-pushes. That re-push is the only retry path there is.
+ * recording for it sits in `pending` forever, making `settled` claim a target
+ * the URL will never reach. Called on a timer by the component, after which
+ * `isPushNeeded` sees the field disagreeing with the real URL again and the
+ * debounce re-pushes. That re-push is the only retry path there is.
+ *
+ * The tuples are **disowned rather than dropped**: giving up on a push is a
+ * decision about whether to keep *predicting* the URL from it, not a claim
+ * that it never happened. See `FilterSync.disowned` — a push that was merely
+ * slow rather than dead must still be recognised as ours if it lands.
  */
 export const abandonPendingPushes = (state: FilterSync): FilterSync =>
-  state.pending.length === 0 ? state : { ...state, pending: [] };
+  state.pending.length === 0
+    ? state
+    : { ...state, pending: [], disowned: disown(state, state.pending) };
 
 /**
  * The URL's filters are now `urlFilters`. Decide whether the controls follow.
@@ -185,10 +234,15 @@ export const abandonPendingPushes = (state: FilterSync): FilterSync =>
  * Matching *anywhere* in the pending list, not just at the head, is what makes
  * this correct under two pushes in flight at once: `abc` then `abcd`, with
  * `?q=abc` landing first, must be recognised as ours even though it is no
- * longer the newest thing we asked for. Everything ahead of the match is
- * dropped with it — a push older than one that has landed can no longer be
- * distinguished from an outside navigation anyway, and keeping it would only
- * let it swallow one.
+ * longer the newest thing we asked for. Everything ahead of the match stops
+ * being pending with it — a push older than one that has landed can no longer
+ * be trusted to say where the URL is going — but it is **disowned rather than
+ * dropped**, because it is still ours and may still land.
+ *
+ * Deliberately not resting on the router discarding a superseded payload.
+ * Matching anywhere in the list exists precisely for the case supersession is
+ * claimed to prevent, and this module holds that posture everywhere rather
+ * than in most places.
  */
 export const syncToUrl = (
   state: FilterSync,
@@ -212,20 +266,36 @@ export const syncToUrl = (
       ...state,
       applied: urlFilters,
       pending: state.pending.slice(echoIndex + 1),
+      disowned: disown(state, state.pending.slice(0, echoIndex)),
+    };
+  }
+
+  const disownedIndex = state.disowned.findIndex((pushed) =>
+    sameFilters(pushed, urlFilters),
+  );
+
+  /*
+    A push we had stopped waiting for, arriving after all. Acknowledged so
+    `applied` tracks the URL, and pointedly *not* adopted: the controls have
+    moved on and this is the stale answer, not a new instruction.
+  */
+  if (disownedIndex !== -1) {
+    return {
+      ...state,
+      applied: urlFilters,
+      disowned: state.disowned.slice(disownedIndex + 1),
     };
   }
 
   if (sameFilters(urlFilters, state.applied)) return state;
 
-  {
-    /*
-      Somebody else navigated. The controls follow — but the pending list is
-      kept, because our own pushes are still in the air and must still be
-      recognisable when they land. Dropping them here would turn the next echo
-      into an "outside navigation" and reintroduce the defect one step later.
-    */
-    return { ...state, query: urlFilters.query, applied: urlFilters };
-  }
+  /*
+    Somebody else navigated. The controls follow — but both lists are kept,
+    because our own pushes are still in the air and must still be recognisable
+    when they land. Dropping them here would turn the next echo into an
+    "outside navigation" and reintroduce the defect one step later.
+  */
+  return { ...state, query: urlFilters.query, applied: urlFilters };
 };
 
 /**

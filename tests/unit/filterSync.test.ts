@@ -248,24 +248,77 @@ describe("filterSync", () => {
     expect(nextFilters(state).status).toBe("all");
   });
 
-  it("an abandoned push no longer swallows a later outside navigation", () => {
-    const stranded = (() => {
-      let state = createFilterSync(url());
+  it("recognises a push it gave up on, if it lands after all", () => {
+    /*
+      **This replaces a test that asserted the opposite**, and the inversion is
+      the point. That version had abandoning a push *forget* it, so a genuine
+      navigation carrying the same tuple was adopted again — which reads as
+      recovering from a strand, and is really the defect coming back. Giving up
+      is a decision to stop predicting the URL from a push; it is not evidence
+      the push died. A `replace` that was merely slow still lands, and when it
+      does it is our own echo carrying text the user has already replaced.
 
-      state = types(state, "abc");
-      state = pushes(state).state;
+      Forgetting it made that echo indistinguishable from a stranger's
+      navigation: `abcdef` would be overwritten by `abc`, and `isPushNeeded`
+      would then read false against it, so no correction would follow. State
+      agreeing with itself at the wrong value, permanently — the shape this
+      module exists to eliminate, reintroduced by its own recovery path.
 
-      return types(state, "xyz");
-    })();
+      The cost is that an outside navigation carrying exactly a disowned tuple
+      is suppressed too. That is the value-matching residual the module doc
+      describes, bounded by `MAX_PENDING_PUSHES`, and it is the cheaper
+      mistake: refusing a stranger loses one adoption, adopting our own stale
+      push loses the user's typing for good.
+    */
+    let state = createFilterSync(url());
 
-    // While the strand is held, a genuine navigation carrying `abc` is
-    // mistaken for the echo and swallowed — the residual of matching by value.
-    expect(lands(stranded, url({ query: "abc" })).query).toBe("xyz");
+    state = types(state, "abc");
+    state = pushes(state).state;
+    state = types(state, "abcdef");
 
-    // Abandoning it is what bounds that window.
-    expect(
-      lands(abandonPendingPushes(stranded), url({ query: "abc" })).query,
-    ).toBe("abc");
+    // The settle timer gives up on the first push…
+    state = abandonPendingPushes(state);
+    // …the debounce pushes the newer text…
+    state = pushes(state).state;
+    // …and only then does the abandoned one arrive.
+    state = lands(state, url({ query: "abc" }));
+
+    expect(state.query).toBe("abcdef");
+    // …and the URL is the stale one, so a correction is still owed.
+    expect(isPushNeeded(state, url({ query: "abc" }))).toBe(true);
+  });
+
+  it("acknowledges a push that lands on the tuple the URL already held", () => {
+    /*
+      Pins the ordering inside `syncToUrl`: the recordings are consulted before
+      the "nothing changed" short circuit. Swapping those two blocks leaves
+      every other test in this file green, because the state they inspect
+      converges either way — this is the one place the difference is visible.
+
+      The case is the clear-during-flight one. The correcting push of the empty
+      tuple lands on a URL that is already empty, so `sameFilters(url, applied)`
+      is true and short-circuiting first returns the identical state, leaving a
+      recording behind for a navigation that has in fact already arrived.
+    */
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+    state = pushes(state).state;
+    state = types(state, "");
+    state = pushes(state).state;
+
+    expect(state.pending).toHaveLength(2);
+
+    const landed = lands(state, url());
+
+    // Not the identical object: a navigation happened and was acknowledged,
+    // even though it changed none of the URL's values.
+    expect(landed).not.toBe(state);
+    expect(landed.pending).toHaveLength(0);
+    // The older push is no longer predictive, but is still ours if it lands.
+    expect(landed.disowned).toEqual([
+      { status: "all", priority: "all", query: "abc" },
+    ]);
   });
 
   it("returns the identical state when there is nothing to reconcile", () => {
@@ -287,6 +340,18 @@ describe("filterSync", () => {
     expect(state.pending.length).toBeLessThanOrEqual(MAX_PENDING_PUSHES);
     // The newest is always kept — it is the one still most likely in flight.
     expect(state.pending.at(-1)?.query).toBe("q39");
+  });
+
+  it("bounds the disowned list too, so it cannot refuse navigations forever", () => {
+    let state = createFilterSync(url());
+
+    for (let index = 0; index < 40; index += 1) {
+      state = types(state, `q${index}`);
+      state = pushes(state).state;
+      state = abandonPendingPushes(state);
+    }
+
+    expect(state.disowned.length).toBeLessThanOrEqual(MAX_PENDING_PUSHES);
   });
 
   it("normalises the way the page does", () => {
