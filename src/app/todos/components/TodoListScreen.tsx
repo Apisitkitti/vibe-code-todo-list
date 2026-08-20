@@ -53,6 +53,7 @@ import {
   contract — the route handlers re-parse with it — and this screen wants the
   contract, not a form component, so it says so.
 */
+import { TODOS_PATH } from "@/lib/routes";
 import type { TodoFormValues } from "@/lib/todo.schema";
 import { QuickAddBar } from "./QuickAddBar";
 import { TodoEmptyState } from "./TodoEmptyState";
@@ -62,7 +63,6 @@ import { TodoGroupedList } from "./TodoGroupedList";
 import { TodoListHeaderLine } from "./TodoListHeaderLine";
 import { TodoListSkeleton } from "./TodoListSkeleton";
 
-const TODOS_PATH = "/todos";
 const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
 
 /**

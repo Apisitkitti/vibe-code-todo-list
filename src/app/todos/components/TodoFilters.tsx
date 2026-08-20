@@ -17,13 +17,15 @@ import {
   STATUS_FILTER_LABELS,
 } from "@/app/todos/constants";
 import {
-  createSearchQuerySync,
-  isSearchQueryPushNeeded,
-  normalizeSearchQuery,
-  recordQueryPush,
+  abandonPendingPushes,
+  createFilterSync,
+  isPushNeeded,
+  nextFilters,
+  recordPush,
   setSearchQuery,
-  syncSearchQueryToUrl,
-} from "@/lib/searchQuerySync";
+  syncToUrl,
+} from "@/lib/filterSync";
+import { TODOS_PATH } from "@/lib/routes";
 import {
   DEFAULT_PRIORITY_FILTER,
   DEFAULT_STATUS_FILTER,
@@ -34,11 +36,20 @@ import {
   type TodoStatusFilter,
 } from "@/lib/todo";
 
-const TODOS_PATH = "/todos";
 const STATUS_PARAM = "status";
 const PRIORITY_PARAM = "priority";
 const QUERY_PARAM = "q";
 const SEARCH_DEBOUNCE_MS = 300;
+/**
+ * How long a push is given to land before its recording is thrown away.
+ *
+ * A `replace` that is dropped or superseded reports nothing, so the only way
+ * to notice is to stop waiting. Comfortably longer than a debounce plus a
+ * round trip on a loaded machine, and short enough that a user who has been
+ * left looking at a stale URL gets the correcting push rather than a wrong
+ * list.
+ */
+const PUSH_SETTLE_MS = 2000;
 
 export interface TodoFiltersProps {
   filters: TodoListFilters;
@@ -50,46 +61,61 @@ export interface TodoFiltersProps {
  * needs to read the search params itself.
  */
 export const TodoFilters = ({ filters }: TodoFiltersProps) => {
-  const [sync, setSync] = useState(() => createSearchQuerySync(filters.query));
+  const [sync, setSync] = useState(() => createFilterSync(filters));
+  /**
+   * Bumped when a push is given up on, purely to re-run the debounce effect.
+   *
+   * The effect is keyed on the field's text and the URL's values, which is
+   * what stops a recorded push from re-triggering it — see `isPushNeeded`. The
+   * cost of that is that abandoning a push changes nothing the effect watches,
+   * so without this counter a push that never landed would never be retried
+   * and the field and the URL would sit disagreeing forever.
+   */
+  const [pushAttempt, setPushAttempt] = useState(0);
   const [, startTransition] = useTransition();
 
   const router = useRouter();
 
   /*
-    Adjusted during render rather than in an effect: the search box follows the
+    Adjusted during render rather than in an effect: the controls follow the
     URL when navigation changes it from outside this component.
 
-    What it must *not* follow is one of our own pushes landing, which arrives
+    What they must *not* follow is one of our own pushes landing, which arrives
     through this same prop and is indistinguishable from an outside navigation
-    by its value alone — that is the revert `syncSearchQueryToUrl` exists to
-    stop. Reading the reconciled state below rather than `sync` keeps this
-    render on the answer just computed instead of the one being replaced.
+    by its values alone — that is the revert `syncToUrl` exists to stop.
+    Reading the reconciled state below rather than `sync` keeps this render on
+    the answer just computed instead of the one being replaced.
   */
-  const synced = syncSearchQueryToUrl(sync, filters.query);
+  const synced = syncToUrl(sync, filters);
 
   if (synced !== sync) setSync(synced);
 
   const { query } = synced;
 
-  const pushFilters = (next: TodoListFilters) => {
+  /**
+   * Hand a change to the router.
+   *
+   * `changes` is laid over the **settled target** — what the URL will hold once
+   * everything already pushed has landed — and never over `filters`. Spreading
+   * the prop is what made a filter press and a keystroke each able to discard
+   * the other: whichever went second rebuilt its push from a URL that did not
+   * yet know about the first. Going through `nextFilters` is what keeps the two
+   * directions symmetric.
+   */
+  const push = (changes: Partial<TodoListFilters> = {}) => {
+    const next = nextFilters(synced, changes);
     const params = new URLSearchParams();
-    /*
-      Trimmed here rather than left to the page, so the value recorded below is
-      the one that will come back — `src/app/todos/page.tsx` trims what it
-      reads, and an echo that does not match its recording is treated as an
-      outside navigation.
-    */
-    const pushedQuery = normalizeSearchQuery(next.query);
 
     if (next.status !== DEFAULT_STATUS_FILTER) params.set(STATUS_PARAM, next.status);
     if (next.priority !== DEFAULT_PRIORITY_FILTER) {
       params.set(PRIORITY_PARAM, next.priority);
     }
-    if (pushedQuery !== "") params.set(QUERY_PARAM, pushedQuery);
+    // Already trimmed by `nextFilters`, which is the form it will come back in.
+    if (next.query !== "") params.set(QUERY_PARAM, next.query);
 
     const search = params.toString();
 
-    setSync((current) => recordQueryPush(current, pushedQuery));
+    setSync((current) => recordPush(current, next));
 
     startTransition(() => {
       router.replace(search === "" ? TODOS_PATH : `${TODOS_PATH}?${search}`, {
@@ -100,15 +126,34 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
 
   // Typing should not push a history entry per keystroke.
   useEffect(() => {
-    if (!isSearchQueryPushNeeded(synced, filters.query)) return;
+    if (!isPushNeeded(synced, filters)) return;
 
     const timer = setTimeout(() => {
-      pushFilters({ ...filters, query });
+      push();
     }, SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, filters.query, filters.status, filters.priority]);
+  }, [query, filters.query, filters.status, filters.priority, pushAttempt]);
+
+  /*
+    Nothing reports a `replace` that was dropped or superseded, so a recording
+    for it would otherwise sit in `pending` for the life of the page — claiming
+    a target the URL will never reach, and swallowing the next outside
+    navigation that happened to carry the same tuple. Giving up on it puts the
+    field back in disagreement with the real URL, and the counter re-runs the
+    debounce above, which is the whole of the retry path.
+  */
+  useEffect(() => {
+    if (synced.pending.length === 0) return;
+
+    const timer = setTimeout(() => {
+      setSync(abandonPendingPushes);
+      setPushAttempt((attempt) => attempt + 1);
+    }, PUSH_SETTLE_MS);
+
+    return () => clearTimeout(timer);
+  }, [synced]);
 
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -122,7 +167,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
 
           if (typeof key !== "string") return;
 
-          pushFilters({ ...filters, query, status: key as TodoStatusFilter });
+          push({ status: key as TodoStatusFilter });
         }}
         size="sm"
         className="w-full sm:w-auto"
@@ -151,7 +196,7 @@ export const TodoFilters = ({ filters }: TodoFiltersProps) => {
         onSelectionChange={(key) => {
           if (typeof key !== "string") return;
 
-          pushFilters({ ...filters, query, priority: key as TodoPriorityFilter });
+          push({ priority: key as TodoPriorityFilter });
         }}
         className="flex w-full flex-col gap-1.5 sm:w-40"
       >

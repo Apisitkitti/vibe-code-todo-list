@@ -219,14 +219,104 @@ test.describe("the search field owns its own value", () => {
     await expect(search).toHaveValue("something");
   });
 
-  test("still follows a navigation that came from outside the field", async ({
+  test("typing does not discard a filter press that has not landed yet", async ({
     signedIn,
     todos,
   }) => {
     /*
-      The guard above must not turn into "ignore the URL". A load carrying `q`
-      still has to populate the box, or the fix has traded one wrong value for
+      The mirror of the test above, and the half that was missed the first
+      time. `query` was threaded into the status and priority pushes so a
+      filter press stops discarding in-flight typing; nothing was done about
+      the other direction, and it is the worse one.
+
+      `pushFilters({ ...filters, query })` on the debounce path spreads the
+      URL's `status` and `priority`. Press Active and type inside the window
+      and the debounced push carries the *old* status, so the press is
+      discarded at the push site exactly as the typing was.
+
+      Worse, because there is no recovery. The search text has local state, so
+      a lost `q` is noticed and re-pushed; `status` has none — the group renders
+      `filters.status` straight from the prop — so once the press is dropped
+      from the URL there is nothing left that remembers it happened. The toggle
+      simply springs back to All and stays there.
+    */
+    await todos.quickAdd("something to search for");
+    await expect(
+      signedIn.locator("main").getByText("something to search for"),
+    ).toBeVisible();
+
+    const search = signedIn.getByRole("searchbox", { name: "Search todos" });
+
+    let releaseNavigation = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseNavigation = resolve;
+    });
+    let heldCount = 0;
+
+    /*
+      Holds the status press alone — `status` set, `q` absent. The search push
+      that follows carries `q`, so it is never held whichever way it resolves:
+      with `status` when the push site is right, without when it is not.
+    */
+    await signedIn.route(
+      (url) =>
+        url.pathname === "/todos" &&
+        url.searchParams.get("status") === "active" &&
+        url.searchParams.get("q") === null,
+      async (route) => {
+        heldCount += 1;
+
+        await held;
+        await route.continue();
+      },
+    );
+
+    const searchNavigation = signedIn.waitForRequest((request) => {
+      const url = new URL(request.url());
+
+      return (
+        url.pathname === "/todos" && url.searchParams.get("q") === "something"
+      );
+    });
+
+    await statusFilter(signedIn, "active").click();
+
+    // The press is in the air; the URL's `status` is provably still `all`.
+    await expect.poll(() => heldCount).toBeGreaterThan(0);
+
+    await search.fill("something");
+
+    const pushed = new URL((await searchNavigation).url());
+
+    // The assertion the unfixed push site fails: `status` is absent entirely.
+    expect(pushed.searchParams.get("status")).toBe("active");
+
+    releaseNavigation();
+  });
+
+  test("a load carrying ?q populates the field", async ({
+    signedIn,
+    todos,
+  }) => {
+    /*
+      The guard must not turn into "ignore the URL". A load carrying `q` still
+      has to populate the box, or the fix has traded one wrong value for
       another.
+
+      Named for what it actually exercises. `goto` is a document navigation, so
+      the component remounts and this runs `createSearchQuerySync` — the
+      constructor — and never reaches `syncSearchQueryToUrl`'s
+      outside-navigation branch. It was previously called "still follows a
+      navigation that came from outside the field", which is the branch it is
+      the one test here that does *not* touch.
+
+      That branch is covered in `tests/unit/searchQuerySync.test.ts`, and it has
+      to be, because an in-app navigation to `/todos` carrying a different `q`
+      is not something this app can currently produce: nothing links to
+      `/todos`, `clearFilters` pushes no `q`, and every filter change is a
+      `replace`, so typing lays down no history entry to go Back to. Should any
+      of those three change, the branch becomes reachable and wants a real
+      journey here.
     */
     await todos.quickAdd("something to search for");
     await signedIn.goto("/todos?q=something");

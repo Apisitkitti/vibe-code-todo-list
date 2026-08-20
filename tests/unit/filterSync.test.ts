@@ -1,0 +1,295 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  abandonPendingPushes,
+  createFilterSync,
+  type FilterSync,
+  isPushNeeded,
+  MAX_PENDING_PUSHES,
+  nextFilters,
+  normalizeSearchQuery,
+  recordPush,
+  setSearchQuery,
+  syncToUrl,
+} from "@/lib/filterSync";
+import type { TodoListFilters } from "@/lib/todo";
+
+/**
+ * The filter row's ownership rules, driven through the interleavings that
+ * produced the defect.
+ *
+ * These are written as sequences rather than as single calls on purpose. Every
+ * failure this module exists to prevent is an *ordering* failure — the
+ * controls and the URL each hold a defensible value, and the bug is which one
+ * wins — so a test that asserts one transition in isolation would have passed
+ * against the unfixed code too.
+ *
+ * The vocabulary below mirrors the component: `types` is the user, `pushes` is
+ * a value being handed to the router, and `lands` is a navigation arriving back
+ * as the `filters` prop. `lands` is the only step that is asynchronous in the
+ * real component, which is why it is a separate call here: a test can put it
+ * anywhere in the sequence, and a browser cannot.
+ */
+
+const url = (over: Partial<TodoListFilters> = {}): TodoListFilters => ({
+  status: "all",
+  priority: "all",
+  query: "",
+  ...over,
+});
+
+const types = (state: FilterSync, value: string) =>
+  setSearchQuery(state, value);
+
+/** The debounce, or a filter control, handing a tuple to the router. */
+const pushes = (state: FilterSync, changes: Partial<TodoListFilters> = {}) => {
+  const pushed = nextFilters(state, changes);
+
+  return { state: recordPush(state, pushed), pushed };
+};
+
+const lands = (state: FilterSync, urlFilters: TodoListFilters) =>
+  syncToUrl(state, urlFilters);
+
+describe("filterSync", () => {
+  it("follows a navigation that came from outside the component", () => {
+    const state = lands(createFilterSync(url()), url({ query: "from a link" }));
+
+    expect(state.query).toBe("from a link");
+  });
+
+  it("follows an outside navigation that changed a filter rather than the text", () => {
+    const state = lands(
+      createFilterSync(url()),
+      url({ status: "completed", priority: "high" }),
+    );
+
+    expect(state.applied.status).toBe("completed");
+    expect(state.applied.priority).toBe("high");
+  });
+
+  it("does not undo a clear made while its own push was in flight", () => {
+    // Type, debounce fires, then clear the field before `?q=abc` lands.
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+    state = pushes(state).state;
+    state = types(state, "");
+
+    // The navigation this component asked for finally arrives.
+    state = lands(state, url({ query: "abc" }));
+
+    expect(state.query).toBe("");
+    // And the URL is now the stale one, so the debounce must correct it.
+    expect(isPushNeeded(state, url({ query: "abc" }))).toBe(true);
+  });
+
+  it("does not undo typing that continued while its own push was in flight", () => {
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+    state = pushes(state).state;
+    state = types(state, "abcdef");
+    state = lands(state, url({ query: "abc" }));
+
+    expect(state.query).toBe("abcdef");
+    expect(isPushNeeded(state, url({ query: "abc" }))).toBe(true);
+  });
+
+  it("recognises an older push landing after a newer one was issued", () => {
+    /*
+      Two pushes in the air at once: `abc`, then `abcd` 300ms later, with
+      `?q=abc` still to land. Matching only the newest recording would read the
+      older echo as an outside navigation and put `abc` back in the box.
+    */
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+    state = pushes(state).state;
+    state = types(state, "abcd");
+    state = pushes(state).state;
+
+    state = lands(state, url({ query: "abc" }));
+    expect(state.query).toBe("abcd");
+
+    state = lands(state, url({ query: "abcd" }));
+    expect(state.query).toBe("abcd");
+    expect(isPushNeeded(state, url({ query: "abcd" }))).toBe(false);
+  });
+
+  it("still follows an outside navigation while a push of its own is pending", () => {
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+    state = pushes(state).state;
+
+    state = lands(state, url({ query: "somebody else" }));
+    expect(state.query).toBe("somebody else");
+
+    // …and the pending push is still recognised when it lands.
+    state = lands(state, url({ query: "abc" }));
+    expect(state.query).toBe("somebody else");
+  });
+
+  it("settles: a clear that raced a push converges on the empty URL", () => {
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+    state = pushes(state).state;
+    state = types(state, "");
+    state = lands(state, url({ query: "abc" }));
+
+    // The correcting push the component's effect now makes.
+    expect(isPushNeeded(state, url({ query: "abc" }))).toBe(true);
+    state = pushes(state).state;
+    state = lands(state, url());
+
+    expect(state.query).toBe("");
+    expect(isPushNeeded(state, url())).toBe(false);
+  });
+
+  it("records the trimmed value, because that is what comes back", () => {
+    /*
+      `src/app/todos/page.tsx` trims `q`. Recording the raw text would make the
+      echo unrecognisable and take the user's trailing space away.
+    */
+    let state = createFilterSync(url());
+
+    state = types(state, "abc ");
+
+    const { state: recorded, pushed } = pushes(state);
+
+    expect(pushed.query).toBe("abc");
+
+    state = lands(recorded, url({ query: "abc" }));
+
+    expect(state.query).toBe("abc ");
+    // Nothing left to say: the URL already holds everything it can hold.
+    expect(isPushNeeded(state, url({ query: "abc" }))).toBe(false);
+  });
+
+  it("does not record a push that cannot change the URL", () => {
+    /*
+      Recording a push that changes nothing would strand an entry that no
+      navigation ever consumes, and a stranded entry swallows a later outside
+      navigation of that value.
+    */
+    let state = createFilterSync(url({ query: "abc" }));
+
+    state = pushes(state).state;
+
+    expect(state.pending).toHaveLength(0);
+
+    state = lands(state, url({ query: "abc from elsewhere" }));
+    state = lands(state, url({ query: "abc" }));
+    expect(state.query).toBe("abc");
+  });
+
+  /* ── the two directions of the push site, which must stay symmetric ─────── */
+
+  it("a filter press carries typing that has not landed yet", () => {
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+
+    // Active pressed inside the debounce window, before `?q=abc` lands.
+    const { pushed } = pushes(state, { status: "active" });
+
+    expect(pushed).toEqual({ status: "active", priority: "all", query: "abc" });
+  });
+
+  it("typing carries a filter press that has not landed yet", () => {
+    /*
+      The mirror, and the one the first fix missed. Building the debounced push
+      from the URL's tuple spreads a `status` the press has already superseded
+      — and unlike the search text, `status` has no local state to notice the
+      loss and re-push it, so the press is simply gone.
+    */
+    let state = createFilterSync(url());
+
+    state = pushes(state, { status: "active" }).state;
+    state = types(state, "abc");
+
+    const { pushed } = pushes(state);
+
+    expect(pushed).toEqual({ status: "active", priority: "all", query: "abc" });
+  });
+
+  /* ── a push that never lands ────────────────────────────────────────────── */
+
+  it("asks for nothing when the field already agrees with the URL", () => {
+    /*
+      The clear-during-flight case, from the URL's point of view. `?q=abc` is
+      still in the air, so the URL is still empty — and so is the field again.
+      There is nothing to say yet, and the correcting push is owed only once
+      the stale navigation actually lands.
+    */
+    let state = createFilterSync(url());
+
+    state = types(state, "abc");
+    state = pushes(state).state;
+    state = types(state, "");
+
+    expect(isPushNeeded(state, url())).toBe(false);
+  });
+
+  it("stops building on a target once its push is abandoned", () => {
+    /*
+      What giving up actually changes. While the press is recorded, every later
+      push is built on top of it — which is right until the navigation turns out
+      to be dead, at which point it is a target the URL will never reach.
+    */
+    let state = createFilterSync(url());
+
+    state = pushes(state, { status: "active" }).state;
+    expect(nextFilters(state).status).toBe("active");
+
+    state = abandonPendingPushes(state);
+    expect(nextFilters(state).status).toBe("all");
+  });
+
+  it("an abandoned push no longer swallows a later outside navigation", () => {
+    const stranded = (() => {
+      let state = createFilterSync(url());
+
+      state = types(state, "abc");
+      state = pushes(state).state;
+
+      return types(state, "xyz");
+    })();
+
+    // While the strand is held, a genuine navigation carrying `abc` is
+    // mistaken for the echo and swallowed — the residual of matching by value.
+    expect(lands(stranded, url({ query: "abc" })).query).toBe("xyz");
+
+    // Abandoning it is what bounds that window.
+    expect(
+      lands(abandonPendingPushes(stranded), url({ query: "abc" })).query,
+    ).toBe("abc");
+  });
+
+  it("returns the identical state when there is nothing to reconcile", () => {
+    const state = createFilterSync(url({ query: "abc" }));
+
+    expect(syncToUrl(state, url({ query: "abc" }))).toBe(state);
+    expect(setSearchQuery(state, "abc")).toBe(state);
+    expect(abandonPendingPushes(state)).toBe(state);
+  });
+
+  it("bounds the pending list so a stranded push cannot accumulate", () => {
+    let state = createFilterSync(url());
+
+    for (let index = 0; index < 40; index += 1) {
+      state = types(state, `q${index}`);
+      state = pushes(state).state;
+    }
+
+    expect(state.pending.length).toBeLessThanOrEqual(MAX_PENDING_PUSHES);
+    // The newest is always kept — it is the one still most likely in flight.
+    expect(state.pending.at(-1)?.query).toBe("q39");
+  });
+
+  it("normalises the way the page does", () => {
+    expect(normalizeSearchQuery("  abc  ")).toBe("abc");
+  });
+});
