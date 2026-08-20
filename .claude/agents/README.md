@@ -1,8 +1,24 @@
 # The team, as files
 
-Six roles this project actually ran with, written down so they stop being
-re-invented in a prompt each time. Each file is loaded by name — `pm`,
-`ux-designer`, `junior-dev`, `senior-reviewer`, `qa`, `sdet`.
+Eight roles, written down so they stop being re-invented in a prompt each
+time. Each file is loaded by name — `pm`, `ux-designer`, `junior-dev`,
+`senior-reviewer`, `qa`, `sdet`, `platform`, `analyst`.
+
+Six of them are the team this project actually ran with. The last two were
+added because of where the failures came from, not to fill out a chart:
+
+- **`platform`** — nothing between a merge and a working production belonged
+  to anyone. Schema reaches Neon by hand and a missed column 500s every list
+  query; nothing observes the deployed app; there is no rate limiting and no
+  password reset, and those two compound into the worst outcome the product
+  can produce.
+- **`analyst`** — every ranking decision here was made by reasoning. The
+  measures to check them were specified a quarter ago and never read, and when
+  they finally were, one query contradicted the premise of two planning
+  documents.
+
+Notably absent: another developer. The bottleneck was never how fast code got
+written. Every serious defect was caught by a review that ran something.
 
 The workflow they assume is the one in `docs/WORKFLOW.md`: the junior builds
 on a branch off `develop`, the senior reviews before it merges, QA gates on
