@@ -147,6 +147,12 @@ The deploy now applies it instead: `vercel.json` sets `buildCommand` to
 **before** `next build`, so a migration that fails fails the build and the
 currently deployed version keeps serving.
 
+`vercel.json` carries no explanation of its own — Vercel's schema sets
+`additionalProperties: false` and rejects even a `"//"` comment key. The
+reasoning, including the P2022 failure it prevents and the alternatives that
+were rejected, is in
+[`docs/decisions/2026-08-20-schema-reaches-production-by-deploy.md`](decisions/2026-08-20-schema-reaches-production-by-deploy.md).
+
 ### Making a schema change
 
 ```bash

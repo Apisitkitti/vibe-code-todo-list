@@ -1,27 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["sin1"],
-
-  "//": [
-    "buildCommand overrides the `build` script for deploys only, and the",
-    "reason it is here rather than folded into `build` is that `prisma migrate",
-    "deploy` needs a reachable database. Putting it in `build` would make",
-    "`npm run build` — which developers run to check a change compiles — fail",
-    "on a machine with no Postgres running, and fail with P3005 on any local",
-    "database that predates prisma/migrations. Deploys are the only place the",
-    "migration must run, so it is the only place it is wired.",
-    "",
-    "This is what closes the gap docs/WORKFLOW.md used to document: schema",
-    "reaches production because the deploy applies it, not because someone",
-    "remembered to run psql first.",
-    "",
-    "Ordering matters. `migrate deploy` runs BEFORE `next build`, so a",
-    "migration that fails takes the build down and the currently deployed",
-    "version keeps serving. If it ran after, or as a post-deploy step, there",
-    "would be a window where new code that selects a new column is live",
-    "against a database that does not have it — and because Prisma selects",
-    "every scalar field, that window is not a degraded feature, it is every",
-    "list query returning 500."
-  ],
   "buildCommand": "prisma generate && prisma migrate deploy && next build"
 }
