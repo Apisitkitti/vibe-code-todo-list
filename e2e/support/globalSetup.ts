@@ -19,8 +19,24 @@ import { resolveTestDatabaseUrl } from "./testDatabaseUrl";
  * once. This checks it happened and otherwise says exactly what to do.
  */
 
-/** The tables `prisma/schema.prisma` maps to, via its `@@map` names. */
-const REQUIRED_TABLES = ["user", "session", "account", "verification", "todo"];
+/**
+ * The tables `prisma/schema.prisma` maps to, via its `@@map` names.
+ *
+ * `rateLimit` is here even though the suite never reads it: the limiter is off
+ * outside production, so nothing in a test would touch that table. It is listed
+ * because its absence means something else — that the database was baselined
+ * with `resolve --applied 0_init` and the follow-up `migrate deploy` was never
+ * run. Leaving it out let exactly that half-prepared database through this
+ * guard, which is the state this check exists to catch.
+ */
+const REQUIRED_TABLES = [
+  "user",
+  "session",
+  "account",
+  "verification",
+  "todo",
+  "rateLimit",
+];
 
 const globalSetup = async () => {
   const projectRoot = resolve(__dirname, "../..");
@@ -30,10 +46,23 @@ const globalSetup = async () => {
 
   const client = new Client({ connectionString: databaseUrl });
 
+  // `migrate deploy` rather than `db push`, so a developer's database is built
+  // the same way CI's and production's are. Neither Prisma command accepts a
+  // `--url` flag any more (7.9.1: only `db push` still has one), so the URL is
+  // pinned by setting DATABASE_URL for the command — `prisma.config.ts` reads
+  // it through `env()`, and `process.loadEnvFile` does not overwrite a
+  // variable that is already set, so this beats `.env` rather than losing to
+  // it.
   const setupHint =
     `Prepare it once with:\n` +
     `  createdb todo_app_test\n` +
-    `  DATABASE_URL='${databaseUrl}' npx prisma db push\n\n` +
+    `  DATABASE_URL='${databaseUrl}' npx prisma migrate deploy\n\n` +
+    `If the database already has these tables from the db-push era, it has ` +
+    `no migration history and the command above will stop with P3005. ` +
+    `Baseline it once, which records the migration as applied without ` +
+    `re-running it:\n` +
+    `  DATABASE_URL='${databaseUrl}' npx prisma migrate resolve --applied 0_init\n` +
+    `  DATABASE_URL='${databaseUrl}' npx prisma migrate deploy\n\n` +
     `Or point the suite elsewhere with TEST_DATABASE_URL (it must be a ` +
     `non-hosted host and named *_test).`;
 

@@ -122,3 +122,35 @@ model Todo {
   @@index([userId, completed, dueAt])
   @@map("todo")
 }
+
+/// better-auth's rate-limit bucket, present only because `rateLimit.storage`
+/// is `"database"` in `src/lib/auth.ts`. The shape is better-auth's, not ours:
+/// it is derived in `@better-auth/core/src/db/get-tables.ts` and the adapter
+/// reads and writes these three columns by name, so they are not free to
+/// rename.
+///
+/// **Memory storage was the alternative and it does not work here.** Vercel
+/// runs this app as serverless functions; an in-process `Map` gives each
+/// instance its own counter, so the real limit becomes the configured one
+/// multiplied by however many instances are warm, and it resets on every cold
+/// start. A limiter whose ceiling depends on autoscaling is not a control. One
+/// row per `ip|path` bucket in Postgres is shared by every instance, and the
+/// adapter's `incrementOne` makes the check-and-increment atomic.
+model RateLimit {
+  id String @id @default(cuid())
+
+  /// `ip|path` — see `createRateLimitKey` in `@better-auth/core`. Unique
+  /// because the adapter looks a bucket up by this value on every auth
+  /// request.
+  key String @unique
+
+  /// Requests counted in the window that is currently open.
+  count Int
+
+  /// Milliseconds since the epoch, which is why this is a `BigInt` rather than
+  /// a `DateTime`: better-auth stores and compares it as a number, and the
+  /// field is declared `bigint: true` on its side.
+  lastRequest BigInt
+
+  @@map("rateLimit")
+}
