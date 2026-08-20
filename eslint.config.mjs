@@ -84,6 +84,12 @@ const eslintConfig = defineConfig([
     // them buries the real findings under a few thousand warnings.
     "playwright-report/**",
     "test-results/**",
+    // Throwaway scripts from browser-driven persona sessions. Gitignored,
+    // but .gitignore does not reach eslint — it scans the directory, not the
+    // index — so a session that left twenty of them behind fails lint on
+    // `require()` in files nobody intends to keep.
+    "persona*.js",
+    "test-user-*.js",
     // Prisma's generated client. Gitignored and rewritten by every
     // `prisma generate`, so a finding here is unfixable — the next generate
     // reverts the fix. The conventions below describe code people write.
