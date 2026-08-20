@@ -32,6 +32,16 @@ const CLEAR_BUTTON = '[data-slot="search-field-clear-button"]';
  */
 const CLICK_DELIVERY_ATTEMPTS = 5;
 
+/**
+ * How many times the hit-test sweep may be re-read when it resolves to nothing.
+ *
+ * The geometry twin of `CLICK_DELIVERY_ATTEMPTS`, and not a tolerance for a
+ * flaky measurement — see the comment at the sweep: it re-reads only while the
+ * control's own centre fails to hit-test, which a real undersized target never
+ * does.
+ */
+const HIT_TEST_SWEEP_ATTEMPTS = 5;
+
 const targetFloor = (page: Page): number => {
   const width = page.viewportSize()?.width ?? 0;
 
@@ -155,39 +165,71 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
       it is fixed, and it is pinned deterministically in
       `e2e/search-clear-race.spec.ts` rather than probabilistically here.
     */
-    const results = await signedIn.evaluate((minSize) => {
-      const target = document.querySelector(
-        '[data-slot="search-field-clear-button"]',
+    const sweep = () =>
+      signedIn.evaluate(
+        ({ minSize, selector }) => {
+          const target = document.querySelector(selector);
+
+          if (target === null) return null;
+
+          const rect = target.getBoundingClientRect();
+          const centreX = rect.x + rect.width / 2;
+          const centreY = rect.y + rect.height / 2;
+          const half = minSize / 2;
+
+          const probes: [string, number, number][] = [
+            ["centre", centreX, centreY],
+            ["top-left", centreX - half, centreY - half],
+            ["top-right", centreX + half, centreY - half],
+            ["bottom-left", centreX - half, centreY + half],
+            ["bottom-right", centreX + half, centreY + half],
+          ];
+
+          return probes.map(([name, x, y]) => {
+            const hit = document.elementFromPoint(x, y);
+
+            return { name, hits: hit?.closest(selector) != null };
+          });
+        },
+        { minSize: WCAG_MIN, selector: CLEAR_BUTTON },
       );
 
-      if (target === null) return null;
+    /*
+      Re-swept while the **centre** probe misses, and only then.
 
-      const rect = target.getBoundingClientRect();
-      const centreX = rect.x + rect.width / 2;
-      const centreY = rect.y + rect.height / 2;
-      const half = minSize / 2;
+      The same one-line remedy as the effect test, for what the comment above
+      argues is the same bug: a hit-test tree that briefly answers `<html>` for
+      a control that is present, visible and unmoved. Unhardened this test
+      fails ~1.7% (`develop` 3/58), which is a release gate that is green by
+      luck about as often as by merit.
 
-      const probes: [string, number, number][] = [
-        ["centre", centreX, centreY],
-        ["top-left", centreX - half, centreY - half],
-        ["top-right", centreX + half, centreY - half],
-        ["bottom-left", centreX - half, centreY + half],
-        ["bottom-right", centreX + half, centreY + half],
-      ];
+      The centre is the right gate because it cannot mask the thing this test
+      exists to catch. The failure mode being retried is *all five* probes
+      missing at once. A control that is genuinely too small fails the
+      **corners** and still hits dead centre — a 20px circle contains the
+      centre point just as surely as a 36px one does — so a real DEF-16
+      regression never re-sweeps, and is reported on the first pass. A centre
+      that does not hit-test to a rendered control is not a measurement at all,
+      and re-reading it is the only way to tell the two apart.
+    */
+    let results = await sweep();
 
-      return probes.map(([name, x, y]) => {
-        const hit = document.elementFromPoint(x, y);
-
-        return {
-          name,
-          hits:
-            hit !== null &&
-            hit.closest('[data-slot="search-field-clear-button"]') !== null,
-        };
-      });
-    }, WCAG_MIN);
+    for (
+      let attempt = 1;
+      attempt < HIT_TEST_SWEEP_ATTEMPTS &&
+      results !== null &&
+      results.find((probe) => probe.name === "centre")?.hits === false;
+      attempt += 1
+    ) {
+      results = await sweep();
+    }
 
     expect(results, "the clear button is not rendered").not.toBeNull();
+
+    expect(
+      results?.find((probe) => probe.name === "centre")?.hits,
+      `the hit-test tree never resolved the clear button in ${HIT_TEST_SWEEP_ATTEMPTS} sweeps`,
+    ).toBe(true);
 
     for (const probe of results ?? []) {
       expect.soft(probe.hits, `probe ${probe.name} lands on the clear button`).toBe(
@@ -285,22 +327,46 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
       );
 
     /*
-      Retries the *delivery* of the click, never its effect. The loop exits the
-      moment the button has received one, so the assertion below always judges
-      a press that actually happened — a field that refills itself after a real
-      press fails here on the first attempt, which is the behaviour a retry
-      must not soften.
+      Retries the *delivery* of the click, never its effect: the loop exits the
+      moment the press lands, so the assertion below judges a press that
+      actually happened.
+
+      **What this loop is not is the reason a refill would be caught**, and an
+      earlier version of this comment claimed it was. It said a field that
+      refills itself after a real press fails here on the first attempt. It
+      does not. Disabling the echo guard outright — restoring the defect, so a
+      real press *is* followed by a genuine permanent refill — and running this
+      test 20 times passes 20/20: `toHaveValue("")` sees the transient empty
+      value and resolves before the ~300ms refill. `develop` passed this line
+      40/40 while the race was live there, for exactly that reason.
+
+      So this assertion has no sensitivity to a refill at all, and the retry
+      neither adds nor removes any. The race is caught in
+      `e2e/search-clear-race.spec.ts`, which holds the navigation open and fails
+      100% against the unfixed component. What this test still earns its place
+      for is the other half: reach without effect is not a target, and this is
+      the only place that closes that gap for the clear button.
+
+      The `inputValue` clause is not redundant with the counter. React Aria's
+      `usePress` fires on `pointerup`, not `click`, so a press can take effect
+      while the counter stays 0 — and re-clicking then aims at a button that
+      has already been removed, which fails on a 20s timeout rather than on
+      anything true. Breaking on the field being empty costs one clause and
+      removes that flake shape.
     */
     for (let attempt = 0; attempt < CLICK_DELIVERY_ATTEMPTS; attempt += 1) {
       await clear.click();
 
       if ((await presses()) > 0) break;
+      if ((await search.inputValue()) === "") break;
     }
 
-    expect(
-      await presses(),
-      `the browser did not deliver a click to the clear button in ${CLICK_DELIVERY_ATTEMPTS} attempts`,
-    ).toBeGreaterThan(0);
+    if ((await search.inputValue()) !== "") {
+      expect(
+        await presses(),
+        `the browser did not deliver a click to the clear button in ${CLICK_DELIVERY_ATTEMPTS} attempts`,
+      ).toBeGreaterThan(0);
+    }
 
     await expect(search).toHaveValue("");
   });

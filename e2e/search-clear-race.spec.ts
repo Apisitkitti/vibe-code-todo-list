@@ -25,12 +25,25 @@ import { expect, test } from "./support/fixtures";
  * ── Why the navigation is held rather than raced ────────────────────────────
  *
  * The window is a 300ms debounce plus one `replace`, and on a warm dev server
- * that whole round trip can finish before a `click()` resolves — which is why
- * this reached QA as an intermittent failure of an unrelated tap-target spec
- * (`e2e/a11y-targets.spec.ts`, ~2 runs in 18) and was written off as machine
- * contention. Holding the navigation open makes the interleaving the test's
- * to choose: the clear happens while the push is provably still in the air,
- * every run, on any machine.
+ * that whole round trip can finish before a `click()` resolves. Holding the
+ * navigation open makes the interleaving the test's to choose: the clear
+ * happens while the push is provably still in the air, every run, on any
+ * machine.
+ *
+ * **This is the only place the race is caught, and that is not a stylistic
+ * preference.** It was believed for a while to be the cause of an intermittent
+ * failure in `e2e/a11y-targets.spec.ts`, which would have made a held
+ * navigation merely a tidier way to reach the same bug. It was not: that spec
+ * has no sensitivity to this defect whatsoever. Disabling the guard entirely,
+ * so a real press is followed by a genuine permanent refill, leaves its
+ * `toHaveValue("")` passing 20/20 — the assertion resolves on the transient
+ * empty value before the ~300ms refill, which is also why `develop` passed it
+ * 40/40 while the race was live there.
+ *
+ * A race whose whole character is that it resolves *after* a settling delay
+ * cannot be caught by an assertion that is satisfied before the delay elapses.
+ * Holding the navigation is what converts it from an unobservable one to a
+ * deterministic one; nothing else here does.
  */
 
 /** The RSC fetch `router.replace` makes for a search push. */
