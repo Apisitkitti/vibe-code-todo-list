@@ -865,7 +865,7 @@ const state = useOverlayState();
   <Modal.Container size="md" placement="center" className="sm:placement-center">
     <Modal.Dialog>
       <Modal.Header>
-        <Modal.Heading>{mode === "create" ? "New todo" : "Edit todo"}</Modal.Heading>
+        <Modal.Heading>{mode === "create" ? "New todo" : editHeading(todo.title)}</Modal.Heading>
         <Modal.CloseTrigger aria-label="Close" />
       </Modal.Header>
       <Modal.Body>
@@ -1158,6 +1158,10 @@ page-scoped Alert plus `Try again` (calls `reset()`).
 ### 4.10 Toast actions — the first moments are dead
 
 **Constraint, not a bug we introduced.** Design in-toast affordances around it.
+**The escape hatch at the end of this section has since been taken**, so the
+dead window described here is history on `/todos`; the mechanism is kept
+because it is the argument for the queue we now own, and because anything that
+raises a toast outside `src/lib/toast.ts` would inherit it again.
 
 HeroUI runs *every* toast queue update — each add and each close — inside
 `document.startViewTransition` (`dist/components/toast/toast-queue.js`, the
@@ -1190,16 +1194,80 @@ Three things follow, and each of them is a design constraint:
 and expect the first press to land — the affordance the user reaches for
 fastest is the one most likely to be swallowed. Our Undo survives this only
 because its timeout is generous relative to the dead window; a short-lived toast
-with an action would be substantially worse. If a future affordance needs to be
-live on the first frame, the escape hatch is a `ToastQueue` constructed with an
-explicit `wrapUpdate: fn => fn()` (the option is public), which trades the slide
-animation for a correct hit target. **That trade is worth making the moment an
-action matters more than the animation** — and I would take it now if the Undo
-timeout were ever shortened.
+with an action would be substantially worse.
+
+**The escape hatch, and it is taken.** A `ToastQueue` constructed with an
+explicit `wrapUpdate: fn => fn()` (the option is public) trades the slide
+animation for a correct hit target. This section used to say the trade was
+worth making "the moment an action matters more than the animation"; §7.13's
+one-armed-toast rule is what made that moment arrive, since under a single slot
+*every* action toast is a close-then-add and close-then-add is where the window
+is worst. The app now owns its queue in `src/lib/toast.ts` and the region is
+bound to it in `AppToastProvider`. Measured on this project's own Chromium with
+a real pointer press, before → after:
+
+| case | first press that lands |
+|---|---|
+| lone add, HeroUI's default `wrapUpdate` | 357–417ms |
+| close-then-add, HeroUI's default `wrapUpdate` | 729–760ms |
+| close-then-add, `wrapUpdate: fn => fn()` | 200ms, 0 blocked frames |
+
+That reproduces the 350–400ms and 700–800ms this section had inferred, rather
+than inheriting them. What it costs is the queue's slide: the animation is
+defined entirely on `::view-transition-old` / `::view-transition-new` in
+`@heroui/styles/dist/components/toast.css`, so toasts now cut in and out. Take
+both or take neither — the cap without `wrapUpdate` makes the stack tidier and
+the one remaining button less reliable.
 
 Related, and the same shape of problem: `toast.close()` does not unmount
-immediately for the same reason, which is why `TodoListScreen` guards
-double-presses on the *key* rather than on the toast's presence.
+immediately for the same reason, which is why the press guard is keyed on the
+toast's own token rather than on its presence (§7.13).
+
+#### 4.10.1 The toast region is a deck, and only its front card is a control
+
+A second constraint, found when the §7.13 cap shipped, and **not caused by it**.
+
+HeroUI's region draws toasts as a stack of cards, not a list. Every toast is
+`position: absolute` at the region's edge; the one at index *n* is offset by
+`n × gap` (12px) and scaled by `1 − n × 0.05`. So the second toast peeks 12px
+out from behind the first and is otherwise underneath it, at a lower `z-index`.
+Three further things are true of any toast that is not frontmost
+(`dist/components/toast/toast.js`, `styles/dist/components/toast.css`):
+
+- it is clipped to `height: var(--front-height)` with `overflow: hidden` — the
+  height of *the toast in front of it*, so a two-line title behind a one-line
+  toast loses its second line;
+- its close button is `opacity: 0` and `pointer-events: none`;
+- `tabIndex` is set to `-1` **on its wrapper**. Its action button keeps its own
+  tab stop, which is why keyboard activation still reaches a buried Undo — the
+  wrapper is what leaves the tab order, not the control inside it.
+
+**So the region has exactly one operable slot, and the newest toast always
+takes it.** A buried Undo is present, announced, still ticking and cannot be
+pressed by pointer. `document.elementFromPoint` at its own centre returns the
+toast in front.
+
+This corrects something §7.13 and §7.15 both assumed. Those sections argued
+about a *stack* of Undos in one tab-ordered region, and treated burial as
+survivable because there were others to reach. There were not: a buried Undo
+was never pointer-reachable, before the cap or after it. The cap did not create
+this failure. It removed the second and third toasts that made the region look
+as though it had somewhere else to press.
+
+**What this means for design.** Two toasts up at once is one toast up at once
+plus a rumour. Never design a moment where the thing the user needs is not the
+newest toast — and where two messages compete for the same twelve seconds, rule
+on which one gets the slot rather than raising both and hoping. §7.13 does that
+for receipts against Undos.
+
+Restacking the region into a real list is cheaper than it looks and still not
+worth it: `gap` and `scaleFactor` are public props on `Toast.Provider`, and
+`gap={72} scaleFactor={0}` would lay three toasts out without overlap. But the
+`--front-height` clip and the suppressed close button live in HeroUI's own
+component CSS, which §3 forbids overriding outside a stated exception, and both
+existing exceptions are WCAG floors rather than layout preferences. And a
+bottom-centre column of three 460px cards eats roughly 230px of viewport over
+the list on every write. The everyday cost is worse than the thing it fixes.
 
 ---
 
@@ -1217,13 +1285,28 @@ list, matching the status filter beside it, and remembered in the URL as
 | Column | `<section>` with an `<h2>` and its own `<ul>` — the same structure §7.16 gives the list's sections, so switching views does not reshape the heading tree |
 | Column heading | The §7.16 heading and its `aria-hidden` count, at `--foreground`. **No colour, no fill, no per-column accent** — the columns are structure, and §3's one-saturated-element budget is not spent on decoration |
 | Empty column | One muted line (§7.20), never hidden — an empty column is a drop target |
-| Card | `TodoCard`: checkbox and title on the first line, chip / date / note marker and the three actions on the second. `rounded-2xl border border-border-secondary`, the row's own §8.7 outline |
+| Card | `TodoCard`: three explicit lines, never a `flex-wrap` — checkbox and title, then the metadata (chip / date / note marker) **only when there is any**, then the three actions. `rounded-2xl border border-border-secondary`, the row's own §8.7 outline |
 | Card title | Wraps to at most three lines, where the row truncates. A row truncates because it is scanned against its neighbours down a shared right edge (§1); a card has no such column to keep |
 | Card actions | Always visible, where the row hides them until hover at `lg:`. A card is a discrete object with room around it |
 | Drag affordance | The carried card and the column that would take it are outlined `--accent` with an 8–12% tint. Both are **transient** — present only while a drag is in progress — and the moved card's settle ring lasts 2.5s. Nothing on this screen is accent-tinted at rest |
 | Loading | Five skeleton columns, two card outlines each (§4.8) |
 | Empty account / filter | The §4.7 empty state, not five empty columns — five columns saying "nothing" say nothing, and would push the call to action off the bottom |
 | Error | One §4.9 alert above the columns. One `GET` backs all five, so five identical alerts would be five lies about five failures |
+
+**Why the metadata gets a line of its own, and why that line disappears.** It
+used to share one `flex-wrap` line with the actions, which meant it got
+whatever `TodoActions` left over. At 1280×800 with five columns that line is
+183.20px and `TodoActions` is a fixed 124.00, so after `gap-2` the metadata's
+budget was 51.20px. `Low` measures 48.45 and fitted; `High` measures 52.16 and
+did not, and 0.95px of overflow wrapped the whole action cluster onto its own
+line and made the card 28px taller. On a board of otherwise identical cards,
+whether a card was two lines or three turned on nothing the user could see
+except which word its chip said. Giving the actions their own line removes the
+competition; rendering the metadata line only when it has content stops an
+empty one paying for it. **A card's height now means the card carries more, and
+nothing else.** One shape pays for that: a `Low`, undated card goes 94px → 122.
+That is the trade, and it is the right way round — a line for something is
+better than a line for the width of a word.
 
 **On the accent budget.** §3 allows one saturated element at rest, and `/todos`
 is already over it (§8.4). This view adds nothing at rest: the column headings
@@ -1622,7 +1705,7 @@ a period.
 
 | Slot | String (create) | String (edit) |
 |---|---|---|
-| Heading | `New todo` | `Edit todo` |
+| Heading | `New todo` | `Edit “{title}”` |
 | Close `aria-label` | `Close` | `Close` |
 | Title label | `Title` | `Title` |
 | Title placeholder | `What needs doing?` | `What needs doing?` |
@@ -1637,8 +1720,36 @@ a period.
 | Cancel | `Cancel` | `Cancel` |
 | Submit (idle) | `Add todo` | `Save changes` |
 | Submit (pending) | `Adding…` | `Saving…` |
-| Success toast | `Todo added` | `Changes saved` |
+| Success toast | §7.15 and §7.17 own these — `Todo “{title}” added` | §7.15 owns this — `Todo “{title}” updated` |
 | Failure toast | `Couldn't add the todo. Try again.` | `Couldn't save your changes. Try again.` |
+
+**The edit dialog names the record, and it did not used to.** `Edit todo` named
+the surface and nothing else; the record was spoken on open only by accident,
+because focus landed on `Title` and a screen reader read the focused field's
+value. §7.21's `Pick a date…` ruling moves that focus to `Due date`, which
+takes the accident away — a user who opened the editor from a row would hear
+`Edit todo, dialog. Due date…` and never learn which todo they were in. So the
+name carries the title: a dialog that edits one record should say which, and it
+should not have needed a side effect of focus placement to do it.
+
+**Two bounds on it, because a dialog name is read in full, on open, before the
+user has been told it is a dialog, with no way to skip it — and titles here run
+to 200 characters.**
+
+- **Visually the heading is one line and truncates.** The modal header is a
+  fixed-width band above the form; a 200-character heading would push `Title`
+  off a short viewport, and the full string is legible in the `Title` field two
+  lines below. This is the same relationship §4.4's truncated row has with its
+  own title.
+- **The accessible name carries the title truncated to 60 characters plus a
+  single `…`.** Sixty is my judgement, not a measurement: it is roughly where a
+  title stops behaving like a title and starts being a note, and it keeps the
+  announcement under about four seconds of speech. If QA measures where the row
+  actually truncates at `max-w-2xl` I would rather this matched that number
+  than kept mine — the point is that there **is** a bound, not that it is 60.
+
+The create side stays `New todo`. There is no record to name yet, and
+`New “{whatever is typed}”` would name a draft as though it were a record.
 
 ### 7.6 Delete confirmation
 
@@ -1819,8 +1930,8 @@ reports its own outcome with the §7.11 toast for the flipped state.
 | Sign out failure toast | `Couldn’t sign you out. Try again.` |
 
 **Why the action has an `aria-label` at all, when its visible word is already
-its name.** `UNDO_WINDOW_MS` is 12s so that several Undo toasts stand at once,
-and every one of their buttons reads `Undo`. A sighted user tabbing forward
+its name.** It was written when `UNDO_WINDOW_MS`'s 12s let several Undo toasts
+stand at once, every one of their buttons reading `Undo`. A sighted user tabbing forward
 sees which toast they are in; a screen-reader user hears "Undo, button" for
 every one of them with no way to tell a completion-revert from an edit-revert
 (`docs/QA-REPORT.md` §8, written when the worst case in that stack was an
@@ -1832,56 +1943,95 @@ overrides the child text for assistive technology only.
 
 The `Tab` ×2 hazard this was first written against is now closed, by dropping
 the `added` toast's Undo rather than by naming it (§6.8, §7.15). **The naming
-stays**, and not out of sentiment: the remaining Undos still stack, still read
-`Undo` on every button, and a name is still the only thing separating them.
-What changed is that none of the things a name has to describe is destructive
-any more.
+stays**, and not out of sentiment: a name is confirmation of what you reached,
+which is what an accessible name is for. What changed is that none of the
+things a name has to describe is destructive any more, and — since the cap
+below — there is never more than one of them to tell apart.
 
-**Proposed, and agreed with the ui-designer: one armed toast at a time.**
-`dismissUndo` is keyed per todo id, so it disarms a *repeat write to the same
-row* and nothing else — two rows toggled inside 12s leave two live Undos in
-one tab-ordered region, both reading `Undo`. Generalise the key to a single
-slot: raising any action-bearing toast dismisses whatever action-bearing toast
-is standing. Three consequences for this section, and all three are copy
-consequences rather than mechanism:
+**One armed toast at a time. Shipped.** `dismissUndo` used to be keyed per todo
+id, so it disarmed a *repeat write to the same row* and nothing else; two rows
+toggled inside 12s left two live Undos in one region, both reading `Undo`. The
+key is now a single slot in `src/lib/toast.ts`: raising any action-bearing toast
+closes whatever action-bearing toast is standing, whatever record it belonged
+to. The press guard moved with it, and is keyed on the toast's **own token**
+rather than on its row, because closing a toast does not unmount it — for a
+window after a replacement the DOM holds two action buttons for the same todo,
+and a row-keyed guard said yes to both.
 
-- The `aria-label` naming above **stays**, and stops being load-bearing. It
-  was written because a name was the only thing separating stacked Undos; with
-  one slot it becomes confirmation of what you already reached, which is what
-  an accessible name should be.
-- **Receipts are not capped.** An `added` toast carries no action (§7.15), so
-  it is outside this rule — including §7.17's
-  `Todo “{title}” added — hidden by your filters`, which is the only account
-  the user ever gets of a row a filter swallowed and must not be closed by the
-  next write.
-- **What it costs, stated:** a second write inside 12s takes the first Undo
-  away. For a toggle that is nearly free — the checkbox that made the change
-  reverses it, on screen, in one press. For a **reschedule** it is not free:
-  the previous date is not on the row any more and not in any toast, so the
-  older reschedule becomes genuinely unrecoverable rather than merely
-  inconvenient. I accept that. It is two reschedules in twelve seconds
-  followed by regret about the first, against an ambiguous `Undo` in every
-  ordinary session — and the fix for the rare case is `Pick a date…`, not a
-  second armed button. No copy change: putting the old date in the toast
-  (`Todo “x” moved from Aug 22 to Aug 26`) buys that case and lengthens every
-  other one.
+**It is not separable from §4.10's `wrapUpdate` escape hatch**, and both landed
+together. Under a single slot every action toast is a close-then-add, which is
+where §4.10's dead window is worst — measured at 729–760ms before, 200ms with
+zero blocked frames after. The cap without `wrapUpdate` would make the region
+tidier and the one remaining button less reliable. Take both or take neither.
 
-**And it is not separable from §4.10's `wrapUpdate` escape hatch.** §4.10 says
-the trade is worth making "the moment an action matters more than the
-animation"; capping at one is what makes that moment arrive. Today a close
-followed by an add is the *repeat-write* case, and §4.10 records that it
-doubles the dead window to roughly 700–800ms. Under a single slot,
-close-then-add becomes the **ordinary** path — every action toast now closes
-one — so the app's only armed control would be inert for the better part of a
-second, every time, with no visual tell. The cap without `wrapUpdate` makes
-the stack tidier and the one remaining button less reliable, which is a worse
-trade than doing neither. Take both or take neither; I would take both. What
-`wrapUpdate: fn => fn()` costs is the queue's 350ms slide, which is the
-ui-designer's to price — a toast can still animate itself; what goes is the
-view-transition cross-fade of the reflow.
+**What the cap costs, stated:** a second write inside 12s takes the first Undo
+away. For a toggle that is nearly free — the checkbox that made the change
+reverses it, on screen, in one press. For a **reschedule** it is not free: the
+previous date is not on the row any more and not in any toast, so the older
+reschedule becomes genuinely unrecoverable rather than merely inconvenient. I
+accept that. It is two reschedules in twelve seconds followed by regret about
+the first, against an ambiguous `Undo` in every ordinary session — and the fix
+for the rare case is `Pick a date…`, not a second armed button. No copy change:
+putting the old date in the toast (`Todo “x” moved from Aug 22 to Aug 26`) buys
+that case and lengthens every other one.
 
-This is a behaviour change, so it is mine, and it is recorded here rather than
-built.
+#### 7.13.1 Receipts against the standing Undo — the exemption, narrowed
+
+This section previously exempted receipts from the cap outright, on the grounds
+that an `added` toast carries no action so neither thing the slot protects
+applies to it. **That was granted too broadly and I am narrowing it.** The
+evidence is §4.10.1: the region has one operable slot and the newest toast
+takes it, so a receipt raised after a toggle sits over the standing Undo's
+centre and holds it there, inert to pointer, for the receipt's full 12 seconds.
+"Toggle a row, then capture something" is an ordinary minute in this app.
+
+The reasoning that granted the exemption was that receipts carry information no
+other surface carries. **That is true of one of the two receipts and false of
+the other**, and the exemption was extended to both by inheritance rather than
+by argument:
+
+- `Todo “{title}” added` — **the row is on screen.** This receipt confirms
+  something the list has already confirmed, in the place the user is looking.
+  It **yields**: if an action-bearing toast is standing, it is not raised at
+  all. When nothing is standing it is raised as before, and its life drops from
+  12s to HeroUI's default 4s — it borrowed 12s from a window it does not have.
+- `Todo “{title}” added — hidden by your filters` (§7.17) — **the row is not on
+  screen**, and this sentence is the only account the user will ever get that
+  the write happened. It **takes the slot**, closing the standing Undo.
+
+That second line is a reversal of the reversal, and it is deliberate: where a
+sentence and a control compete for the one slot, the sentence wins if it cannot
+be re-derived and the control can. A toggle's Undo is a convenience over a
+checkbox that is still on the row, in the place the user just pressed it. A row
+the filter swallowed has no such backup — nothing on screen says it exists.
+
+**What this costs, and what I am accepting rather than solving.** Suppressing
+the visible-row receipt also suppresses its announcement, so a screen-reader
+user who captures within 12s of a write hears nothing about the create. The row
+is inserted into the list, which is the subject of the announcement, but that is
+a weaker guarantee than a spoken sentence and I am not going to pretend
+otherwise. I would rather owe that than hand every pointer user an inert Undo
+in an ordinary minute. If it is measured to matter the fix is a polite
+live-region line, not a toast — a toast is what costs the slot. Burst capture is
+unaffected: an add arms nothing, so a run of adds has no standing Undo to yield
+to. And the hidden-by-filters receipt closing an Undo is the same price this
+section already accepted for a second write, applied to one narrow branch.
+
+**What I rejected.** Restacking the region — §4.10.1 prices it: two public
+props get most of the way, HeroUI's own component CSS blocks the rest, and the
+everyday viewport cost is worse than the fault. Expand-on-hover — a pointer
+affordance for a pointer bug on a region whose back toasts are clipped and
+untabbable, which is the rewrite. Reserving the front for the armed toast — it
+does not help, because the buried receipt is then the unreadable one and the
+`hidden by your filters` sentence is exactly what must not be buried. Shortening
+the Undo's 12s — §4.10's whole argument is that a short-lived toast with an
+action is worse.
+
+**And a correction to what this section used to argue.** It reasoned about a
+*stack* of Undos and treated burial as survivable because there were others to
+reach. §4.10.1 shows there never were: a buried Undo has never been
+pointer-reachable in this library. The cap did not cause this. It uncovered it,
+and it is still the right call.
 
 ### 7.15 Edit Undo, and why the create has none
 
@@ -1905,13 +2055,15 @@ review (M-3) for naming nothing.
 | Undo failure | `Couldn’t undo that. Try again.` (shared with §7.13) |
 
 **Why the create's Undo went.** It was a `DELETE` wearing the same word, and
-the same shape, as three reversals that put things back. `UNDO_WINDOW_MS` is
-12s precisely so several of these toasts stand at once, in one tab-ordered
-region — so two forward `Tab`s from the toast the app had just moved focus to
-reached a neighbour's Undo, and if that neighbour was an `added` toast the
-press destroyed a record with no confirm and nothing behind it (§6.8, and QA's
-§8 against DEF-25). Naming the buttons made the destination audible on arrival
-but left the distance at two.
+the same shape, as three reversals that put things back. At the time
+`UNDO_WINDOW_MS`'s 12s let several of these toasts stand at once in one
+tab-ordered region — so two forward `Tab`s from the toast the app had just
+moved focus to reached a neighbour's Undo, and if that neighbour was an `added`
+toast the press destroyed a record with no confirm and nothing behind it (§6.8,
+and QA's §8 against DEF-25). Naming the buttons made the destination audible on
+arrival but left the distance at two. **§7.13's cap has since removed the
+neighbour**, which does not put the create's Undo back: the argument below is
+about what the control *means*, not about how far away it was.
 
 The alternative fix was a roving tabindex over the toast region. It shortens
 the walk, and leaves the control — and the control is the part that has to be
@@ -1928,12 +2080,17 @@ two, since a delete confirms instead of offering one (§7.6). The distinction
 that decided this is what the action *does*: those two write a value back,
 where the create's removed a record.
 
-An Undo is offered for one write only. A later write to the same todo dismisses
-the earlier toast, so an Undo can never restore a record past a change the user
-made after it. A toggle and a delete dismiss before they start; a save dismisses
-when its write resolves, since it runs behind a modal that covers the toast.
-An `added` receipt is not part of that bookkeeping: it arms nothing, so there
-is nothing about it that can outlive the write it describes.
+An Undo is offered for one write only, and **only one Undo stands at a time**
+(§7.13). Raising any action toast closes whichever one was standing, and a
+write to the same todo dismisses its own toast before it starts — a toggle and
+a delete before, a save when the write resolves, since it runs behind a modal
+that covers the toast. Either way an Undo can never restore a record past a
+change the user made after it.
+
+An `added` receipt arms nothing, so none of that bookkeeping applies to it. It
+is **not** therefore free of the slot: §7.13.1 rules on which of the two
+receipts may take it from a standing Undo, because §4.10.1's region has one
+operable slot and the newest toast wins it whether it wanted it or not.
 
 ### 7.14 Malformed request
 
@@ -2102,10 +2259,18 @@ The receipt says so instead. Like every other `added` toast it carries no
 action (§7.15) — it is the sentence that explains the absence, not a control
 for correcting it:
 
-| Slot | String |
-|---|---|
-| Create success toast (visible) | `Todo “{title}” added` |
-| Create success toast (hidden by filters) | `Todo “{title}” added — hidden by your filters` |
+| Slot | String | Life | Against a standing Undo |
+|---|---|---|---|
+| Create success toast (visible) | `Todo “{title}” added` | 4s | **yields** — not raised at all |
+| Create success toast (hidden by filters) | `Todo “{title}” added — hidden by your filters` | 12s | **takes the slot**, closing it |
+
+Those last two columns are §7.13.1's ruling and its reasoning is there. The
+short version: the visible receipt describes a row the user is looking at, so
+it is the cheaper of the two things competing for §4.10.1's one operable slot;
+the hidden one describes a row nothing on screen mentions, so it is the dearer.
+The 12s here is not borrowed from `UNDO_WINDOW_MS` any more — it is this
+sentence's own, because it is longer than the other and there is nothing on
+screen to re-read it from.
 
 ### 7.18 Empty-state call to action, and the line that teaches the bar
 
@@ -2391,9 +2556,14 @@ nothing to read.
 read off the row at the moment of the press and never recomputed. That is the
 same rule §7.15 states for an edit, and the reason is the same: a reversal that
 derives what to put back is guessing, and "the date it used to have" is exactly
-the kind of thing that can be derived wrongly. A later write to the same todo
-dismisses the toast (`dismissUndo`, keyed per todo id) so an Undo can never
-reach past a change the user made after it.
+the kind of thing that can be derived wrongly. An Undo can never reach past a
+change the user made after it, and since §7.13's cap that is enforced by the
+single action slot in `src/lib/toast.ts` rather than by a per-todo key: a write
+to this row dismisses this row's toast before it starts, and raising **any**
+action toast closes whichever one was standing. A reschedule is the write that
+pays most for the second half of that rule — §7.13 states the cost and accepts
+it, and the answer for the case that hurts is `Pick a date…`, not a second
+armed button.
 
 ---
 
