@@ -16,7 +16,12 @@ There are no per-component import paths.
 - **Calm surface, loud content.** One accent colour only (`--accent`). Chrome is
   neutral; the only saturated pixels on `/todos` are the priority indicator and a
   single primary button. No gradients, no shadow stacking beyond the HeroUI
-  defaults.
+  defaults. *"A single primary button" is counted, not assumed:*
+  `e2e/empty-state-accent.spec.ts` walks every element on the empty screen,
+  resolves each painted background, and asserts that **exactly one** — the
+  quick-add `Add`, by role and name — is `--accent`. Exactly one rather than at
+  most one: zero would satisfy the rule while meaning the accent had left the
+  screen.
 - **Content-first density.** The todo list is the product. Header, filters and
   padding must never push the first todo row below the fold on a 375×667 phone.
 - **Scannable in one pass.** Every row uses the same left-to-right rhythm:
@@ -1017,6 +1022,43 @@ styled container. **Compose the inside yourself:**
 Render it **inside** the list `Card` (replacing the `<ul>`), so the page layout
 does not jump when the first todo is added.
 
+**The action is `variant="secondary"`, not `primary`** — §1 allows the empty
+`/todos` screen *one* primary button, and it shipped with two about 150px apart:
+the quick-add `Add`, and this one, whose entire job is to move focus to that
+one. The button that performs the capture keeps the accent; the button that
+points at it does not. The snippet above still shows `primary` because it is the
+§4.7 sketch of the component; this paragraph is the specification.
+
+`secondary` rather than `tertiary`, **and the reason first given for that was
+wrong.** The case made was that a fill-less button becomes a text link wearing
+button spacing — true of `ghost` and `outline`, and measurably not true of
+`tertiary`: `button--secondary` and `button--tertiary` both set
+`--button-bg: var(--default)` and paint the identical fill. What separates them
+is `--button-fg`; `secondary` takes `--accent-soft-foreground`, so its label is
+accent-tinted and reads as the call to action. The conclusion stands on the
+corrected reason.
+
+Measured through the browser's parser, on the empty screen, both themes:
+
+| | Light | Dark |
+|---|---|---|
+| Action label, on its own composited fill | 6.25:1 | 5.05:1 |
+| Action fill vs the Card | 1.19:1 | 1.19:1 |
+| Quick-add `Add` fill vs the page (unchanged) | 4.37:1 | 4.25:1 |
+| Elements painting `--accent` | 2 → **1** | 2 → **1** |
+
+**The 1.19:1 is stated rather than buried, and it is not a regression this
+change introduced.** SC 1.4.11's 3:1 covers the visual information required to
+*identify* a component, and this button is identified by the words
+`Add a todo` at 6.25:1 / 5.05:1. No variant in this design system except the
+ones carrying `--accent` or `--danger` clears 3:1 against a surface —
+`More options` measures 1.09:1 light / 1.36:1 dark and always has — so a
+blanket boundary floor here would condemn every `Try again`, `Cancel` and
+parsed chip the app ships. What `e2e/empty-state-accent.spec.ts` pins instead is
+that the fill **resolves and is distinct from the surface**, which is the
+property that separates a button from a text link and is the one this decision
+actually turns on; a `ghost` variant reads 1.00 there and fails.
+
 Three distinct empty states — do not reuse one string for all:
 
 | Condition | Heading | Body | Action |
@@ -1794,6 +1836,52 @@ stays**, and not out of sentiment: the remaining Undos still stack, still read
 `Undo` on every button, and a name is still the only thing separating them.
 What changed is that none of the things a name has to describe is destructive
 any more.
+
+**Proposed, and agreed with the ui-designer: one armed toast at a time.**
+`dismissUndo` is keyed per todo id, so it disarms a *repeat write to the same
+row* and nothing else — two rows toggled inside 12s leave two live Undos in
+one tab-ordered region, both reading `Undo`. Generalise the key to a single
+slot: raising any action-bearing toast dismisses whatever action-bearing toast
+is standing. Three consequences for this section, and all three are copy
+consequences rather than mechanism:
+
+- The `aria-label` naming above **stays**, and stops being load-bearing. It
+  was written because a name was the only thing separating stacked Undos; with
+  one slot it becomes confirmation of what you already reached, which is what
+  an accessible name should be.
+- **Receipts are not capped.** An `added` toast carries no action (§7.15), so
+  it is outside this rule — including §7.17's
+  `Todo “{title}” added — hidden by your filters`, which is the only account
+  the user ever gets of a row a filter swallowed and must not be closed by the
+  next write.
+- **What it costs, stated:** a second write inside 12s takes the first Undo
+  away. For a toggle that is nearly free — the checkbox that made the change
+  reverses it, on screen, in one press. For a **reschedule** it is not free:
+  the previous date is not on the row any more and not in any toast, so the
+  older reschedule becomes genuinely unrecoverable rather than merely
+  inconvenient. I accept that. It is two reschedules in twelve seconds
+  followed by regret about the first, against an ambiguous `Undo` in every
+  ordinary session — and the fix for the rare case is `Pick a date…`, not a
+  second armed button. No copy change: putting the old date in the toast
+  (`Todo “x” moved from Aug 22 to Aug 26`) buys that case and lengthens every
+  other one.
+
+**And it is not separable from §4.10's `wrapUpdate` escape hatch.** §4.10 says
+the trade is worth making "the moment an action matters more than the
+animation"; capping at one is what makes that moment arrive. Today a close
+followed by an add is the *repeat-write* case, and §4.10 records that it
+doubles the dead window to roughly 700–800ms. Under a single slot,
+close-then-add becomes the **ordinary** path — every action toast now closes
+one — so the app's only armed control would be inert for the better part of a
+second, every time, with no visual tell. The cap without `wrapUpdate` makes
+the stack tidier and the one remaining button less reliable, which is a worse
+trade than doing neither. Take both or take neither; I would take both. What
+`wrapUpdate: fn => fn()` costs is the queue's 350ms slide, which is the
+ui-designer's to price — a toast can still animate itself; what goes is the
+view-transition cross-fade of the reflow.
+
+This is a behaviour change, so it is mine, and it is recorded here rather than
+built.
 
 ### 7.15 Edit Undo, and why the create has none
 

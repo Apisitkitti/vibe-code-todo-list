@@ -273,6 +273,33 @@ export type Theme = (typeof THEMES)[number];
  * `:root, .light, [data-theme="light"]` and dark to `.dark, [data-theme="dark"]`,
  * so a token corrected in one is not corrected in the other.
  */
+/**
+ * Pins the theme **before the page loads**, rather than correcting one already
+ * on screen.
+ *
+ * `src/app/layout.tsx` stamps the class and the attribute from a `<head>`
+ * script so there is no flash of the wrong theme (NFR-06), and it reads
+ * `heroui-theme` out of `localStorage` to decide. Writing that key from an init
+ * script — which runs before any page script on every navigation — is therefore
+ * the only way a measurement is guaranteed never to see a frame of the other
+ * palette, `@media` fallbacks included.
+ *
+ * `setTheme` is still the right tool for switching themes on a page that is
+ * already up. This one is for a test that must reload anyway and wants the
+ * first paint to be the theme under test.
+ *
+ * Calling it twice accumulates two init scripts; they run in order, so the last
+ * theme asked for is the one that survives into the page.
+ */
+export const pinThemeBeforeLoad = async (
+  page: Page,
+  theme: Theme,
+): Promise<void> => {
+  await page.addInitScript((next) => {
+    localStorage.setItem("heroui-theme", next);
+  }, theme);
+};
+
 export const setTheme = async (page: Page, theme: Theme): Promise<void> => {
   await page.evaluate((next) => {
     localStorage.setItem("heroui-theme", next);
