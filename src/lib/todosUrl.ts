@@ -57,7 +57,12 @@ export const todosUrl = (filters: TodoListFilters, view: TodoView): string => {
 };
 
 /**
- * What `Clear filters` and `Clear search` mean: every filter at its default.
+ * What `Clear filters` means: every filter at its default.
+ *
+ * **`Clear search` is not this.** It shared this tuple until
+ * `fix/empty-state-actions`, which is how a button labelled after one filter
+ * came to reset three. It pushes `{ query: "" }` alone now
+ * (`useTodosUrlSync.clearSearch`); this constant has one caller.
  *
  * **The view is not in here, and that is a product ruling rather than an
  * omission.** The user asked to stop narrowing the list; they did not ask to

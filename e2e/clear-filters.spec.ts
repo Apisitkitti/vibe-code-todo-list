@@ -27,10 +27,13 @@ import { expect, test } from "./support/fixtures";
  * button in `a11y-targets.spec.ts`, which is a different control on a
  * different code path.
  *
- * **Both labels are here because they are one handler.** `resolveEmptyState`
- * shows `Clear filters` when a status or priority filter matched nothing and
- * `Clear search` when a query did, and both call `clearFilters`. Pressing only
- * one would leave half the ruling covered and the other label free to drift.
+ * **Both labels are here because they used to be one handler.**
+ * `resolveEmptyState` shows `Clear filters` when a status or priority filter
+ * matched nothing and `Clear search` when a query did, and until this branch
+ * both called `clearFilters` — so `Clear search` reset the priority filter and
+ * the status filter as well as the search. They are two handlers now, one per
+ * label, and both are pressed here so neither label is free to drift back into
+ * describing less than it does.
  */
 
 const ROW = "the only todo";
@@ -148,10 +151,10 @@ test.describe("Clear filters", () => {
 
 test.describe("Clear search", () => {
   /**
-   * The same handler under its other label. `clearFilters` empties the search
-   * box as well as the filters — `setSearchQuery(current, "")` before the push
-   * — so the field is asserted, not just the URL: the two have come apart
-   * before, which is the whole subject of `search-clear-race.spec.ts`.
+   * The field is asserted, not just the URL: the two have come apart before,
+   * which is the whole subject of `search-clear-race.spec.ts`. Emptying the
+   * box is `setSearchQuery(current, "")` before the push, and it is the half a
+   * URL assertion cannot see.
    */
   test("empties the box the user typed in, not only the query in the URL", async ({
     signedIn: page,
@@ -175,12 +178,11 @@ test.describe("Clear search", () => {
       name. An unscoped `getByRole` resolves to both and Playwright refuses it
       in strict mode — which is how this was found.
 
-      They are not the same control. The field's `×` is the one
-      `a11y-targets.spec.ts` measures, it is `tabindex="-1"`, and it clears only
-      the text; this one is a real tab stop and calls `clearFilters`, which
-      resets the priority filter as well. Worth someone's attention as a copy
-      question — a screen-reader user hears the same name twice and cannot tell
-      which does more — but it is not this file's to change.
+      They are still two controls — the field's `×` is `tabindex="-1"` and is
+      the one `a11y-targets.spec.ts` measures; this one is a real tab stop —
+      but they no longer do different amounts, which is what made the shared
+      name a false claim. Both clear the search term and nothing else. The next
+      test is the one that holds that.
     */
     await page
       .locator('[data-slot="empty-state"]')
@@ -190,5 +192,112 @@ test.describe("Clear search", () => {
     await expect(search).toHaveValue("");
     await expect(todos.rowByText(ROW)).toBeVisible();
     await expect(page).not.toHaveURL(/q=/);
+  });
+
+  /**
+   * The repro. `Clear search` used to call `clearFilters`, so it reset the
+   * priority filter and the status filter as well as the search — the label
+   * naming one filter and the handler dropping three.
+   *
+   * That is not a pedantic reading of a word. Two controls on this screen
+   * answer to `Clear search` while `No matches` is up: the search field's own
+   * `×`, which clears the text, and this one, which cleared everything. A
+   * screen-reader user heard the same name twice for two different amounts of
+   * work, and the name is all they had to tell them apart. Making the empty
+   * state's action mean what the field's `×` already means is the smaller of
+   * the two available fixes — the alternative, renaming this one `Clear
+   * filters`, keeps a control that silently discards work the user did not ask
+   * it to touch and merely stops advertising it under the wrong word.
+   *
+   * The end state is the assertion that carries it: with the search dropped
+   * and `priority=high` kept, the screen moves from `No matches` to
+   * `No todos match these filters` — a *different* empty state, which is only
+   * reachable if exactly one of the two narrowings went away. Asserting the
+   * row came back would be the assertion for the old behaviour.
+   */
+  test("drops the search term and leaves the priority filter where the user set it", async ({
+    signedIn: page,
+  }) => {
+    await seedOne(page);
+    await narrowToNothing(page);
+
+    const search = page.getByRole("searchbox", { name: SEARCH_BOX_LABEL });
+
+    await search.fill("nothing matches this");
+
+    // `query !== ""` is checked before `priority !== "all"`, so the search is
+    // the branch on screen even though both are narrowing.
+    await expect(
+      page.getByRole("heading", { name: NO_MATCHES_HEADING }),
+    ).toBeVisible();
+    await expect(page).toHaveURL(/priority=high/);
+
+    await page
+      .locator('[data-slot="empty-state"]')
+      .getByRole("button", { name: CLEAR_SEARCH_LABEL, exact: true })
+      .click();
+
+    await expect(search).toHaveValue("");
+    await expect(page).not.toHaveURL(/q=/);
+
+    await expect(page).toHaveURL(/priority=high/);
+    await expect(
+      page.getByRole("button", { name: PRIORITY_FILTER_ARIA_LABEL }),
+    ).toHaveText(PRIORITY_FILTER_LABELS.high);
+    await expect(
+      page.getByRole("heading", { name: NO_MATCHING_FILTERS_HEADING }),
+    ).toBeVisible();
+  });
+
+  /**
+   * The case that makes the one above mean something, and the reason the name
+   * is now allowed to be shared.
+   *
+   * While `No matches` is up, two controls answer to `Clear search`: the
+   * field's `×` and the empty state's action. A duplicate accessible name is
+   * only a defect when the two do different things — WCAG asks a name to
+   * describe its control, not to be unique on the page — so the fix was to
+   * make them equivalent rather than to invent a second word for one of them.
+   * This asserts the equivalence directly: **the same starting state, the
+   * other control, the same three outcomes.** Without it, "they are equivalent
+   * now" is a claim in a comment.
+   *
+   * The count is asserted first and deliberately. It is the thing that would
+   * tell a future reader the collision is intentional rather than an
+   * oversight, and it is what turns a rename of either control into a
+   * failure here instead of a silent divergence.
+   */
+  test("the field's own × reaches the same place, which is what makes one name for two controls honest", async ({
+    signedIn: page,
+  }) => {
+    await seedOne(page);
+    await narrowToNothing(page);
+
+    const search = page.getByRole("searchbox", { name: SEARCH_BOX_LABEL });
+
+    await search.fill("nothing matches this");
+
+    await expect(
+      page.getByRole("heading", { name: NO_MATCHES_HEADING }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: CLEAR_SEARCH_LABEL, exact: true }),
+    ).toHaveCount(2);
+
+    /*
+      Named by its slot rather than by `.first()`: the two share an accessible
+      name, so position is the only thing left to tell them apart in a
+      role query, and position is exactly what this project's defect families
+      come from. `search-field-clear-button` is HeroUI's own
+      (`node_modules/@heroui/react/dist/components/search-field/search-field.js`).
+    */
+    await page.locator('[data-slot="search-field-clear-button"]').click();
+
+    await expect(search).toHaveValue("");
+    await expect(page).not.toHaveURL(/q=/);
+    await expect(page).toHaveURL(/priority=high/);
+    await expect(
+      page.getByRole("heading", { name: NO_MATCHING_FILTERS_HEADING }),
+    ).toBeVisible();
   });
 });
