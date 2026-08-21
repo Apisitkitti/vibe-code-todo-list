@@ -64,14 +64,33 @@ describe("nextFocusIndex", () => {
  * a preference.
  */
 describe("focusRowAfterRemoval", () => {
-  /** A stand-in for a row checkbox: it records that it was focused. */
-  const makeRows = (names: string[]) => {
+  /**
+   * A stand-in for a row checkbox: it records that it was focused.
+   *
+   * `refusing` is the case this fixture used to have no way to express, and
+   * its absence was the whole of mutation audit §2.3. A `focus()` that always
+   * succeeds makes `getActiveElement() === target` true whenever `focus()` was
+   * called, so the verification below it had only its true branch — and
+   * replacing that verification with an unconditional success left the suite
+   * green (`R5`, `R12`). The discriminators were honest: removing the
+   * `focus()` *call* was caught in both.
+   *
+   * The refusing case is not hypothetical. `restoreFocusTo`, the third loop in
+   * this module, exists in its current form *because* of it (review F1): a
+   * control can be present and momentarily unfocusable, and a restore landing
+   * one frame before React flushed used to give up permanently and leave focus
+   * on the floor. That loop had a refusing fixture in this very file; these two
+   * did not.
+   */
+  const makeRows = (names: string[], refusing: readonly string[] = []) => {
     let active: unknown = null;
 
     const rows = names.map((name) => {
       const row = {
         name,
         focus: () => {
+          if (refusing.includes(name)) return;
+
           active = row;
         },
       };
@@ -149,6 +168,55 @@ describe("focusRowAfterRemoval", () => {
     // `<body>` branch — which is why `null` here must not make it decline.
     expect(focused).toBeNull();
     expect(before.getActiveElement()).toBeNull();
+  });
+
+  /**
+   * The removal landed, the row exists, `focus()` was called on it — and it
+   * did not take. Reporting the element anyway is worse than reporting
+   * nothing, because the element it names is the anchor `focusIsUnclaimed`
+   * compares against: step 2 would then find focus sitting on `<body>`, take
+   * the `<body>` branch, and be right by accident. The failure that is not an
+   * accident is the reverse — focus on some *other* element, which a phantom
+   * anchor turns into "the user moved it themselves" and declines the rescue
+   * for good.
+   */
+  it("reports nothing when the row is there but refuses the focus", async () => {
+    const before = makeRows(["doomed", "unfocusable"], ["unfocusable"]);
+    const survivors = before.rows.slice(1);
+
+    const focused = await focusRowAfterRemoval(
+      { index: 0, rowCount: 2 },
+      {
+        readRows: () => survivors,
+        getActiveElement: before.getActiveElement,
+        waitFrame: async () => {},
+      },
+    );
+
+    expect(focused).toBeNull();
+    expect(before.getActiveElement()).toBeNull();
+  });
+
+  /**
+   * The control that stops the case above from passing for the wrong reason.
+   * Same shape, same single frame, same call — only the refusal differs, so a
+   * `null` there is the refusal and not the fixture failing to find a row.
+   */
+  it("reports the row when the identical case does accept the focus", async () => {
+    const before = makeRows(["doomed", "focusable"]);
+    const survivors = before.rows.slice(1);
+
+    const focused = await focusRowAfterRemoval(
+      { index: 0, rowCount: 2 },
+      {
+        readRows: () => survivors,
+        getActiveElement: before.getActiveElement,
+        waitFrame: async () => {},
+      },
+    );
+
+    expect(focused).toBe(survivors[0]);
+    expect(before.getActiveElement()).toBe(survivors[0]);
   });
 });
 
@@ -232,14 +300,27 @@ describe("focusUndoAction", () => {
    * toggle's own arrives late — the shape DEF-25 lives in, with the frames
    * before the success toast mounts held open.
    */
-  const stack = (mineArrivesOnFrame: number) => {
+  const stack = (
+    mineArrivesOnFrame: number,
+    /**
+     * Whether this toggle's own Undo *accepts* the focus once it is offered.
+     *
+     * Separate from whether it has mounted, and the distinction is the one
+     * this fixture could not previously make. See `makeRows` above for why:
+     * a `focus()` that always succeeds leaves the verification at the end of
+     * this loop with only its true branch, which is how `R5` survived.
+     */
+    mineAcceptsFocus = true,
+  ) => {
     let frames = 0;
     let active: unknown = null;
 
-    const makeAction = (name: string) => {
+    const makeAction = (name: string, accepts = true) => {
       const action = {
         name,
         focus: () => {
+          if (!accepts) return;
+
           active = action;
         },
       };
@@ -249,7 +330,7 @@ describe("focusUndoAction", () => {
 
     /** `Todo “keepme” added` — an Undo that is a DELETE of another todo. */
     const staleAction = makeAction("stale");
-    const myAction = makeAction("mine");
+    const myAction = makeAction("mine", mineAcceptsFocus);
 
     return {
       staleAction,
@@ -328,6 +409,55 @@ describe("focusUndoAction", () => {
     expect(focused).toBe(false);
     expect(moved).toBe(false);
     expect(world.getActiveElement()).toBeNull();
+  });
+
+  /**
+   * The button is the right one, it is mounted, `shouldStillMove` said yes,
+   * `focus()` was called — and focus did not land. Saying `true` here is a
+   * claim the caller acts on: `useTodoList` reads it as "the user is now on
+   * the Undo", and the consequence of being wrong is the DEF-25 outcome
+   * reached by a different road — focus is actually on `<body>`, three tab
+   * stops behind every remaining row, against a 12s timeout, and nothing
+   * anywhere knows to try again.
+   *
+   * Unlike `restoreFocusTo`, this loop does not retry a refusal, and that is
+   * deliberate rather than an omission: it has already spent its wait getting
+   * *this* toast to mount, and re-offering focus to a button the user may by
+   * then have moved away from is the DEF-28 mistake. What it owes the caller
+   * is an honest `false`.
+   */
+  it("reports failure when this toggle's own Undo refuses the focus", async () => {
+    const world = stack(2, false);
+
+    const focused = await focusUndoAction("mine", () => true, {
+      findAction: world.findAction,
+      getActiveElement: world.getActiveElement,
+      waitFrame: world.waitFrame,
+    });
+
+    expect(focused).toBe(false);
+    // It found the button — it did not merely time out looking for it.
+    expect(world.frames).toBe(2);
+    expect(world.getActiveElement()).toBeNull();
+  });
+
+  /**
+   * The control for the case above: identical stack, identical frame, and the
+   * only difference is that the button accepts. So the `false` there is the
+   * refusal being reported and not the wait quietly failing.
+   */
+  it("reports success when the identical Undo does accept the focus", async () => {
+    const world = stack(2, true);
+
+    const focused = await focusUndoAction("mine", () => true, {
+      findAction: world.findAction,
+      getActiveElement: world.getActiveElement,
+      waitFrame: world.waitFrame,
+    });
+
+    expect(focused).toBe(true);
+    expect(world.frames).toBe(2);
+    expect(world.getActiveElement()).toBe(world.myAction);
   });
 });
 
