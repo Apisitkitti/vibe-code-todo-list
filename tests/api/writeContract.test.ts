@@ -19,6 +19,7 @@ import { PATCH as patchFields } from "@/app/api/todos/[id]/route";
 import { PATCH as patchStatus } from "@/app/api/todos/[id]/status/route";
 import { POST } from "@/app/api/todos/route";
 import { prisma } from "@/lib/prisma";
+import { NOTE_MAX_LENGTH } from "@/lib/todo";
 
 import {
   createTestUser,
@@ -492,6 +493,128 @@ describe("PATCH /api/todos/[id]/due takes a due date and nothing else", () => {
 
     expect((await readTodo(todo.id))?.dueAt?.toISOString()).toBe(
       "2026-08-16T00:00:00.000Z",
+    );
+  });
+});
+
+/**
+ * What a 400 actually *says*, as opposed to the fact that it is a 400.
+ *
+ * `grep -rn "fieldErrors" tests/` returned nothing before this block existed.
+ * `tests/api/` asserted `response.status` around forty times and never once
+ * read a validation body, so the whole field-error mechanism could be deleted
+ * — every 400 answering `fieldErrors: {}` and a generic sentence — with 492
+ * tests passing. What a user gets from that is a form that refuses their
+ * input and marks no field, or a toast with no sentence in it.
+ *
+ * The client is the reason these are contract, not decoration: `Form` wires
+ * `fieldErrors` onto inputs by key, and `getErrorMessage` hands `message`
+ * straight to `toast.danger`.
+ *
+ * Note what is *not* asserted here, deliberately. Two of this mechanism's
+ * rules — dropping a zod path the form has no input for, and keeping the
+ * first message per field rather than the last — cannot be reached through
+ * these routes at all, because `todoFormSchema` is a non-strict `z.object`
+ * whose keys are exactly the form's and no field of it collects two failing
+ * checks. An assertion here that "`completed` never appears in `fieldErrors`"
+ * would pass with the guard and without it. Those two live in
+ * `tests/unit/toFieldErrors.test.ts`, at the function, which is the lowest
+ * layer that can fail for the reason they exist.
+ */
+describe("a 400 from validation says which field and why", () => {
+  const invalidBody = {
+    title: "",
+    note: "n".repeat(NOTE_MAX_LENGTH + 1),
+    priority: "urgent",
+    dueAt: "not a date",
+  };
+
+  test("POST marks every field the schema complained about, and only those", async () => {
+    const response = await POST(jsonRequest("/api/todos", "POST", invalidBody));
+
+    expect(response.status).toBe(400);
+
+    const body = await readError(response);
+
+    expect(Object.keys(body.fieldErrors ?? {}).sort()).toEqual([
+      "dueAt",
+      "note",
+      "priority",
+      "title",
+    ]);
+  });
+
+  test("the message on a field is the one the person can act on", async () => {
+    const response = await POST(jsonRequest("/api/todos", "POST", invalidBody));
+    const body = await readError(response);
+
+    expect(body.fieldErrors?.title).toBe("Enter a title.");
+    expect(body.fieldErrors?.priority).toBe("Choose a priority: low, medium, high.");
+  });
+
+  /**
+   * The top-level sentence is what `toast.danger` shows. Without it the code's
+   * generic default surfaces instead, so the toast says "that request wasn't
+   * valid" about a form that has already marked four fields — which is the
+   * one thing it must not do.
+   */
+  test("the toast sentence is the first field's message, not the generic default", async () => {
+    const response = await POST(jsonRequest("/api/todos", "POST", invalidBody));
+    const body = await readError(response);
+
+    expect(body.message).toBe("Enter a title.");
+    expect(body.message).not.toBe("That request wasn’t valid.");
+  });
+
+  /** A single bad field marks that field alone — the block above is not just "everything". */
+  test("only the offending field is marked when the rest of the body is fine", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", { ...formBody("Fine"), priority: "urgent" }),
+    );
+
+    expect(response.status).toBe(400);
+
+    const body = await readError(response);
+
+    expect(Object.keys(body.fieldErrors ?? {})).toEqual(["priority"]);
+    expect(body.message).toBe("Choose a priority: low, medium, high.");
+  });
+
+  test("PATCH answers with the same shape, so the form reads one contract", async () => {
+    const response = await patchFields(
+      jsonRequest(`/api/todos/${todo.id}`, "PATCH", invalidBody),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(400);
+
+    const body = await readError(response);
+
+    expect(body.fieldErrors?.title).toBe("Enter a title.");
+    expect(body.message).toBe("Enter a title.");
+  });
+
+  /**
+   * The counterpart, and the case that stops the four above from being read as
+   * "a 400 always carries fieldErrors". A body the schema never got to see is
+   * nobody's field, and marking one would send the user to an input that is
+   * not the problem.
+   */
+  test("a 400 that no field is to blame for carries no fieldErrors at all", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", {
+        ...formBody("Already done"),
+        completed: true,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+
+    const body = await readError(response);
+
+    expect(body.fieldErrors).toBeUndefined();
+    expect(body.message).toBe(
+      "Completion is changed by the checkbox, not by saving the todo.",
     );
   });
 });

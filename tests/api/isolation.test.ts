@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   afterAll,
   beforeAll,
@@ -444,9 +446,17 @@ describe("signed out, every endpoint refuses and writes nothing", () => {
    * accounts (the `userId` would have to come from somewhere), or somewhere
    * else under the title it was given. Both are checked, and neither can be
    * moved by a stranger's row.
+   *
+   * The title carries a fresh id per run, and that is load-bearing rather
+   * than decorative. A fixed title is scoped in the concurrent direction but
+   * not in the *durable* one: while proving this test still discriminates, a
+   * deliberately broken handler wrote one such row onto an unrelated
+   * `@e2e.invalid` account, which no cleanup in this file reaches, and the
+   * assertion then failed on every subsequent run. A per-run title cannot be
+   * satisfied by a row this request did not create.
    */
   test("POST /api/todos is a 401 and creates nothing", async () => {
-    const SNEAKED_TITLE = "Sneaked in by a signed-out caller";
+    const SNEAKED_TITLE = `Sneaked in by a signed-out caller ${randomUUID()}`;
     const before = await prisma.todo.count({
       where: { userId: { in: [userA.id, userB.id] } },
     });
