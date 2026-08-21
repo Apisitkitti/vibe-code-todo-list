@@ -74,8 +74,17 @@ import type { TodoListFilters, TodoView } from "@/lib/todo";
  * suppressing adoption — deliberately, and for the reason `disowned` gives.
  * Both lists carry this bound.
  *
- * Exported so the test that pins the bound reads the same number the module
+ * Exported so a test asserting the *shape* of the bound — that the list is
+ * capped, that the newest is kept — reads the same number this module
  * enforces rather than a copy of it.
+ *
+ * That is not enough on its own, and the comment here used to stop at it.
+ * Every assertion in `filterSync.test.ts` derived its expectation from this
+ * constant, so **8 → 1000 left the whole suite green** (mutation audit F4):
+ * the number was compared only against itself. The *existence* of the bound
+ * was covered; its value was free. There is now one assertion against the
+ * literal 8, in `filterSync.test.ts`, and changing this line has to go past
+ * it.
  */
 export const MAX_PENDING_PUSHES = 8;
 

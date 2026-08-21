@@ -41,7 +41,13 @@ Almost every rule in them was bought with a defect:
 - **Never read a result through a pipe** — four people, four false
   conclusions, in one week.
 - **Write the failing test first** — two tests were green through a bug that
-  permanently deleted user data.
+  permanently deleted user data. This is now binding on all new work, not only
+  on bug fixes: `.claude/skills/todo-app-tdd/SKILL.md` holds the mode table,
+  the spike throw-away procedure and the grouping rules, and the roles that
+  touch tests point at it. The argument is in
+  `docs/decisions/2026-08-20-move-to-tdd.md`; the existing suites are not
+  being rewritten, and
+  `docs/decisions/2026-08-21-not-rewriting-the-existing-suites.md` says why.
 - **Identity, not position** — every defect family here came from re-deriving
   something from a property that is only usually equivalent.
 - **Price the claim, not the diff** — a three-line change produced this

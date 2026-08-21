@@ -228,4 +228,87 @@ test.describe("the row's metadata column", () => {
       "the metadata sits below the title, not beside it",
     ).toBeGreaterThanOrEqual(title.y + title.height);
   });
+
+  /**
+   * A row with nothing to draw gets **no metadata box**, not an empty one —
+   * measured in the file named after the row's metadata column, which is the
+   * point.
+   *
+   * `M2` (the line always boxed) was killed by exactly one test,
+   * `card-row-parity.spec.ts:158`, and only in `chromium-mobile`. This file
+   * passed. That is a fragile kill: `card-row-parity` exists to compare a row
+   * against a *card*, so the row's own conditional render was pinned only as a
+   * side effect of a parity measurement, and it would stop being pinned the
+   * moment that comparison changed shape.
+   *
+   * The mechanism, from `TodoRow`'s own comment: below `sm:` this column is a
+   * `flex-col gap-1`, and a cluster rendered with nothing in it is still a flex
+   * item — zero-height, but it takes the 4px gap before it. So the column ends
+   * up 4px taller than its only visible child, the `<li>`'s `items-center`
+   * centres the checkbox against that, and the control sits 2.00px below the
+   * title. At `sm:` and up the same empty box costs nothing visible, which is
+   * why this measures at `MOBILE`.
+   *
+   * Measured as *the column is exactly as tall as its title*, against the
+   * column's own box rather than against a constant — a hard-coded height would
+   * be a restatement of the type scale and would go red on any font change.
+   * The chip row below is what stops it being vacuous: the same measurement has
+   * to be able to come out the other way.
+   */
+  test("a row with nothing to show reserves no space for the metadata it does not have", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await page.setViewportSize(MOBILE);
+    await seed(page, [
+      // Untriaged and undated: `priorityDrawsChip` is false and there is no
+      // date, so the metadata fragment's only content is the `sr-only`
+      // announcement, which is `position: absolute` and not a flex item.
+      { title: UNDATED_TITLE, priority: "medium" },
+      // The control: this one genuinely has something to draw.
+      { title: SHORT_TITLE, priority: "high" },
+    ]);
+
+    await expect(todos.row(UNDATED_TITLE)).toBeVisible();
+
+    /**
+     * The title's own flex column, reached through the title rather than by its
+     * classes — the utilities on it are a layout decision that may be rewritten,
+     * and "the box the title lives in" is the thing being measured either way.
+     */
+    const columnOverTitle = (title: string) =>
+      todos
+        .row(title)
+        .getByText(title, { exact: true })
+        .evaluate((element) => {
+          const column = element.parentElement;
+
+          if (column === null) return null;
+
+          return {
+            column: column.getBoundingClientRect().height,
+            title: element.getBoundingClientRect().height,
+          };
+        });
+
+    const bare = await columnOverTitle(UNDATED_TITLE);
+    const withChip = await columnOverTitle(SHORT_TITLE);
+
+    expect(bare, "the bare row's title has no column around it").not.toBeNull();
+    expect(withChip, "the chip row's title has no column around it").not.toBeNull();
+
+    expect(
+      bare!.column,
+      `the bare row reserves ${(bare!.column - bare!.title).toFixed(2)}px for metadata it does not draw — an empty flex item still takes the column's gap`,
+    ).toBeCloseTo(bare!.title, 1);
+
+    /*
+      And the measurement can come out the other way, so the assertion above is
+      a claim about this row rather than about every row.
+    */
+    expect(
+      withChip!.column,
+      "a row that does draw metadata should be taller than its title alone — if this fails the measurement above proves nothing",
+    ).toBeGreaterThan(withChip!.title);
+  });
 });

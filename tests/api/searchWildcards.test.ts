@@ -69,6 +69,42 @@ const UNDERSCORE_DECOY = "plan axb review";
 const BACKSLASH_LITERAL = "notes in C:\\temp folder";
 const BACKSLASH_DECOY = "notes in C:temp folder";
 
+/**
+ * Two metacharacters in one term, which is the case every fixture above
+ * misses: each of them carries exactly one, so a fix that escapes only the
+ * first occurrence — or only the last — passes all of them.
+ *
+ * That is not a hypothetical mutation. `LIKE_METACHARACTERS` is a *global*
+ * regex, and the module's own comment argues at length for the single pass
+ * precisely because of how two metacharacters interact: a second pass "would
+ * revisit the backslashes the first pass had just introduced and turn `\%`
+ * into `\\%`, a literal backslash followed by a live wildcard". The whole
+ * argument is about terms this file never built. Dropping the `g` (audit A9)
+ * or escaping only the last match (A9b) both survived.
+ *
+ * Each pair below is a literal row plus a decoy that only a *partly* escaped
+ * term reaches, and the two decoys are chosen so that one catches each
+ * direction:
+ *
+ *  - `50%Zoff later` — reachable only if `%` was escaped and `_` was not, so
+ *    `_` is standing for `Z`. That is "first match only".
+ *  - `50 cents _off` — reachable only if `_` was escaped and `%` was not, so
+ *    `%` is standing for ` cents `. That is "last match only".
+ */
+const MULTI_LITERAL = "50%_off today";
+const MULTI_DECOY_TRAILING_LIVE = "50%Zoff later";
+const MULTI_DECOY_LEADING_LIVE = "50 cents _off";
+
+/**
+ * The backslash paired with a wildcard, which is the exact interaction the
+ * single-pass design is defending. `C:\%temp` half-escaped reads as a literal
+ * `C:\` followed by a live `%`, so it matches any path that starts `C:\` and
+ * later contains `temp` — including `BACKSLASH_LITERAL` above, which is why
+ * this one is caught twice over.
+ */
+const MULTI_BACKSLASH_LITERAL = "disk C:\\%temp files";
+const MULTI_BACKSLASH_DECOY = "disk C:\\oldtemp files";
+
 /** Nothing about these should be reachable by a pattern in the search box. */
 const PLAIN_ROWS = ["Buy milk", "Call the vet", "Water the plants"];
 
@@ -79,6 +115,11 @@ const SEEDS = [
   UNDERSCORE_DECOY,
   BACKSLASH_LITERAL,
   BACKSLASH_DECOY,
+  MULTI_LITERAL,
+  MULTI_DECOY_TRAILING_LIVE,
+  MULTI_DECOY_LEADING_LIVE,
+  MULTI_BACKSLASH_LITERAL,
+  MULTI_BACKSLASH_DECOY,
   ...PLAIN_ROWS,
 ];
 
@@ -143,11 +184,24 @@ describe("search treats LIKE metacharacters as literal text", () => {
   test("a search that is only `%` matches only the rows containing one", async () => {
     /*
       The sharpest form of the same defect: read as a pattern, `%%%` is the
-      whole account. Read as text it is one character, and exactly two rows
-      here carry it — one in its title and one in its note.
+      whole account. Read as text it is one character, and only the rows that
+      carry it come back — one of them in its note rather than its title.
+
+      The list is spelled out rather than derived from `SEEDS`, deliberately.
+      Deriving it would make this case agree with whatever the fixtures happen
+      to contain, which is the shape of assertion that cannot fail; enumerating
+      it means adding a row carrying `%` has to come past this line. It did:
+      the three multi-metacharacter rows below were added by the §2.6 work and
+      this expectation went red, which is the assertion doing its job.
     */
     expect(await titlesMatching("%")).toEqual(
-      [PERCENT_LITERAL, NOTED_TITLE].sort(),
+      [
+        PERCENT_LITERAL,
+        NOTED_TITLE,
+        MULTI_LITERAL,
+        MULTI_DECOY_TRAILING_LIVE,
+        MULTI_BACKSLASH_LITERAL,
+      ].sort(),
     );
   });
 
@@ -168,6 +222,30 @@ describe("search treats LIKE metacharacters as literal text", () => {
       character `_` would stand for.
     */
     expect(await titlesMatching("q_r")).toEqual([NOTED_TITLE]);
+  });
+
+  /**
+   * Every case above carries one metacharacter, so all of them pass a fix that
+   * escapes only the first occurrence or only the last. These two are the
+   * cases that tell those apart.
+   */
+  test("two metacharacters in one term are both escaped, not just one of them", async () => {
+    expect(await titlesMatching("50%_off")).toEqual([MULTI_LITERAL]);
+  });
+
+  test("a backslash beside a wildcard is escaped without freeing the wildcard", async () => {
+    expect(await titlesMatching("C:\\%temp")).toEqual([MULTI_BACKSLASH_LITERAL]);
+  });
+
+  /**
+   * The control the two above need: the decoys are genuinely in the account
+   * and genuinely findable, so an empty-handed result from a partly escaped
+   * term would not be mistaken for a passing assertion.
+   */
+  test("both decoys are really there, so the two cases above are not vacuous", async () => {
+    expect(await titlesMatching("50%Zoff")).toEqual([MULTI_DECOY_TRAILING_LIVE]);
+    expect(await titlesMatching("cents _off")).toEqual([MULTI_DECOY_LEADING_LIVE]);
+    expect(await titlesMatching("oldtemp")).toEqual([MULTI_BACKSLASH_DECOY]);
   });
 
   test("ordinary searches are unaffected", async () => {

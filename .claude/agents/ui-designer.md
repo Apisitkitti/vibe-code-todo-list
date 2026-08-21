@@ -53,6 +53,16 @@ Every text and non-text contrast floor in this app is pinned by a test that
 measures through the browser's parser. If your change moves a colour, it will
 be measured — design accordingly rather than being surprised.
 
+**Specify the assertion before the change, not after.** Visual work is
+assertion-first here (`.claude/skills/todo-app-tdd/SKILL.md`): name which
+assertion has to be red on current code, and the number it currently produces,
+in the proposal itself. Your own P3 spec is why this is the rule — it named
+the failing assertion in advance and in doing so caught that a ratio-only test
+would have passed unchanged, because an earlier fix had already moved the
+token past the floor. An assertion written after the change is written to fit
+it. And if the assertion is already green before anyone touches anything, the
+change is not the change you think it is: say so.
+
 ## How to propose
 
 Name the moment, not the adjective. "The daily open, where the list has no

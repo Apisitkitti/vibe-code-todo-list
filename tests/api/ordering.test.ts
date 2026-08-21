@@ -335,4 +335,50 @@ describe("the order survives every filter, and so does the scoping", () => {
     expect(body.completedCount).toBe(1);
   });
 
+  /**
+   * The counts describe the **account**, not the page.
+   *
+   * Both existing assertions read them in an unfiltered request, where "all of
+   * the account" and "all of this response" are the same number — so
+   * `totalCount` could be counting the filtered set and nothing went red
+   * (mutation audit C8). The audit called this borderline and worth one
+   * assertion "if `ordering.test.ts` is being touched anyway"; it is, so here
+   * it is.
+   *
+   * It is not cosmetic. `totalCount` is what decides between *Nothing here
+   * yet* and *No todos match your filters* — an empty filtered list showing
+   * `totalCount: 0` tells a user with four todos that they have none, which is
+   * the one message that must never appear over a full account.
+   */
+  test("the counts describe the account even when a filter shrinks the page", async () => {
+    const response = await GET(getRequest("/api/todos?status=completed"));
+    const body = await readList(response);
+
+    // One row on the page...
+    expect(body.todos).toHaveLength(1);
+    // ...and still four in the account, one of them done.
+    expect(body.totalCount).toBe(4);
+    expect(body.completedCount).toBe(1);
+  });
+
+  /**
+   * The same, through a search rather than a status filter — and this is the
+   * one that reaches `completedCount`.
+   *
+   * A status filter cannot discriminate it: under `?status=completed` the
+   * filtered set and "the account's completed rows" are the same rows, so a
+   * `completedCount` computed from the filtered `where` returns the right
+   * number by coincidence. That mutation (C8b) survived the case above and
+   * was only killed here, which is why both cases exist rather than one.
+   */
+  test("a search that matches nothing still reports the account's real counts", async () => {
+    const response = await GET(
+      getRequest("/api/todos?query=nothingmatchesthisatall"),
+    );
+    const body = await readList(response);
+
+    expect(body.todos).toEqual([]);
+    expect(body.totalCount).toBe(4);
+    expect(body.completedCount).toBe(1);
+  });
 });

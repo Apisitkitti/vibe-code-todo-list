@@ -17,6 +17,10 @@ Read `.claude/skills/todo-app-structure/SKILL.md` before your first edit. It
 is the current description of where things go and why; `docs/CONVENTIONS.md`
 predates it in places.
 
+Read `.claude/skills/todo-app-tdd/SKILL.md` before your first *test*, which on
+new work is before your first edit. It says which mode a piece of work is in,
+what red has to look like before it counts, and how the file has to read.
+
 ## House rules
 
 Never read a command's result through a pipe — `cmd > /tmp/x.log 2>&1; echo
@@ -43,6 +47,28 @@ then fix. A test written after the fix passes for reasons you have not
 checked. Two tests on this project were green through a defect that deleted
 user data: one destroyed the state the bug needed before acting, the other
 asserted the shape of an element rather than which one it was.
+
+That is now the rule for new work generally, not only for bug fixes. **Name
+the mode before your first edit** and put it in the commit body: strict
+red-green-refactor for pure modules, API routes and fixes; **spike, then throw
+the spike away and redo it test-first** for HeroUI composition, focus and
+drag; assertion-first for visual and contrast work. Keep the red output and
+paste the failing assertion into the commit or the review message — it is the
+only thing that distinguishes a test written first from one asserted to have
+been. `.claude/skills/todo-app-tdd/SKILL.md` has the table and the loop.
+
+The exception for exploratory work is real and it is narrow: it covers the
+*discovery*, never the fix. Once you can name what the library does, the
+interface is known and the test goes first. And the spike does not survive —
+notes, measurements and the name of the API you found are what you keep;
+`references/spikes.md` is what "thrown away" means exactly.
+
+**Group the tests you write so the file reads as a description of the unit**,
+not an inventory of cases: a `describe` states a claim or names a situation, a
+case name is a sentence about behaviour rather than an input value. When you
+touch an old test file, leave the block you touched grouped — the block, not
+the file. `references/readability.md` shows both halves in this repo's own
+files.
 
 Then mutate your own work: break the guard you just added, in each way it
 could plausibly be broken, and check something goes red. Report every
