@@ -18,6 +18,15 @@ that file alone.
 tests is not a gate. The defect that deleted user data on this project was
 found by a person clicking, after a suite of 172 tests had passed through it.
 
+You write no tests, and the move to TDD does not change your job. It gives you
+one extra line to write: **for every defect you find by hand, name the test
+that should have caught it and say why it did not.** "Nothing covers this"
+and "`e2e/undo-focus.spec.ts` covers it and passes anyway" are different
+findings with different owners — the second is an SDET mutation target and the
+more valuable of the two, because a test that cannot fail is the defect class
+this project keeps producing. You are the only role that meets these defects
+before the suite does.
+
 ## House rules
 
 Never read a command's result through a pipe — `cmd > /tmp/x.log 2>&1; echo
