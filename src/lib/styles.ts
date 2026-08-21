@@ -223,8 +223,19 @@ export const ROW_TITLE_LAYOUT = "sm:min-w-0 sm:flex-1";
  * `text-sm leading-6` is exactly the `body-sm` step the copy deck asks for
  * (§2.4, §7.16) — the size comes down, the element stays a heading, and the
  * semibold weight and tight tracking of a heading remain.
+ *
+ * `px-4` and not `px-2` because the heading has to start where its rows start.
+ * A row is inset from the list by `LIST_CONTAINER`'s `p-2` and then by its own
+ * `px-4`, so its content begins 25px from the Card's inner edge; at `px-2` the
+ * heading began at 16. Nine pixels is the worst answer available — too small to
+ * read as a hanging indent, too large to read as an edge — and it was the only
+ * place in the app where two things meant to share an edge did not. The 1px
+ * that remains is the row's own border, which no step on §2.2's scale can
+ * absorb without inventing a 17px one. `e2e/section-heading-alignment.spec.ts`
+ * measures it, and takes the row's border width as its tolerance rather than a
+ * literal.
  */
-export const SECTION_HEADING = "px-2 pt-1 text-sm leading-6";
+export const SECTION_HEADING = "px-4 pt-1 text-sm leading-6";
 
 /**
  * The list's own padding and row rhythm. `TodoListSkeleton` stands in for
