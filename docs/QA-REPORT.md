@@ -3021,3 +3021,316 @@ Recorded rather than closed, because the 404 is not explained. If this
 recurs, the thing to capture is which account the 404's row belonged to;
 the isolation matrix already has the fixtures for that. It shipped on the
 evidence above, not on a decision that flakes are acceptable.
+
+---
+
+# Pixel-precision audit — `/todos` list, board and empty state
+
+Branch `develop` @ `fa232c7` (`chore(agents): give QA a pixel-perfect habit,
+measured and looked at`), working tree clean. Node 24. Driven through
+Playwright on `E2E_PORT=3217` against `todo_app_test`; `.env` verified on
+`postgresql://postgres@127.0.0.1:5432/todo_app_dev` before any database
+command, with the Neon URL commented out. `todo-app-ui` was not touched — this
+records the state **before** the UI-polish batch lands.
+
+This is an audit of shipped state, not a release gate, so there is no
+SHIP/HOLD here. Nothing below blocks on its own; the ranking is what a user
+would actually notice.
+
+Findings are numbered `PX-nn` rather than continuing the `DEF-` sequence,
+because most of them are geometry that no assertion covers and two of them are
+"this is correct, here is the number proving it". `PX-01`, `PX-02` and `PX-03`
+are the ones I would fix.
+
+Method: every claim is a `getBoundingClientRect` read, plus two things a rect
+cannot give — the text baseline (a zero-size `inline-block`'s bottom margin
+edge sits on the line's baseline) and the glyph ink box (canvas
+`actualBoundingBox*` measured with the element's own resolved font). Then a
+screenshot at 320 / 390 / 768 / 1280 in both themes, theme applied via
+`emulateMedia` before first paint so the `.dark` class is stamped by the
+bootstrap script rather than swapped after. Eleven seeded rows covering every
+combination the brief names: chip / no chip, date / no date, note / no note,
+completed / active, across all five urgency sections.
+
+---
+
+## The headline: the metadata column holds, and the `medium` chip's removal cannot break it
+
+**This is the finding the brief expected to be bad, and it is not.** The
+cluster's right edge lands on **the same x on every row**, at every width where
+the reserved column exists:
+
+| width | visible right edge | span across 11 row variants |
+|-------|--------------------|-----------------------------|
+| 768   | 519.00 on all 11   | **0.00 px**                 |
+| 1280  | 767.00 on all 11   | **0.00 px**                 |
+
+Across a High chip and no chip, a date and no date, a note marker and none, a
+completed row and an active one — including `Done and bare`, which carries
+nothing at all and whose cluster is 0px wide but still ends at 767.00.
+
+I then simulated the change that is coming: deleted every `Medium` chip from
+the DOM and re-measured. Span **0.00 → 0.00 px**. The anchor is the content
+column's right edge — `ROW_TITLE_LAYOUT`'s `sm:flex-1 sm:min-w-0` on the title
+— not the chip, so nothing about the chip's presence or width can move it.
+**The chip removal is safe for the list.** It is not safe for the board; see
+PX-01.
+
+One correction for whoever measures this next. Reading "the cluster's last
+child" reports a **144.33px** span and looks like a serious defect. It is not:
+the note marker's `sr-only` sibling is `position: absolute`, so it is out of
+flow but still returns a rect — back at the cluster's *start*. Filter on
+`getComputedStyle(el).position !== 'absolute'` and the span collapses to zero.
+I record this because it is exactly the shape of a false positive that gets
+filed as a bug.
+
+`e2e/row-layout.spec.ts` already pins this claim, but over three rows that all
+carry a High chip. It would not have caught a completed row losing the edge.
+Widening its fixture to include a completed row and a bare row costs nothing
+and would make the guarantee real rather than incidental.
+
+---
+
+## Findings, ranked by what a user would notice
+
+### PX-01 — Board: a card's metadata wraps to a third line for every priority except `Low`, and the threshold is missed by 0.96px
+
+**Very visible.** Measured at 1280, `board-light-1280.png` / `board-dark-1280.png`.
+
+A card's content width is `209.20 − 2` (border) `− 24` (`px-3`) = **183.20**.
+The actions cluster is **124.00** wide and `gap-2` is 8, leaving **51.20px**
+for the chip and date.
+
+| chip     | width  | vs the 51.20 budget | result   |
+|----------|--------|---------------------|----------|
+| `▼ Low`  | 48.45  | fits, 2.75 to spare | one line |
+| `▲ High` | 52.16  | **over by 0.96**    | wraps    |
+| `■ Medium` | 73.11 | over by 21.91      | wraps    |
+
+So 8 of 9 cards render three lines and `Sweep` renders two. Card heights in one
+board: **106 / 134 / 138 / 150 / 174**. In the `No date` column alone the three
+cards are 138, 134 and 106 — three different shapes for the same object, side
+by side. Each wrapped card gets a lone row of three right-aligned icons with
+empty space beside it, which is what actually reads as broken.
+
+A sub-pixel miss is producing a 30px layout change. Shaving 1px anywhere in
+that budget collapses the extra line on every High card.
+
+**And this is where the `medium` removal does bite.** Simulated, card heights
+move 174→142, 134→106, and `Today with a note` un-wraps. Afterwards, whether a
+card is two or three lines depends on nothing but whether it is High — so a
+High card will sit visibly taller than an otherwise identical Low card, because
+of 0.96px. The brief was right that the change makes rows differ more; it is
+the board, not the list, where that shows.
+
+### PX-02 — Board: the checkbox sits 8px below the title's first line, on every card
+
+**Very visible.** `ctrl.cy − (title.y + halfLineHeight) = 8.00px`, on every
+card, in every column, in both themes, at 1024, 1280 and 1440. Example at 1280,
+`Today bare`: control box `y=525 h=16` (centre 533), title box `y=515 h=24`
+(first-line centre 527).
+
+Cause: the card's first line is `flex items-start`, and the checkbox's 16px
+control is centred inside a 36px `ICON_BUTTON_SIZING` box, so it lands at +18
+from the top against a title line that centres at +10. The list row measures
+**0.00** on the identical pair, because the row is `items-center`.
+
+The tick does not line up with the words it belongs to. On a board where every
+card starts with a checkbox and a title, it is the first thing the eye catches.
+
+### PX-03 — Empty state: `text-center` is overridden, and the body copy is left-aligned inside a centred column
+
+**Visible on phones — on the one screen every new account sees.**
+`empty-light-390.png`, `empty-light-320.png`.
+
+`TodoEmptyState`'s root carries `text-center` and computes
+`text-align: center`. Its `<h4>` and `<p>` both compute **`text-align: start`**
+— HeroUI's own `EmptyState` styling wins. The `text-center` in the source is
+dead, which is worse than absent because it reads as a guarantee.
+
+It hides at desktop widths by accident: the copy is one line, shrink-to-fit
+centres the box, and line centre lands on card centre to 0.00 (384.00 vs
+384.00 at 768; 640.00 vs 640.00 at 1280). It shows the moment the copy wraps:
+
+| width | line 1 centre | line 2 centre | card centre | line 2 off-centre |
+|-------|---------------|---------------|-------------|-------------------|
+| 390   | 177.35        | 72.38         | 195.00      | **122.62px left** |
+| 320   | 148.45        | 101.28        | 160.00      | **58.72px left**  |
+
+"here." sits hard against the left padding under a centred heading, a centred
+icon and a centred button. The icon, heading and button are all centred to
+0.00, which makes the one left-aligned block read as a mistake rather than a
+style.
+
+### PX-04 — Row on a phone: the checkbox is 14px below the title it belongs to
+
+**Visible.** `list-dark-390.png`, `list-light-320.png`. At 320 and 390:
+control `cy=652`, title `cy=638` — **14.00px**. At 768 and 1280 the same
+measurement is **0.00**.
+
+Below `sm:` the row's content column is `flex-col` — title stacked over
+metadata, 56px tall — while the `<li>` is `items-center`. So the 44px checkbox
+centres against the *pair*, and lands beside the gap between the title and the
+chip, aligned to neither. On a phone that is the whole row's anchor sitting in
+the wrong place.
+
+Related and visible in the same shot: the gap from the control's right edge to
+the title is **40.00px** at 320/390 (16px control inside a 44px `justify-start`
+tap box, plus `gap-x-3`) and **32.00px** at 768/1280. The row's own outer
+padding is 16. The title reads as detached from its tick.
+
+### PX-05 — First 30 seconds: two primary blue buttons, 300px apart, both meaning "create a todo"
+
+**Visible, and not an alignment fault.** `empty-light-390.png`.
+
+A brand-new account's entire screen is: heading, date line, a full-width blue
+`Add`, then a blue `Add a todo` pill inside the empty state 300px below it —
+and the second one focuses the first one's input, sending the user back up the
+page they just read down. Two primary-weight blues competing on a screen with
+four elements on it.
+
+Production has 18 accounts and nobody back for a second day. This is the screen
+the brief says matters most, and this is the thing on it I would change first.
+Recorded here because the audit reached it; it belongs to design, not to me.
+
+### PX-06 — A card and a row do not read as the same object
+
+**Visible when you switch views.** Same todo, measured in both:
+
+| | row | card |
+|---|---|---|
+| title | `body`, 16px, `weight="medium"` | `body-sm`, 14px |
+| padding | `px-4 py-3.5` (16 / 14) | `px-3 py-3` (12 / 12) |
+| checkbox vs title | 0.00px | 8.00px low (PX-02) |
+| metadata | right-anchored, same line | left-anchored, line below |
+| title overflow | truncate | wrap to 3 lines |
+
+Some of this `TodoCard`'s own comments argue for deliberately, and the wrapping
+argument is sound at 200px. The **type size** is the one I would question: the
+same todo's title changes size when you press `Board`, which is the change a
+user is least likely to have asked for.
+
+### PX-07 — Section headings align with nothing, and take two different insets in the two views
+
+**Low-to-moderate.** A ruler sees it instantly; a person sees a soft ragged
+left margin.
+
+List @1280 — heading text **368.00**, row border **360.00**, checkbox
+**377.00**, title **425.00**. `SECTION_HEADING`'s `px-2` (8px) against the
+row's `px-4` + 1px border. Identical shape at every width (320: 48 / 40 / 57 /
+113. 768: 104 / 96 / 113 / 161).
+
+Board @1280 — heading text **69.00**, card border **65.00**, card checkbox
+**78.00**. `px-1` (4px) this time.
+
+So the same `<h2>` role, at the same `body-sm` step, sits 8px inside the row in
+one view and 4px inside the card in the other, and in neither does it land on a
+row edge, a card edge, or a control. Whichever inset is right, they should be
+the same one.
+
+The `Separator` between sections is exactly right, for contrast: x 360.00 →
+920.00, matching the rows' 360.00 → 920.00 to 0.00.
+
+### PX-08 — The board's left margin is five planes inside 22px
+
+**Moderate.** @1280, reading left to right: order-note text **60.00**, column
+box **56.00**, card border **65.00**, column heading text **69.00**, card
+checkbox **78.00**. Visible in `board-light-1280.png` as a stagger down the
+left side of the `Overdue` column.
+
+### PX-09 — Row internals: title, chip and date are box-centred to 0.00 but their baselines differ by 1–2px
+
+**Ruler mostly, eye for one of the three.** @768 and 1280, every active row,
+identical on all of them:
+
+```
+title baseline  536.00
+chip  baseline  534.00   (2px above the title)
+date  baseline  535.00   (1px above the title, 1px below the chip)
+note  baseline  536.00   (0.00 — it inherits the title's 16px)
+box centres     530.00 / 530.00 / 530.00   (0.00 apart)
+```
+
+`items-center` is doing exactly what it says: the boxes are 28, 20 and 24 tall
+and their centres coincide perfectly. The mismatch is that three type sizes
+(16 / 12 / 14px) centred by box cannot also share a baseline.
+
+**Where the numbers and my eye disagree, and which I trust.** The chip-vs-date
+1px is the only one I can actually see at 100%, because they are the adjacent
+pair and the eye reads two short strings on one line against each other. The
+2px title-vs-chip I cannot pick out, and I trust the ruler over my eye there —
+the chip is a filled pill with its own padding, and a pill's optical centre is
+not its text's baseline, so the eye is measuring the wrong thing. I would not
+spend a change on this unless the chip is being restyled anyway.
+
+### PX-10 — Below `sm:` there is no shared right edge at all — and that is correct
+
+**Not a defect. Recorded so the number is not filed as one later.**
+
+@320/390 the visible right edge spans **129.75px** across the 11 rows. That is
+`ROW_TITLE_LAYOUT` being `sm:`-gated on purpose: below the breakpoint the row
+is `flex-col` and there is no column to reserve.
+
+The plane that exists on a phone is the **left** one, and it is exact: all 11
+rows' metadata starts at **x=113.00**, flush with the title above it, whatever
+the row carries. Simulating the `medium` removal moves the right-edge span
+95.88 → 98.39 and leaves the left edge at 113.00 untouched.
+
+### PX-11 — Vertical rhythm matches `gap-6` exactly; the only step off is the page's own top padding
+
+**Not a defect between peers.** `main` computes `row-gap: 24px` and all six
+peer gaps measure **24.00px**, at every width, in both themes:
+
+```
+heading block → date line → quick-add form → view toggle → filter row → Card
+     24.00        24.00          24.00           24.00        24.00
+```
+
+Nothing is a step off. Note there are six peers, not the four the brief names —
+`TodoListHeaderLine` and the `ViewToggle` are also `gap-6` peers, so the
+heading-to-quick-add distance is 72px in three steps, by design.
+
+The one inconsistency is above all of it: the header measures **67px** tall,
+not the 56 its inner `h-14` names — HeroUI's `Header` adds `padding: 6px top /
+4px bottom` plus a 1px border — and `main`'s `lg:py-8` then adds 32. So the
+header-to-`h1` gap is **32** where every peer gap is 24. Below `lg` it is
+`py-6` = 24 and matches. Invisible; ruler only.
+
+### PX-12 — The header bar's content is 1px above the centre of its own box
+
+**Nobody could ever see this.** Inner `h-14` bar at y=6.00 in a 67px header:
+6px above, 5px below (4px padding + 1px border). Included because the brief
+asked for the full list rather than a filtered one, and this is the bottom of
+it.
+
+---
+
+## What the eye caught that the numbers did not, and the reverse
+
+**The eye caught, the ruler called fine:** the chips form a ragged left edge
+down the list — 622.67, 629.53, 668.16, 624.63, 639.95, 642.72, 692.27, 693.89,
+718.55 — a 95.88px-wide zone. Every one of those rows is *correct* by the §1
+rule, because §1 reserves the **right** edge and the chip is the leftmost thing
+in a variable-width cluster. But the chip is what a person scans a list for,
+and it is the one thing in the metadata that has no column. That is a design
+question rather than a defect, and it is the strongest visual impression the
+list gives; PX-01's wrap is the same fact biting harder on the board.
+
+**The ruler caught, the eye called fine:** PX-01's 0.96px. Nothing about
+looking at a board tells you that the High chip misses its budget by under a
+pixel — you see "the cards are different heights" and assume it is the content.
+And PX-03 is invisible at every width I would have checked first; it only
+appears when the copy wraps, which is phones only.
+
+**Where I trusted the eye over the ruler:** PX-09's 2px title-vs-chip
+baseline. The measurement is real and I would still not act on it.
+
+## Reproducing this
+
+The harness is not committed — it is a scratch Playwright config pointing
+`testDir` at a temp directory, reusing `e2e/support/fixtures` and
+`globalSetup` unchanged, so nothing was added to `e2e/`. Screenshots were
+written to the session scratchpad as `list-{theme}-{width}.png`,
+`board-{theme}-{width}.png`, `empty-{theme}-{width}.png`. Everything above is
+a number that a fresh run reproduces from the seed set described at the top;
+no claim here rests on a screenshot alone.
