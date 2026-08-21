@@ -119,6 +119,30 @@ export const TodoCard = ({
         isVanishing ? "pointer-events-none" : ""
       }`}
     >
+      {/*
+        `items-start`, and the checkbox is centred on the title's **first
+        line** rather than on the title.
+
+        A card and a row are the same object in two shapes, and this was the
+        clearest place they did not read as one: the row's control and title
+        share a centre line and measure 0.00 apart, and every card sat 6.00px
+        low. The row is not what changes — its centring is correct, and the rule
+        is that text baseline-aligns to text while a box centre-aligns to text.
+        A checkbox is a box.
+
+        But `items-center` here would be the wrong reading of that rule. A row's
+        title truncates and is always one line, so "the title" and "the title's
+        first line" are the same thing; a card's wraps to three, and centring
+        the control against the whole block would put it 24px low on a
+        three-line card — worse than the fault it replaced.
+
+        So the wrapper below is exactly one line tall (`h-6`, the title's
+        `body-sm` `leading-6`) and the 36px tap target is centred inside it,
+        overflowing 6px into the card's own `py-3`. The target keeps §6.3's
+        floor at full size; what it stops doing is setting the height of a block
+        it is only a marker in. `e2e/card-row-parity.spec.ts` measures both the
+        one-line and the wrapped case, and the row alongside them.
+      */}
       <div className="flex items-start gap-2">
         {/*
           The anchor `restoreToggleFocus` finds this card's checkbox by, after a
@@ -126,7 +150,10 @@ export const TodoCard = ({
           On a wrapper rather than on the control — `src/lib/rowFocus.ts` says
           why.
         */}
-        <span {...toggleTargetProps(todo.id)} className="shrink-0">
+        <span
+          {...toggleTargetProps(todo.id)}
+          className="flex h-6 shrink-0 items-center"
+        >
           <Checkbox
             isDisabled={isPending}
             isSelected={todo.completed}
