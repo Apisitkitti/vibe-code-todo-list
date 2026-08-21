@@ -15,7 +15,10 @@ vi.mock("next/headers", () => ({
 }));
 
 import { PATCH as patchDue } from "@/app/api/todos/[id]/due/route";
-import { PATCH as patchFields } from "@/app/api/todos/[id]/route";
+import {
+  DELETE,
+  PATCH as patchFields,
+} from "@/app/api/todos/[id]/route";
 import { PATCH as patchStatus } from "@/app/api/todos/[id]/status/route";
 import { POST } from "@/app/api/todos/route";
 import { prisma } from "@/lib/prisma";
@@ -28,7 +31,13 @@ import {
   readTodo,
   type TestUser,
 } from "../support/factory";
-import { idContext, jsonRequest, readError, readTodoBody } from "../support/request";
+import {
+  deleteRequest,
+  idContext,
+  jsonRequest,
+  readError,
+  readTodoBody,
+} from "../support/request";
 
 /**
  * The rule that completion is changed only by `/status`, never by a save.
@@ -494,6 +503,125 @@ describe("PATCH /api/todos/[id]/due takes a due date and nothing else", () => {
     expect((await readTodo(todo.id))?.dueAt?.toISOString()).toBe(
       "2026-08-16T00:00:00.000Z",
     );
+  });
+});
+
+/**
+ * What a *successful* delete answers.
+ *
+ * `isolation.test.ts` pins DELETE's 404 twice over — the cross-account refusal
+ * is the property that file exists for — and nothing anywhere asserted the
+ * success path. So the handler could answer `200 {ok:true}`, or a **500**,
+ * having deleted the row, and the suite stayed green (mutation audit I3,
+ * I3b). `deleteTodo` in the service layer branches on the response, and a
+ * client reading a 500 as a failure would leave the row on screen after the
+ * server had destroyed it — the disagreement between the screen and the
+ * database that QA is told to look for.
+ *
+ * 204 rather than 200: there is no body worth sending, and the empty body is
+ * part of the contract rather than an accident of having nothing to say.
+ */
+describe("DELETE /api/todos/[id] answers 204 with nothing in it", () => {
+  test("reports 204, not a 200 with a body and not an error", async () => {
+    const response = await DELETE(
+      deleteRequest(`/api/todos/${todo.id}`),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+  });
+
+  /** And the 204 is telling the truth: the row is gone from the database. */
+  test("the row is actually gone, so the status is not a claim about nothing", async () => {
+    await DELETE(deleteRequest(`/api/todos/${todo.id}`), idContext(todo.id));
+
+    expect(await readTodo(todo.id)).toBeNull();
+  });
+
+  /**
+   * The counterpart that keeps 204 meaning something: deleting the same row
+   * twice is a 404 the second time, so 204 is "I deleted it" rather than "I
+   * have nothing to say about this id".
+   */
+  test("deleting it again is a 404, so 204 means the row was there", async () => {
+    await DELETE(deleteRequest(`/api/todos/${todo.id}`), idContext(todo.id));
+
+    const response = await DELETE(
+      deleteRequest(`/api/todos/${todo.id}`),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(404);
+  });
+});
+
+/**
+ * What `POST` stores in `note`.
+ *
+ * `note` was asserted on the *update* path and never on create, so the create
+ * handler could store every note as `NULL` (mutation audit C14b) — silently
+ * discarding the 2000-character field where the detail actually lives — or
+ * store `""` where the schema means "no note" (C14), with 492 tests passing.
+ *
+ * The `"" -> NULL` mapping is not cosmetic: `null` is what the row renderer
+ * and `todoMatchesFilters` read as "there is no note", and an empty string is
+ * a note that happens to be empty. Both handlers do it, and only one of them
+ * was watched.
+ */
+describe("POST /api/todos stores the note it was given", () => {
+  test("keeps a supplied note verbatim", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", {
+        ...formBody("With a note"),
+        note: "Ring the caterer first",
+      }),
+    );
+
+    expect(response.status).toBe(201);
+
+    const body = await readTodoBody(response);
+
+    expect(body.note).toBe("Ring the caterer first");
+    expect((await readTodo(body.id))?.note).toBe("Ring the caterer first");
+  });
+
+  /** An omitted note is no note, and no note is `NULL` rather than `""`. */
+  test("stores no note as null when the key is absent altogether", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", formBody("Without a note")),
+    );
+
+    expect(response.status).toBe(201);
+
+    const body = await readTodoBody(response);
+
+    expect(body.note).toBeNull();
+    expect((await readTodo(body.id))?.note).toBeNull();
+  });
+
+  /** A cleared textarea sends `""`, and that is the same thing as no note. */
+  test("stores an empty note as null too, the way a save does", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", { ...formBody("Cleared note"), note: "" }),
+    );
+
+    expect(response.status).toBe(201);
+
+    const body = await readTodoBody(response);
+
+    expect(body.note).toBeNull();
+    expect((await readTodo(body.id))?.note).toBeNull();
+  });
+
+  /** Trimmed on the way in, like the title, so whitespace is not a note. */
+  test("stores a note that is only whitespace as null", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", { ...formBody("Blank note"), note: "   " }),
+    );
+
+    expect(response.status).toBe(201);
+    expect((await readTodoBody(response)).note).toBeNull();
   });
 });
 
