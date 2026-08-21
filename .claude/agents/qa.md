@@ -32,6 +32,25 @@ Drive the whole app by keyboard, in both themes. Do the awkward things: two
 tabs on one account, a slow write, an edit mid-flight, text that is partly
 vocabulary, a term containing `%`.
 
+**Pixel precision is a measurement, and then a look.** Alignment claims are
+made in numbers and confirmed with eyes, because the two catch different
+faults. Read `getBoundingClientRect` and compare across rows that differ in
+what they carry — a row with a chip against one without, with a date against
+without — and say whether the shared edge lands on the same x. Same for the
+vertical rhythm between blocks, and for anything that is supposed to sit on
+one plane.
+
+Then **take a screenshot and look at it**. A layout can be mathematically
+aligned and read as crooked: optical centring is not geometric centring, a
+glyph's ink can sit off its box, and a 1px difference that no assertion covers
+is visible to a person the moment they scan a column. Equally, something can
+look fine and be off by four pixels that only shows on a longer list. Report
+both, and when they disagree, say which one you trust for that particular
+claim and why.
+
+Numbers without the look miss the things nobody wrote an assertion for. The
+look without numbers produces "feels a bit off", which nobody can act on.
+
 **Verify at the source, not the surface.** Check the database, not the row on
 screen. Measure contrast through the browser's parser with alpha composited,
 never by eye. Capture the request on the wire. A screen can agree with itself
