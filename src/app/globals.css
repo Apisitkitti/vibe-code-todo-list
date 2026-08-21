@@ -1,6 +1,30 @@
 @import "@heroui/react/styles";
 
+/*
+  Tailwind v4 configures scanning from CSS, not from a JS config file. With no
+  `source(…)` on the `@import`, `@tailwindcss/postcss` seeds the scanner with a
+  recursive glob rooted at the repo — verified by reading
+  `node_modules/@tailwindcss/postcss/dist/index.mjs`, which builds the scanner
+  sources as: `root === "none"` -> `[]`; `root === null` (the case here, since
+  nothing passes `source(…)`) -> one entry `{ base: <repo root>, pattern:
+  <recursive glob>, negated: false }`; otherwise the given root. It then
+  concatenates every `@source` rule onto that. So the `@source "../../src"`
+  line below is purely additive, and `docs/` was being scanned as part of the
+  repo-root sweep.
+
+  Markdown prose cannot distinguish a class being discussed from one being
+  used: `docs/DESIGN.md` names utilities in running text and code samples, and
+  Tailwind emits a rule for each. `@source not` is the v4 exclusion syntax —
+  parsed into the `negated` flag in `tailwindcss/dist/lib.mjs`.
+
+  Deliberately a negation rather than `source(none)` plus an allow-list.
+  Narrowing the root to `src/` alone would also silently drop anything a real
+  component picks up from outside it, and no test in this repo would catch
+  that; the page would just render wrong. This removes exactly `docs/` and
+  leaves every other scanned path as it was.
+*/
 @source "../../src";
+@source not "../../docs";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
