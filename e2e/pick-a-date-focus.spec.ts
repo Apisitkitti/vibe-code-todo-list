@@ -2,6 +2,7 @@ import {
   BOARD_ORDER_NOTE,
   PICK_A_DATE_ITEM_LABEL,
   TITLE_FIELD_LABEL,
+  editModalHeading,
 } from "./support/copy";
 import { expect, test } from "./support/fixtures";
 
@@ -71,8 +72,8 @@ const focusedField = async (page: import("@playwright/test").Page) =>
 
 const TITLE = "Prepare the quarterly report";
 
-/** The editor's own heading (`docs/DESIGN.md` §4.5) — and its dialog's name. */
-const EDITOR_HEADING = "Edit todo";
+/** The editor's own heading (`docs/DESIGN.md` §7.5) — and its dialog's name. */
+const EDITOR_HEADING = editModalHeading(TITLE);
 
 test.describe("Pick a date… opens the editor on the date", () => {
   test("the caret lands in Due date, not in Title", async ({
@@ -178,9 +179,10 @@ test.describe("Pick a date… opens the editor on the date", () => {
 
     /*
       The dialog's own accessible name is what a screen reader announces on
-      open, before the focused control. `Edit todo` says the surface is the
-      record editor, which is the caveat §7.21 argues a menu item cannot carry
-      — so it is carried here instead, where it costs nothing to read.
+      open, before the focused control. Since §7.5 it names the record as well
+      as the surface — which is the caveat §7.21 argues a menu item cannot
+      carry, and the context this ruling's focus move would otherwise have
+      taken away: focus on `Title` used to speak the title by accident.
     */
     await expect(page.getByRole("dialog", { name: EDITOR_HEADING })).toBeVisible();
   });
