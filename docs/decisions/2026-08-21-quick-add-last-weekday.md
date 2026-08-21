@@ -28,10 +28,35 @@ not only weekdays. `last week`, `last month` and `last year` were already safe,
 because `week`/`month`/`year` are not vocabulary on their own — so the defect
 was exactly the set of words that *are*.
 
-## Why
+## Why: `next friday` already settles it
 
-Three products were genuinely available. The one chosen is the one already
-written down in this file for the mirror-image phrase.
+**The binding argument is precedent, and it is exact.** Everything else below
+is supporting.
+
+`next friday` is already refused by this very function — the comment this
+change extended says so and says why. The Friday ahead is meaningful,
+computable, unambiguous, entirely storable and, by any reasonable guess, typed
+far more often than `last tuesday`. It is still declined, deliberately, because
+rule 4 says the vocabulary is small, closed and exact and that refusing to be
+clever is the feature.
+
+That disposes of the case for reading `last <weekday>` before the merits of past
+dates are even reached. **If "the target date is meaningful and storable" were
+sufficient grounds to parse a phrase, `next friday` would parse.** It does not.
+So adding `last <weekday>` would not be extending the vocabulary by one word; it
+would be overturning a standing decision against the *better*-motivated half of
+the pair, while leaving that half refused. A parser that reads the past but not
+the future is not a smaller decision than one that reads both — it is an
+incoherent one.
+
+This is also why the fix is one `UNREAD_DATE_MODIFIERS` guard covering both
+words rather than a second guard beside the first. The two phrases are one
+decision, and the code should make that hard to un-notice.
+
+## Why, continued: the supporting arguments
+
+Three products were genuinely available. These are the remaining reasons the
+chosen one wins.
 
 ### Rejected: read `last <weekday>` as the past date
 
@@ -42,26 +67,17 @@ first-class state in this app, not a degenerate one. `formatDueDate` has a
 `YYYY-MM-DD` with no lower bound. All four verified by reading the code. So
 parsing a past date would not be producing a value the app cannot hold.
 
-It loses on precedent, and the precedent is exact. **`next friday` is already
-refused** — see the comment this change extended — even though the Friday ahead
-is meaningful, computable, unambiguous and fully supported. If "the target date
-is meaningful and storable" were sufficient grounds to parse a phrase, `next
-friday` would parse. It does not, deliberately, because rule 4 says the
-vocabulary is small, closed and exact and that refusing to be clever is the
-feature. Adding `last <weekday>` would not be extending the vocabulary by one
-word; it would be overturning a decision this module already made against the
-better-motivated half of the pair. `next friday` is a phrase people type far
-more often than `last tuesday`, and it was still declined.
+It loses to the precedent above. It also loses on two counts of its own.
 
-It is also ambiguous on the day it matters. "Last Tuesday", said on a Tuesday,
-is either seven days ago or today, and English does not settle it. That is the
-same ambiguity `src/lib/date.ts` cites as its reason for declining "the start of
-next week" for the `Next week` reschedule — neither answer is wrong enough to be
+It is ambiguous on the day it matters. "Last Tuesday", said on a Tuesday, is
+either seven days ago or today, and English does not settle it. That is the same
+ambiguity `src/lib/date.ts` cites as its reason for declining "the start of next
+week" for the `Next week` reschedule — neither answer is wrong enough to be
 obviously right.
 
-Finally, the two options are not equally reversible. Refusing leaves the phrase
-as literal text, so reading it as a date later is a pure addition that costs
-nobody anything. Shipping the read and retracting it means todos already created
+And the two options are not equally reversible. Refusing leaves the phrase as
+literal text, so reading it as a date later is a pure addition that costs nobody
+anything. Shipping the read and retracting it means todos already created
 carrying dates the parser guessed at, which no later change can find.
 
 ### Rejected: leave it, and document that there is no past-tense vocabulary
@@ -86,6 +102,38 @@ The escape hatch already exists and is already documented: `YYYY-MM-DD` is in
 the vocabulary precisely for dates the closed word list cannot express, and it
 reaches the past as easily as the future. A user who wants a todo due last
 Tuesday can type the date.
+
+## The guard matches whole words, and must keep doing so
+
+Recorded here rather than only in the test file, because this is the part a
+future refactor is most likely to undo while believing it is simplifying.
+
+`isUnreadDateModifier` compares the preceding word against the table with
+`includes` on the **array** — an exact, whole-word match. It is *not* a
+substring test against the word. Written the shorter-looking way:
+
+```ts
+// WRONG — do not "simplify" to this
+UNREAD_DATE_MODIFIERS.some((modifier) => word.includes(modifier));
+```
+
+…the guard fires on any word that merely *contains* `next` or `last`. This was
+found by mutation, and it survived every other test in
+`tests/unit/quickAdd.test.ts` before coverage was added for it.
+
+It is a real defect, not a theoretical one. **`context` contains `next`**, so
+`book the context friday` would silently lose its date: no chip, no due date,
+and no indication that a word in the middle of the title was the reason. That
+is a *worse* failure than the one this whole record is about, because the one
+this record is about at least leaves visible evidence in the title. `ballast`
+and `lastly` do the same thing through `last`.
+
+The point generalises, and it is rule 3 and rule 4 restated: this parser's
+vocabulary is matched as whole words everywhere else — `Highlight` is not
+`high`, `mondays` is not `monday` — and the modifier table is not an exception
+to that. `tests/unit/quickAdd.test.ts` → *"the modifiers are whole words, so a
+word merely containing one is not one"* is the test that holds it. If that test
+is in your way, the guard is what is wrong, not the test.
 
 ## What I verified, and what I did not
 
