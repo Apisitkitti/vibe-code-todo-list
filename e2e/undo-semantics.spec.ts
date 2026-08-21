@@ -420,6 +420,21 @@ test.describe("Undo accessible names", () => {
  * screen-reader user what the one button does — but it is no longer what holds
  * the feature up.
  *
+ * **A test was removed from here, and this is the argument for it.** This
+ * describe used to hold "a receipt neither takes the slot nor gives it up",
+ * which asserted that a receipt raised after a toggle stood beside the Undo and
+ * left it armed. §7.13.1 overturned exactly that: the visible-row receipt now
+ * **yields** and is not raised at all, so the test's own precondition — the
+ * receipt being visible — is no longer reachable and it fails there rather
+ * than at anything it was written to protect.
+ *
+ * It is not deleted coverage. That test's own comment described the gap the
+ * ruling then closed: the receipt "sits over the Undo's centre and takes the
+ * press", which it worked around by activating the Undo from the keyboard.
+ * `e2e/receipts-against-the-undo.spec.ts` replaces it with the behaviour that
+ * actually shipped, and asserts the pointer reachability the old test had to
+ * concede.
+ *
  * **The cost, accepted deliberately and recorded here so it is not
  * rediscovered as a bug.** A second write within the 12s window takes the
  * first Undo away. For a toggle that is free: the checkbox reverses it in one
@@ -463,71 +478,6 @@ test.describe("one action toast at a time", () => {
       await todos.undoButton.count(),
       "a second action toast must leave exactly one armed Undo",
     ).toBe(1);
-  });
-
-  test("a receipt neither takes the slot nor gives it up", async ({
-    signedIn: page,
-    todos,
-  }) => {
-    await todos.quickAdd(FIRST);
-    await expect(todos.rowByText(FIRST)).toBeVisible();
-
-    await todos.toggle(FIRST, true);
-    await expect(
-      todos.toastTitles.filter({ hasText: markedCompleteToast(FIRST) }),
-    ).toBeVisible();
-
-    /*
-      A receipt raised *after* an action toast. If receipts took the slot this
-      would close the Undo beside it — which is the wrong trade twice over: the
-      Undo is the thing with an expiry, and §7.17's `hidden by your filters`
-      sentence is the only account a swallowed row ever gets.
-    */
-    await todos.quickAdd(SECOND);
-    await expect(todos.rowByText(SECOND)).toBeVisible();
-    await expect(
-      todos.toastTitles.filter({ hasText: addedToast(SECOND) }),
-    ).toBeVisible();
-
-    expect(
-      await todos.undoButton.count(),
-      "a receipt must not close the standing Undo",
-    ).toBe(1);
-
-    // And the receipts are still on screen beside it — the cap counts actions,
-    // not toasts.
-    await expect(
-      todos.toastTitles.filter({ hasText: addedToast(FIRST) }),
-    ).toHaveCount(1);
-    await expect(
-      todos.toastTitles.filter({ hasText: addedToast(SECOND) }),
-    ).toHaveCount(1);
-
-    /*
-      The surviving Undo is the toggle's, and it still works — activated from
-      the **keyboard**, deliberately.
-
-      A pointer press cannot reach it, and that is not this test being awkward:
-      HeroUI's region stacks the newest toast in front of the older ones with
-      no expand-on-hover, so the receipt raised a moment ago sits over the
-      Undo's centre and takes the press. `e2e/toast-dead-window.spec.ts`
-      measures it. That is a real reachability gap, it is pointer-only, and it
-      is filed rather than fixed here — closing it means either capping
-      receipts too, which §7.17 argues against, or changing how the region
-      stacks, which is a design decision and not this branch's to take.
-
-      Keyboard activation does not hit-test, so this asserts the thing the cap
-      is actually about: the Undo is still armed and still reverses the write
-      it names.
-    */
-    await page
-      .getByRole("button", {
-        name: undoActionLabel(markedCompleteToast(FIRST)),
-        exact: true,
-      })
-      .press("Enter");
-
-    await expect(todos.checkbox(FIRST)).not.toBeChecked();
   });
 
   /**

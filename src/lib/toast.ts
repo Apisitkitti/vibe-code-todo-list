@@ -131,12 +131,12 @@ export interface ActionToastRequest {
  * closing them — and hiding is exactly wrong here, because a hidden toast's
  * Undo is still mounted, still focusable and still pressable.
  *
- * **Receipts are outside the cap and do not come through this function.** A
- * receipt has no action, so neither thing the cap protects applies to it: there
- * is nothing to press and nothing describing a state the row has since left.
- * `Todo “x” added — hidden by your filters` (§7.17) is the only account a user
- * ever gets of a row a filter swallowed on write, and a cap that closed it
- * would be spending the one message that cannot be re-derived from the screen.
+ * **Receipts do not come through this function, and they are no longer simply
+ * exempt from the slot.** A receipt has no action, so neither thing the *cap*
+ * protects applies to it — but §4.10.1's region has one operable slot and the
+ * newest toast takes it whether it wanted it or not, so a receipt raised over
+ * a standing Undo buries it. §7.13.1 rules on which of the two receipts may do
+ * that: `showYieldingReceipt` and `showSupersedingReceipt` below.
  */
 export const showActionToast = ({
   todoId,
@@ -152,6 +152,79 @@ export const showActionToast = ({
   outstandingAction = { todoId, token, key };
 
   return key;
+};
+
+/**
+ * Whether an action-bearing toast is currently standing.
+ *
+ * Exposed for the receipts below rather than for callers to branch on. A
+ * screen deciding "is there an Undo up right now" would be reading a race; the
+ * two receipt helpers ask and act in one step.
+ */
+const actionToastIsStanding = () => outstandingAction !== null;
+
+/**
+ * A receipt that **yields** to a standing Undo (`docs/DESIGN.md` §7.13.1).
+ *
+ * This is `Todo “{title}” added` for a row that is on screen. It confirms
+ * something the list has already confirmed, in the place the user is looking —
+ * so when it would have to cost the Undo its one operable slot, it is not
+ * raised at all.
+ *
+ * **Why not raised rather than raised-behind.** §4.10.1: HeroUI's region is a
+ * deck, not a list. Every toast is absolutely positioned, offset `n × 12px` and
+ * scaled `1 − n × 0.05`, and anything that is not frontmost is clipped to the
+ * height of the toast in front of it, has its close button disabled, and has
+ * `tabIndex = -1` on its wrapper. The newest toast always takes the only
+ * operable slot. So raising this receipt does not add a message beside the
+ * Undo; it puts the Undo underneath a card and holds it there, inert to
+ * pointer, for the receipt's whole life.
+ *
+ * Returns whether it was raised, so a caller that needs to know it stayed
+ * silent can say so. Nothing needs that yet; it is returned because "did this
+ * happen" is not derivable afterwards.
+ *
+ * **The cost, accepted in §7.13.1 rather than solved here:** suppressing the
+ * toast suppresses its announcement, so a screen-reader user capturing within
+ * the Undo's window hears nothing about the create. The row is inserted into
+ * the list and that is the weaker substitute. If it is measured to matter the
+ * fix is a live-region line, not a toast — a toast is what costs the slot.
+ *
+ * Burst capture is unaffected: an add arms nothing, so a run of adds never has
+ * a standing Undo to yield to.
+ */
+export const showYieldingReceipt = (message: string): boolean => {
+  if (actionToastIsStanding()) return false;
+
+  raise(message, "success");
+
+  return true;
+};
+
+/**
+ * A receipt that **takes the slot**, closing the standing Undo
+ * (`docs/DESIGN.md` §7.13.1).
+ *
+ * This is `Todo “{title}” added — hidden by your filters` (§7.17), and it is
+ * the one message in the app that describes a row nothing on screen mentions.
+ *
+ * **The principle, which is the part worth carrying:** where a sentence and a
+ * control compete for the one slot, the sentence wins if it cannot be
+ * re-derived and the control can. A toggle's Undo is a convenience over a
+ * checkbox still sitting on the row where the user just pressed it. A row the
+ * filter swallowed has no such backup.
+ *
+ * It closes the outstanding Undo but does **not** register itself: there is no
+ * action to guard, so the slot is left empty rather than occupied by something
+ * that can never be claimed or disarmed.
+ */
+export const showSupersedingReceipt = (
+  message: string,
+  timeout: number,
+): void => {
+  closeOutstanding();
+
+  raise(message, "success", { timeout });
 };
 
 /**

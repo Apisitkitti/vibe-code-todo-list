@@ -19,19 +19,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * it — and none of that involves rendering anything.
  */
 
-const added: string[] = [];
+interface Added {
+  key: string;
+  title: string;
+  /** `undefined` means the caller passed none, so the queue's default applies. */
+  timeout: number | undefined;
+}
+
+const added: Added[] = [];
 const closed: string[] = [];
 
 vi.mock("@heroui/react", () => {
   let nextKey = 0;
 
   class ToastQueue {
-    add(content: { title: string }) {
+    add(content: { title: string }, options?: { timeout?: number }) {
       nextKey += 1;
 
       const key = `key-${nextKey}`;
 
-      added.push(`${key}:${content.title}`);
+      added.push({ key, title: content.title, timeout: options?.timeout });
 
       return key;
     }
@@ -134,20 +141,114 @@ describe("the action-toast slot", () => {
     expect(closed).toEqual([]);
   });
 
-  it("receipts do not pass through the slot at all", () => {
+  it("a plain toast neither takes the slot nor closes what is in it", () => {
     const standing = slot.showActionToast(
       request("todo-a", "undo-1", "A toggled"),
     );
 
-    slot.toast.success("Todo “B” added — hidden by your filters");
+    slot.toast.success("something unrelated");
 
-    expect(
-      closed,
-      "a receipt must neither take the slot nor close what is in it",
-    ).toEqual([]);
+    expect(closed).toEqual([]);
 
     // And the slot still holds the Undo, so it is still claimable.
     expect(slot.claimActionPress("undo-1")).toBe(true);
     expect(closed).toEqual([standing]);
+  });
+});
+
+/**
+ * `docs/DESIGN.md` §7.13.1 and §7.17 — the two `added` receipts are not the
+ * same object, and the difference is whether the row is on screen.
+ *
+ * | receipt | life | against a standing Undo |
+ * |---|---|---|
+ * | `added` | the queue's default (4s) | yields — not raised at all |
+ * | `added — hidden by your filters` | 12s | takes the slot, closing it |
+ *
+ * The lives are asserted here rather than in a browser because asserting a
+ * timeout end to end means waiting for it, which buys a slow flaky test for a
+ * value that is passed straight through. This is the layer that passes it.
+ */
+describe("the two receipts", () => {
+  let slot: Awaited<ReturnType<typeof importSlot>>;
+
+  beforeEach(async () => {
+    slot = await importSlot();
+  });
+
+  it("a yielding receipt is raised when nothing is standing", () => {
+    expect(slot.showYieldingReceipt("Todo “A” added")).toBe(true);
+    expect(added.map((toast) => toast.title)).toEqual(["Todo “A” added"]);
+  });
+
+  it("a yielding receipt is not raised at all when an Undo stands", () => {
+    slot.showActionToast(request("todo-a", "undo-1", "A toggled"));
+    added.length = 0;
+
+    expect(
+      slot.showYieldingReceipt("Todo “B” added"),
+      "it must report that it stayed silent",
+    ).toBe(false);
+
+    /*
+      Not raised, rather than raised behind. §4.10.1's region is a deck: the
+      newest toast takes the only operable slot, so raising this would hold the
+      Undo inert to pointer for the receipt's whole life.
+    */
+    expect(added, "nothing may be raised over a standing Undo").toEqual([]);
+    expect(closed, "and the Undo must be left alone").toEqual([]);
+  });
+
+  it("a yielding receipt takes the queue's own default life, not the Undo's 12s", () => {
+    slot.showYieldingReceipt("Todo “A” added");
+
+    /*
+      §7.17 gives it "HeroUI's default 4s". Passing no timeout is how that is
+      expressed, so the deck and the queue cannot drift apart — restating 4000
+      here would be a second source for one number.
+    */
+    expect(
+      added[0].timeout,
+      "the visible receipt borrowed 12s from a window it does not have",
+    ).toBeUndefined();
+  });
+
+  it("a superseding receipt closes the standing Undo and keeps its own 12s", () => {
+    const standing = slot.showActionToast(
+      request("todo-a", "undo-1", "A toggled"),
+    );
+
+    added.length = 0;
+    slot.showSupersedingReceipt("Todo “B” added — hidden by your filters", 12_000);
+
+    expect(closed, "the sentence takes the slot from the control").toEqual([
+      standing,
+    ]);
+    expect(added).toHaveLength(1);
+    expect(added[0].timeout).toBe(12_000);
+  });
+
+  it("a superseding receipt does not occupy the slot it took", () => {
+    slot.showActionToast(request("todo-a", "undo-1", "A toggled"));
+    slot.showSupersedingReceipt("Todo “B” added — hidden by your filters", 12_000);
+
+    /*
+      It has no action, so there is nothing to claim or disarm. Leaving it in
+      the slot would mean the next write closed a receipt instead of an Undo,
+      and `claimActionPress` would have a token it could never match.
+    */
+    expect(slot.claimActionPress("undo-1")).toBe(false);
+    expect(slot.dismissActionToast("todo-a")).toBe(false);
+  });
+
+  it("an action toast raised after a superseding receipt still works normally", () => {
+    slot.showSupersedingReceipt("Todo “B” added — hidden by your filters", 12_000);
+    closed.length = 0;
+
+    const key = slot.showActionToast(request("todo-c", "undo-9", "C toggled"));
+
+    expect(closed, "there was nothing in the slot to close").toEqual([]);
+    expect(slot.claimActionPress("undo-9")).toBe(true);
+    expect(closed).toEqual([key]);
   });
 });

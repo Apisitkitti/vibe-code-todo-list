@@ -36,6 +36,8 @@ import {
   claimActionPress,
   dismissActionToast,
   showActionToast,
+  showSupersedingReceipt,
+  showYieldingReceipt,
   toast,
 } from "@/lib/toast";
 import {
@@ -146,6 +148,22 @@ const BOARD_MEDIA_QUERY = "(min-width: 1024px) and (pointer: fine)";
  * about reading time, which was always the better one.
  */
 const UNDO_WINDOW_MS = 12_000;
+
+/**
+ * How long `Todo “{title}” added — hidden by your filters` stays up
+ * (`docs/DESIGN.md` §7.17).
+ *
+ * **Its own 12s, not borrowed from `UNDO_WINDOW_MS`**, and the deck says so
+ * explicitly. It is the longer of the two receipts because it is the longer
+ * sentence and there is nothing on screen to re-read it from — the row it
+ * describes is the one the filter swallowed. Tying it to the Undo window would
+ * make a change to how long a reversal is offered silently change how long the
+ * only account of an invisible write is readable.
+ *
+ * The visible receipt takes no constant at all: §7.17 gives it the queue's own
+ * default, so it is left as the default rather than restated here.
+ */
+const HIDDEN_RECEIPT_WINDOW_MS = 12_000;
 
 /**
  * The empty state's call to action (`docs/DESIGN.md` §7.18). It no longer
@@ -400,24 +418,53 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
   const dismissUndo = (todoId: string) => dismissActionToast(todoId);
 
   /**
-   * A toast that reports and stops — no action, no token, no bookkeeping.
+   * Reports a create, and decides which of the two receipts it is
+   * (`docs/DESIGN.md` §7.17, ruled by §7.13.1).
    *
-   * This is what an `added` toast is now (`docs/DESIGN.md` §7.15). It is a
-   * separate function rather than a flag on `showUndoableSuccess` because
-   * almost nothing that helper does applies: there is no action to mint a
-   * token for, nothing for the focus rescue to wait on, and no armed control
-   * that a later write has to disarm. Threading a `withUndo: false` through it
-   * would leave every one of those branches to read past.
+   * Both are receipts — no action, no token, no bookkeeping (§7.15). They are
+   * **not** the same object, and the difference is whether the row is on
+   * screen:
    *
-   * **The 12s life is kept**, and that is the one thing it does borrow. The
-   * decision was to remove the action, not the receipt: a create's toast that
-   * suddenly outlived — or died before — the Undo toasts stacked beside it
-   * would be a second change nobody asked for, and §7.17's `hidden by your
-   * filters` sentence is the only account the user ever gets of a row the
-   * filter swallowed, so it is the last one that should get shorter.
+   * | receipt | life | against a standing Undo |
+   * |---|---|---|
+   * | `added` | 4s (the queue's default) | yields — not raised at all |
+   * | `added — hidden by your filters` | 12s | takes the slot, closing it |
+   *
+   * The exemption receipts used to have was granted to both by inheritance
+   * rather than by argument. The first confirms something the list has already
+   * confirmed, where the user is looking; the second describes a row nothing on
+   * screen mentions. Where a sentence and a control compete for §4.10.1's one
+   * operable slot, the sentence wins if it cannot be re-derived and the control
+   * can.
+   *
+   * `todoMatchesFilters` only ever claims "hidden" when it is certain, and that
+   * asymmetry now decides more than the wording: being wrong towards "visible"
+   * costs a missing sentence, being wrong towards "hidden" costs a sentence
+   * that is a lie *and* an Undo the user still had every right to.
    */
-  const showReceipt = (message: string) => {
-    toast.success(message, { timeout: UNDO_WINDOW_MS });
+  /*
+    A create can land outside the list the user is looking at, and the row then
+    simply never appears. Inserting it anyway is not an option — a filtered list
+    must match what a reload of the same URL would show at every moment
+    (`docs/PRD.md` US-10, the rule the toggle already follows) — and clearing
+    the filter on their behalf would throw away something they asked for. So the
+    receipt says it.
+  */
+  const reportCreate = (saved: TodoItemData) => {
+    if (todoMatchesFilters(saved, filters)) {
+      /*
+        No explicit timeout: §7.17's 4s is the queue's own default, and it is
+        left as the default rather than restated so the two cannot drift.
+      */
+      showYieldingReceipt(`Todo “${saved.title}” added`);
+
+      return;
+    }
+
+    showSupersedingReceipt(
+      `Todo “${saved.title}” added — hidden by your filters`,
+      HIDDEN_RECEIPT_WINDOW_MS,
+    );
   };
 
   /**
@@ -425,7 +472,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
    *
    * Two callers remain, and they are the two reversals that put a value back:
    * a toggle (§7.13) and an edit (§7.15). A create reports through
-   * `showReceipt` instead — its Undo was a `DELETE`, which is the hazard
+   * `reportCreate` instead — its Undo was a `DELETE`, which is the hazard
    * §6.8 records and this change closes.
    *
    * The token is what the focus rescue waits for (`src/lib/rowFocus.ts`). It
@@ -597,31 +644,6 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
    * raised two edits ago (review M-2).
    */
   /**
-   * The receipt for a create, and the one sentence that stops a filtered list
-   * from looking like a failure.
-   *
-   * A create can land outside the list the user is looking at, and the row
-   * then simply never appears. Inserting it anyway is not an option — a
-   * filtered list must match what a reload of the same URL would show at every
-   * moment (`docs/PRD.md` US-10, the rule the toggle already follows) — and
-   * clearing the filter on their behalf would throw away something they asked
-   * for. So the receipt says it, and keeps its Undo.
-   *
-   * `todoMatchesFilters` only ever claims "hidden" when it is certain, and
-   * that asymmetry is deliberate: being wrong in this direction costs a
-   * missing sentence, being wrong in the other costs a sentence that is a lie.
-   *
-   * Both readings are receipts and neither carries an Undo (§7.15). The
-   * hidden one is the reason the sentence matters more here than anywhere
-   * else: it is the only evidence the user gets that the write happened at
-   * all, since the row it describes is not on screen to speak for itself.
-   */
-  const createdMessage = (saved: TodoItemData) =>
-    todoMatchesFilters(saved, filters)
-      ? `Todo “${saved.title}” added`
-      : `Todo “${saved.title}” added — hidden by your filters`;
-
-  /**
    * The bar's create. **No skeleton** (review MA-3): nothing closed over the
    * list, the toast is already on screen saying what happened, and blanking
    * every row to report a change to one of them is the disproportion the
@@ -642,7 +664,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
   const handleQuickAdded = (saved: TodoItemData) => {
     reloadSilently();
 
-    showReceipt(createdMessage(saved));
+    reportCreate(saved);
   };
 
   /**
@@ -685,7 +707,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
       return;
     }
 
-    showReceipt(createdMessage(saved));
+    reportCreate(saved);
   };
 
   /**
