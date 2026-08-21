@@ -213,6 +213,40 @@ export const NO_MATCHES_HEADING = "No matches";
 export const NO_MATCHING_FILTERS_HEADING = "No todos match these filters";
 
 /**
+ * The two empty-state actions that call `clearFilters`, and §7.10's search box.
+ *
+ * Written down here because until now they were nowhere: `grep -rn "Clear
+ * filters" e2e/` returned nothing across the whole suite, which is how `U4`
+ * survived 41 tests. A documented product ruling
+ * (`CLEARED_FILTERS` in `src/lib/todosUrl.ts`) with a dedicated constant, a
+ * dedicated comment, and no test that pressed the button.
+ *
+ * They are two labels for one handler — which is exactly why both are here.
+ * `resolveEmptyState` picks between them by whether a search term is set, and a
+ * test that only ever pressed one would leave the other branch's label free to
+ * drift.
+ */
+export const CLEAR_FILTERS_LABEL = "Clear filters";
+export const CLEAR_SEARCH_LABEL = "Clear search";
+export const SEARCH_BOX_LABEL = "Search todos";
+
+/**
+ * §7.3 — the priority filter, which is a HeroUI `Select` behind a popover
+ * rather than a radiogroup like the status one.
+ *
+ * It is the **only** filter that reaches `noMatchingFilters()` and therefore
+ * the only one that renders `Clear filters`: `resolveEmptyState` answers
+ * `status=active` and `status=completed` with their own states, each of which
+ * carries no action at all.
+ */
+export const PRIORITY_FILTER_ARIA_LABEL = "Filter todos by priority";
+export const PRIORITY_FILTER_LABELS = {
+  all: "All priorities",
+  high: "High",
+  low: "Low",
+} as const;
+
+/**
  * §7.18 "Empty state teaching line" / §7.7 — the one worked example of the
  * quick-add vocabulary, and the one line that teaches it.
  *
@@ -227,6 +261,47 @@ export const NO_MATCHING_FILTERS_HEADING = "No todos match these filters";
  */
 export const QUICK_ADD_EXAMPLE = "pay rent friday high";
 export const EMPTY_STATE_SYNTAX_HINT = `A day and a priority at the end are read — ${quoted(QUICK_ADD_EXAMPLE)} becomes ${quoted("pay rent")}, due Friday, High priority.`;
+
+/**
+ * §6.4 — the words that carry a level or a state where colour otherwise would,
+ * and the glyphs that duplicate them in ink.
+ *
+ * These are separated from the headings below because they are asserted through
+ * `expectWording`, which asks *who the word is for* rather than merely whether
+ * it is in the DOM. Each constant below is the string as a single text node
+ * renders it, because that is what `expectWording` matches — `PRIORITY_PREFIX`
+ * and the level word are two nodes in the chip and one node on an untriaged
+ * row, and the two cases are asserted differently for that reason.
+ */
+
+/** The chip's `sr-only` prefix (`PriorityChip`). Trailing space is real. */
+export const PRIORITY_PREFIX = "Priority: ";
+
+/** §8.4.2 — the level words. Mirrors `PRIORITY_FILTER_LABELS` in the app. */
+export const PRIORITY_WORDS = { high: "High", low: "Low" } as const;
+
+/**
+ * The whole announcement on an untriaged row, which `PriorityChip` renders as
+ * one node because that level draws no chip — `§4.4`'s trade, where the
+ * announcement carries the level alone.
+ */
+export const MEDIUM_PRIORITY_ANNOUNCEMENT = "Priority: Medium";
+
+/** §4.4 / §6.4 — the shape glyphs, `aria-hidden` beside the word they echo. */
+export const PRIORITY_GLYPH_WORDS = { high: "▲", low: "▼" } as const;
+
+/**
+ * §6.4 — the overdue step's non-colour half, both of it. `TodoDueDate` renders
+ * an `aria-hidden` `⚠` for the eye and a visually-hidden `Overdue — ` for the
+ * ear, and the audit killed neither: `D1` gutted the prefix and survived 57
+ * tests, `D3` deleted the glyph and survived 50.
+ *
+ * The dash is an em dash (U+2014) with a space on each side, and the trailing
+ * space is part of the string the component emits. Asserting a hyphen here
+ * silently matches nothing.
+ */
+export const OVERDUE_ANNOUNCEMENT = "Overdue — ";
+export const OVERDUE_GLYPH = "⚠";
 
 /** §7.16 — the list's section headings, in the order the list shows them. */
 export const OVERDUE_HEADING = "Overdue";

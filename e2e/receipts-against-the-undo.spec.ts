@@ -159,6 +159,20 @@ test.describe("receipts against the standing Undo", () => {
    * assertions in separate ones: a change that got the branch backwards —
    * yielding when hidden, taking the slot when visible — passes each of the two
    * tests above only if they are read alone.
+   *
+   * **It did not used to discriminate, and the audit caught it doing so.**
+   * Under `T1` — `showYieldingReceipt` stops yielding and raises the receipt
+   * over the standing Undo — this test **passed**, while the mutation was
+   * killed by the first test in this file. The visible-row half asserted only
+   * that the Undo was still standing, which under `T1` it is: the receipt does
+   * not close it, it *buries* it. The button stays in the DOM and stays
+   * counted, inert behind a card, for the receipt's whole life (§4.10.1).
+   *
+   * So a count of 1 was never the claim. "Yielded" means the receipt was not
+   * raised **and** the Undo is still the thing on top, which is exactly what
+   * the first test asserts and what this one had left out — a comment claiming
+   * more than its assertions, which is worse than a missing test because it
+   * stops anyone writing the real one.
    */
   test("the two receipts behave differently under the same standing Undo", async ({
     signedIn: page,
@@ -174,10 +188,34 @@ test.describe("receipts against the standing Undo", () => {
     await todos.quickAdd(`${CAPTURED} one`);
     await expect(todos.rowByText(`${CAPTURED} one`)).toBeVisible();
 
+    /*
+      Not raised at all — the half this test was missing. A point-in-time read
+      for the reason the first test gives: toasts expire by themselves, so a
+      retrying absence would be satisfied by an expiry and would pass against an
+      app that raised the receipt and buried the Undo for four seconds first.
+    */
+    await expectAbsentNow(
+      todos.toastTitles.filter({ hasText: addedToast(`${CAPTURED} one`) }),
+      "the visible-row receipt was raised over a standing Undo",
+    );
+
     expect(
       await todos.undoButton.count(),
       "a visible-row receipt must leave the Undo standing",
     ).toBe(1);
+
+    /*
+      And still operable, not merely still counted. This is what separates
+      "yielded" from "buried": a receipt raised over the Undo leaves the button
+      mounted and counted while covering it, so the count above cannot tell the
+      two apart on its own.
+    */
+    const overTheUndo = await whatIsOverTheUndo(page);
+
+    expect(
+      overTheUndo.reaches,
+      `“${overTheUndo.description}” is over the Undo — the receipt did not yield, it buried it`,
+    ).toBe(true);
 
     // Hidden: takes the slot, from the same Undo, inside the same window.
     await showCompletedOnly(page);
