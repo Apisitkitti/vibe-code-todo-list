@@ -4,6 +4,8 @@ import {
   CANCEL_LABEL,
   CREATE_MODAL_HEADING,
   MORE_OPTIONS_LABEL,
+  SIGN_IN_HEADING,
+  SIGN_UP_HEADING,
 } from "./support/copy";
 import { expect, test } from "./support/fixtures";
 
@@ -144,4 +146,64 @@ test("the board logs nothing to the console", async ({
   ).toBeVisible();
 
   expect(messages).toEqual([]);
+});
+
+/**
+ * The two auth pages, which this spec did not cover until now.
+ *
+ * The gap was structural rather than accidental: every test in this file took
+ * the `signedIn` fixture, and `signedIn` signs up — so the only view of
+ * `/sign-up` any test in this suite ever had was the half-second it spent
+ * filling the form on its way to `/todos`, with no listener attached and no
+ * assertion on the far side. `/sign-in` was never visited at all.
+ *
+ * These are signed-out journeys, so they take the raw `page` and create no
+ * account. That is also what makes them the right shape: an auth page is the
+ * one surface in this app that a *signed-out* browser renders, and the
+ * server's render of it is the first HTML a new user is ever handed.
+ *
+ * A mismatch here is not cosmetic. React discards the mismatched subtree and
+ * rebuilds it, and these two screens are nothing but inputs — a field being
+ * remounted underneath a cursor is how typed characters and focus go missing.
+ * `/sign-up` is the app's second-most-important screen and the only one whose
+ * failure costs a user who has not signed up yet.
+ *
+ * **These were written against a reported `/sign-up` hydration mismatch that
+ * does not reproduce.** They have been watched failing — a `typeof window`
+ * branch injected into `SignUpForm` turns them red with "Hydration failed" —
+ * so a red here is real and is not this suite being new. What was tried, the
+ * control that proved it can fail, and the conditions under which the report
+ * should be reopened are in
+ * `docs/decisions/2026-08-21-sign-up-hydration-does-not-reproduce.md`. Read it
+ * before re-running that investigation.
+ */
+const expectCleanAuthPage = async (page: Page, path: string, heading: string) => {
+  const messages = captureConsole(page);
+
+  // A full navigation, so the listener sees the server-rendered document being
+  // hydrated — the moment a mismatch is reported, and the only moment it is.
+  await page.goto(path);
+  await expect(page.getByRole("heading", { name: heading })).toBeVisible();
+
+  /*
+    Hydration errors are reported when React reconciles the server HTML, which
+    it does after the first paint — so waiting for the heading is not on its
+    own enough to have waited for the report. Touching a field is: it needs the
+    client tree to be live and interactive, which is strictly later than
+    hydration, and it exercises the input path the mismatch actually endangers.
+  */
+  const email = page.getByRole("textbox", { name: "Email" });
+
+  await email.fill("console-check@e2e.invalid");
+  await expect(email).toHaveValue("console-check@e2e.invalid");
+
+  expect(messages).toEqual([]);
+};
+
+test("the sign-up page logs nothing to the console", async ({ page }) => {
+  await expectCleanAuthPage(page, "/sign-up", SIGN_UP_HEADING);
+});
+
+test("the sign-in page logs nothing to the console", async ({ page }) => {
+  await expectCleanAuthPage(page, "/sign-in", SIGN_IN_HEADING);
 });

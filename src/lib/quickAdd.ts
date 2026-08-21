@@ -183,6 +183,35 @@ const isWeekdayName = (word: string) =>
   (WEEKDAY_NAMES as readonly string[]).includes(word);
 
 /**
+ * Words that modify the date word after them, and that this parser does not
+ * read. A date word preceded by one of these is refused whole.
+ *
+ * `next week` is the single phrase beginning with either of them that *is*
+ * vocabulary; it is matched before this guard is consulted, and nothing
+ * beginning `last` is vocabulary at all.
+ *
+ * **Both entries are here for the same failure, and it is rule 4's worst
+ * case.** Matching only the last word of a phrase leaves the modifier stranded
+ * in the title while a date the user did not ask for is attached — and the
+ * date is not merely wrong but *opposite*, since `last` and `next` are the two
+ * words that reverse a direction. `pay rent last tuesday` read as the Tuesday
+ * coming, and left "pay rent last" behind to say so; `ship the deck next
+ * friday` was the same defect with the sign flipped, and was closed this way
+ * before `last` was noticed.
+ *
+ * Refusing can only ever keep more words than it takes, which is what makes it
+ * the safe direction. A user who genuinely wants a past due date has
+ * `YYYY-MM-DD`, which is in the vocabulary for exactly the cases the small
+ * closed word list cannot express. The full argument, and why reading `last
+ * <weekday>` as a past date was declined, is in
+ * `docs/decisions/2026-08-21-quick-add-last-weekday.md`.
+ */
+const UNREAD_DATE_MODIFIERS = ["next", "last"] as const;
+
+const isUnreadDateModifier = (word: string) =>
+  (UNREAD_DATE_MODIFIERS as readonly string[]).includes(word);
+
+/**
  * Days are the user's own calendar days, not UTC ones — the same "today" the
  * list's sections are cut against (`src/lib/date.ts`). Formatting to
  * `YYYY-MM-DD` here is what keeps the picker, the parser and the API speaking
@@ -224,14 +253,19 @@ const matchDue = (words: readonly string[], now: Date): DueMatch | null => {
   }
 
   /*
-    `next week` is the only phrase beginning `next`. Anything else — the very
-    plausible `next friday`, and `next month`, `next year` — is not
-    vocabulary, and matching only its last word would leave `next` stranded in
-    the title: `ship the deck next friday` would become a todo called "ship
-    the deck next". Refusing here keeps the whole phrase literal, which is
-    what rule 4 promises, and it can only ever keep more words than it takes.
+    `next week`, matched just above, is the only phrase beginning with either
+    modifier that is vocabulary. Anything else — the very plausible `next
+    friday` and `last tuesday`, and `next month`, `next year` — is not, and
+    matching only its last word would leave the modifier stranded in the title
+    while attaching a date pointing the other way: `ship the deck next friday`
+    would become a todo called "ship the deck next", and `pay rent last
+    tuesday` a todo called "pay rent last" due the Tuesday *coming*.
+
+    Refusing here keeps the whole phrase literal, which is what rule 4
+    promises, and it can only ever keep more words than it takes. See
+    `UNREAD_DATE_MODIFIERS`.
   */
-  if (previous === "next") return null;
+  if (isUnreadDateModifier(previous)) return null;
 
   // `tonight` is today: the app stores a day, not an hour, and pretending
   // otherwise would be a promise the schema cannot keep.
