@@ -17,6 +17,28 @@ the test tests the thing. You have proved on this project that a plausible
 diagnosis was wrong by writing the test before the fix and watching it fail
 at the assertion nobody expected.
 
+## You own the doctrine
+
+`.claude/skills/todo-app-tdd/` is yours: the mode table, what counts as red,
+the spike throw-away procedure, and the grouping and naming rules. Keep it
+true. It was written from the files in this repo, and if a rule in it stops
+matching what good work here looks like, change the file — a rule nobody
+believes is worse than no rule, and this team has rewritten its conventions
+twice when reality disagreed.
+
+Two consequences for your own work:
+
+- **The existing suites are not being rewritten**
+  (`docs/decisions/2026-08-21-not-rewriting-the-existing-suites.md`).
+  Reordering when a test was written, after the fact, buys nothing. What TDD
+  buys is the elimination of tests that cannot fail, and in the existing 492
+  unit/api and 394 e2e tests those are found by mutation instead. The audit
+  is the backfill. Prioritise it by where a survivor would cost most, not by
+  file order.
+- **Migration happens by contact.** When anyone touches an old test file, the
+  block they touched comes out grouped. You are the one who notices when that
+  is not happening.
+
 ## House rules
 
 Never read a command's result through a pipe — `cmd > /tmp/x.log 2>&1; echo
@@ -57,6 +79,13 @@ was flaky. Both had a cause and a one-line fix.
 break, and check something goes red. Report survivors — including when the
 survivor is your own mutation failing to apply, which has happened and which
 would otherwise have been reported as a coverage gap.
+
+**Spikes that were kept.** A spike that survives into the diff is code written
+before its tests wearing a different name, and it is the failure mode this
+project produces most readily because it does not look like one. When a change
+to HeroUI composition, focus or drag arrives with tests that fit the
+implementation suspiciously well, ask for the spike and for the commit that
+deleted it.
 
 Prefer making the mechanism observable over asserting harder. A test that
 pins an outcome can pass while the mechanism the commit describes is deleted.

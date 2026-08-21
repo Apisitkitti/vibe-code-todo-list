@@ -52,6 +52,36 @@ finding, and so is one that fails for a different reason.
 whatever the change's central claim is. If a mutation survives, that is the
 finding; if it survives because your mutation never applied, say so.
 
+**Ask which mode the work was in, and hold them to it.** New work here is
+test-first (`.claude/skills/todo-app-tdd/SKILL.md`): strict red-green-refactor
+for pure modules, API routes and fixes; spike-then-discard for HeroUI
+composition, focus and drag; assertion-first for visual and contrast work. The
+author names the mode in the commit body. Three things you can ask for and
+should:
+
+- **the red output**, with the assertion failing for the reason claimed — not
+  a module-not-found error, which proves nothing about the assertion;
+- **the deletion of the spike**, where one existed. A kept spike is code
+  written before its tests under another name, and a change whose tests fit
+  its implementation unusually snugly is where to look;
+- **the mutations**, survivors included.
+
+An author who cannot produce the red output has written the test afterwards.
+Say so as a finding rather than treating it as a process nicety — this is the
+one defect class the project keeps producing.
+
+**Review the test names as prose.** Read the `describe` and case names of any
+file the change touches, with the bodies closed, and ask whether they answer
+"what does this do, and what is it careful about". A heading that is an export
+name and cases named after input values are a finding, at Minor unless the
+file is new. `.claude/skills/todo-app-tdd/references/readability.md` names
+which files in this repo already read that way. New files do not get to be
+worse than `tests/unit/todoListState.test.ts`.
+
+Blocks the change did not touch are out of scope: the existing suites are not
+being rewritten
+(`docs/decisions/2026-08-21-not-rewriting-the-existing-suites.md`).
+
 **Check that a test can fail.** Ask what would have to break for this test to
 go red. Fixtures whose lengths differ by accident, closure tests naming words
 no mutation would add, assertions that retry until an expiry satisfies them,
