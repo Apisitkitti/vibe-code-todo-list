@@ -416,6 +416,35 @@ describe("search stays inside the caller's own rows", () => {
       todoOfB.id,
     ]);
   });
+
+  /**
+   * The title arm's own case-insensitivity, positively.
+   *
+   * `a case-insensitive match on A's title still matches nothing` above looks
+   * like it covers this and does not: it asserts `[]`, which a case-*sensitive*
+   * title arm satisfies just as well — it would return nothing for the reason
+   * the test is not looking at. So the title arm losing `mode: "insensitive"`
+   * survived the whole suite (mutation audit C5) while the note arm's loss was
+   * caught, because only the note arm had a case-folded match it was required
+   * to *find*.
+   *
+   * `errand` is in B's title and in no note anywhere, so this can only pass
+   * through the title arm.
+   *
+   * The audit filed this under "not defects — a gap of one fixture, not of a
+   * property", on the grounds that the property is pinned. Closing it anyway:
+   * one arm of a two-arm `OR` being unwatched is the same shape as the note
+   * arm's escaping gap that `searchWildcards.test.ts` had to be tightened for
+   * once already, and a fixture that only happens to land on the right arm is
+   * exactly the kind of accidental coverage this audit exists to remove.
+   */
+  test("a case-insensitive match on B's own title is found, not merely refused", async () => {
+    const response = await GET(getRequest("/api/todos?query=ERRAND"));
+
+    expect((await readList(response)).todos.map((todo) => todo.id)).toEqual([
+      todoOfB.id,
+    ]);
+  });
 });
 
 describe("signed out, every endpoint refuses and writes nothing", () => {
