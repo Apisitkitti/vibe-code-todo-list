@@ -27,7 +27,7 @@ export const BOARD_COLUMN_EMPTY: Record<BoardColumnId, string> = {
  * The drag's running commentary, for the live region
  * (`docs/DESIGN.md` §8.8 → "what announces what").
  *
- * These describe the **gesture**; the mutation is reported by the same §7.19
+ * These describe the **gesture**; the mutation is reported by the same §7.21
  * toast a menu press raises, so the two never say the same thing twice. A drag
  * that is picked up and put down again writes nothing, and has only these to
  * report it.

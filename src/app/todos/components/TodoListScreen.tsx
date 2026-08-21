@@ -1026,7 +1026,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     }
   };
 
-  /** Reports the restored date with the same §7.19 toast, and arms no further Undo. */
+  /** Reports the restored date with the same §7.21 toast, and arms no further Undo. */
   const undoReschedule = async (
     todo: TodoItemData,
     previousDueAt: string | null,

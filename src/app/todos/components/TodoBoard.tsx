@@ -67,7 +67,7 @@ import { TodoCard } from "./TodoCard";
  * ## What announces what
  *
  * The **gesture** is announced here, through a polite live region: picked up,
- * dropped, cancelled. The **mutation** is announced by the same §7.19 toast a
+ * dropped, cancelled. The **mutation** is announced by the same §7.21 toast a
  * menu press raises, from `TodoListScreen`. Splitting it that way is what keeps
  * a keyboard user — who never drags, and whose equivalent is the card's
  * reschedule menu — from hearing every move twice.

@@ -34,7 +34,7 @@ export interface DueDateDisplay {
  * `+7` has none of that: it is the same arithmetic as `Tomorrow`'s `+1` with a
  * different number, it lands on a weekday the user can name without being told,
  * and it never resolves to today. The menu shows the resolved date beside the
- * label (`docs/DESIGN.md` §7.19) so the reading is visible before the press
+ * label (`docs/DESIGN.md` §7.21) so the reading is visible before the press
  * rather than discoverable afterwards.
  */
 export const TODAY_DAY_OFFSET = 0;
@@ -45,7 +45,7 @@ export const NEXT_WEEK_DAY_OFFSET = 7;
 export interface RescheduleDay {
   /** `YYYY-MM-DD`, the wire format `PATCH /api/todos/[id]/due` takes. */
   dueAt: string;
-  /** The same day in the row's own words, e.g. `Aug 26` (`docs/DESIGN.md` §7.19). */
+  /** The same day in the row's own words, e.g. `Aug 26` (`docs/DESIGN.md` §7.21). */
   preview: string;
 }
 

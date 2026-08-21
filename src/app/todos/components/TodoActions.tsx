@@ -34,7 +34,7 @@ import type { TodoItemData } from "@/lib/todo";
 
 
 /**
- * The reschedule menu's copy (`docs/DESIGN.md` §7.19). The three quick days
+ * The reschedule menu's copy (`docs/DESIGN.md` §7.21). The three quick days
  * carry the offset each means; `Next week` is `+7` and the reasoning for that
  * lives with the constant in `src/lib/date.ts`, not here.
  */
@@ -283,7 +283,7 @@ const RescheduleMenu = ({
                     {/*
                       The resolved date, so `Next week` states what it means at
                       the moment of the decision instead of after it
-                      (`docs/DESIGN.md` §7.19).
+                      (`docs/DESIGN.md` §7.21).
 
                       A plain `<span>`, deliberately, where the rest of the app
                       would reach for `Typography`. react-aria's `MenuItem`

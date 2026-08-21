@@ -734,7 +734,7 @@ so the most common single edit does not cost the modal (`docs/PM-PROPOSAL.md`
 
 The three quick days render their resolved date beside the label — `Next week`
 `Aug 26` — so the reading is visible at the moment of the decision rather than
-discoverable after it. §7.19 has the copy and §2 of `docs/PRD.md` has why
+discoverable after it. §7.21 has the copy and §2 of `docs/PRD.md` has why
 `Next week` is `+7` rather than "the start of next week".
 
 Two implementation constraints, both learned the hard way on this branch:
@@ -2210,13 +2210,6 @@ is worse.
 
 ### 7.19 The dated header line
 
-> **There are two §7.19s in this deck** — this one and *Reschedule from the
-> row* below. Both numbers are cited from `src/` and `e2e/`, so renumbering is
-> a code change and not a doc change; until someone takes it, cite them by
-> title. `src/lib/listHeaderLine.ts`, `src/lib/styles.ts` and
-> `e2e/list-header.spec.ts` mean *this* section; `src/lib/date.ts`,
-> `TodoActions.tsx`, `TodoBoard.tsx` and the `due` route mean the other.
-
 Added for `docs/PRD.md` US-12: one plain-text line above the list and below the
 app bar, telling the user what day it is and how much is due before they read a
 single row.
@@ -2274,11 +2267,44 @@ Punctuation notes: use the typographic apostrophe (`'`) in contractions
 (`don't`, `can't`, `Couldn't`) and curly double quotes around interpolated
 titles in prose. Use the ellipsis character `…`.
 
----
+### 7.20 Board view
 
-### 7.19 Reschedule from the row
+`docs/PRD.md` US-14. The column headings are §7.16's, unchanged — the board is
+the list's own sections laid out sideways, and a second set of names for the
+same five groups would be the first sign it had become a second opinion about
+where a todo belongs.
 
-> The second §7.19 — see the note under *The dated header line* above.
+| Slot | String |
+|---|---|
+| View toggle `aria-label` | `Choose a view` |
+| Toggle option 1 | `List` |
+| Toggle option 2 | `Board` |
+| Column headings | §7.16's five, with §7.16's `aria-hidden` count |
+| Empty `Overdue` | `Nothing overdue.` |
+| Empty `Today` | `Nothing due today.` |
+| Empty `Upcoming` | `Nothing scheduled ahead.` |
+| Empty `No date` | `Every todo has a date.` |
+| Empty `Completed` | `Nothing completed yet.` |
+| Order note, under the columns | `Cards are ordered by due date within each column. Dropping a card chooses its column, not its place in it.` |
+| Drag picked up | `Picked up “{title}”. Drop it on {columns, comma-separated}.` |
+| Drag picked up, nowhere to go | `Picked up “{title}”. There is nowhere to move it.` |
+| Drag dropped | `Dropped “{title}” on {column}.` |
+| Drag abandoned | `Move cancelled.` |
+| Anything written | §7.21's and §7.13's toasts, unchanged |
+
+**Two empty columns are good news and are worded as such.** `Nothing overdue.`
+and `Nothing due today.` are not the same kind of statement as
+`Every todo has a date.`, and five identical "Nothing here" lines would say
+nothing at all.
+
+**The drag messages describe the gesture; the toasts describe the write.** They
+are split that way so nothing is announced twice: a keyboard user never drags —
+their equivalent is the card's reschedule menu — and only ever hears the toast,
+while a pointer user with a screen reader hears the pick-up and the drop, which
+no toast covers, because a drag that is picked up and put down again writes
+nothing at all.
+
+### 7.21 Reschedule from the row
 
 Added for backlog #5 (`docs/PM-PROPOSAL.md` §3, `docs/PRD.md` US-13). The row
 gets a third action: a `Dropdown` that moves the due date without opening the
@@ -2368,43 +2394,6 @@ derives what to put back is guessing, and "the date it used to have" is exactly
 the kind of thing that can be derived wrongly. A later write to the same todo
 dismisses the toast (`dismissUndo`, keyed per todo id) so an Undo can never
 reach past a change the user made after it.
-
-### 7.20 Board view
-
-`docs/PRD.md` US-14. The column headings are §7.16's, unchanged — the board is
-the list's own sections laid out sideways, and a second set of names for the
-same five groups would be the first sign it had become a second opinion about
-where a todo belongs.
-
-| Slot | String |
-|---|---|
-| View toggle `aria-label` | `Choose a view` |
-| Toggle option 1 | `List` |
-| Toggle option 2 | `Board` |
-| Column headings | §7.16's five, with §7.16's `aria-hidden` count |
-| Empty `Overdue` | `Nothing overdue.` |
-| Empty `Today` | `Nothing due today.` |
-| Empty `Upcoming` | `Nothing scheduled ahead.` |
-| Empty `No date` | `Every todo has a date.` |
-| Empty `Completed` | `Nothing completed yet.` |
-| Order note, under the columns | `Cards are ordered by due date within each column. Dropping a card chooses its column, not its place in it.` |
-| Drag picked up | `Picked up “{title}”. Drop it on {columns, comma-separated}.` |
-| Drag picked up, nowhere to go | `Picked up “{title}”. There is nowhere to move it.` |
-| Drag dropped | `Dropped “{title}” on {column}.` |
-| Drag abandoned | `Move cancelled.` |
-| Anything written | §7.19's and §7.13's toasts, unchanged |
-
-**Two empty columns are good news and are worded as such.** `Nothing overdue.`
-and `Nothing due today.` are not the same kind of statement as
-`Every todo has a date.`, and five identical "Nothing here" lines would say
-nothing at all.
-
-**The drag messages describe the gesture; the toasts describe the write.** They
-are split that way so nothing is announced twice: a keyboard user never drags —
-their equivalent is the card's reschedule menu — and only ever hears the toast,
-while a pointer user with a screen reader hears the pick-up and the drop, which
-no toast covers, because a drag that is picked up and put down again writes
-nothing at all.
 
 ---
 

@@ -117,7 +117,7 @@ export const EDIT_TOOLTIP = "Edit";
 export const DELETE_TOOLTIP = "Delete";
 
 /**
- * §7.19 — the reschedule menu (backlog #5).
+ * §7.21 — the reschedule menu (backlog #5).
  *
  * The trigger's name is built the same way Edit's and Delete's are — straight
  * quotes, because it is an `aria-label` — and the menu borrows it, so a screen
@@ -132,7 +132,7 @@ export const NEXT_WEEK_ITEM_LABEL = "Next week";
 export const PICK_A_DATE_ITEM_LABEL = "Pick a date…";
 export const CLEAR_DUE_DATE_ITEM_LABEL = "Clear due date";
 
-/** §7.19 — what a reschedule reports, and what its Undo reports when it lands. */
+/** §7.21 — what a reschedule reports, and what its Undo reports when it lands. */
 export const dueToast = (title: string, dayLabel: string) =>
   `Todo ${quoted(title)} due ${dayLabel}`;
 export const dueClearedToast = (title: string) =>
