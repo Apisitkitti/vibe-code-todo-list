@@ -13,6 +13,42 @@ import {
  * a dialog and with no way to skip it — and a title here can be
  * `TITLE_MAX_LENGTH` characters. This is the function that stops that.
  */
+describe("truncateForAnnouncement — the bound itself", () => {
+  /**
+   * The anchor, and the only assertion in this file that is not derived from
+   * the constant it is about.
+   *
+   * Every other case here builds its expectation *from*
+   * `DIALOG_TITLE_MAX_LENGTH`, which is the right style and should stay — but
+   * it left the number compared only against itself. Mutation audit T3:
+   * **45 → 40 left all six cases green.** The band the file did pin was
+   * `0 < DIALOG_TITLE_MAX_LENGTH < TITLE_MAX_LENGTH`, because "bounds the
+   * longest title the schema will accept" stops truncating above that; 5000
+   * went red, 40 and 199 did not.
+   *
+   * 45 is not a preference, which is why an unpinned 45 is worse than an
+   * unpinned round number would be. It is a measurement: the row's title box
+   * is 342px in this project's own Chromium at 1280×800, and 45 characters of
+   * mixed-case English is what fits before the row's own ellipsis. A measured
+   * number that nothing pins drifts back to a guess, and the next person has
+   * no way to tell that it was ever measured.
+   *
+   * So this case fails on purpose when the number moves. If you are here
+   * because it went red: `docs/DESIGN.md` §7.5 and the constant's own comment
+   * hold the argument, including the open question of whether the bound
+   * should be the row's layout (45) or §7.5's four seconds of speech (60).
+   * Change the number and this line together, deliberately.
+   */
+  it("cuts at forty-five characters, the width the row's own title box measured", () => {
+    expect(DIALOG_TITLE_MAX_LENGTH).toBe(45);
+  });
+
+  /** And it is genuinely below the schema's limit, or truncation never fires. */
+  it("sits below the longest title the schema accepts, so it can bind at all", () => {
+    expect(DIALOG_TITLE_MAX_LENGTH).toBeLessThan(TITLE_MAX_LENGTH);
+  });
+});
+
 describe("truncateForAnnouncement", () => {
   it("leaves a title shorter than the bound alone", () => {
     expect(truncateForAnnouncement("Buy milk")).toBe("Buy milk");

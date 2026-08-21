@@ -447,6 +447,25 @@ describe("filterSync", () => {
     expect(abandonPendingPushes(state)).toBe(state);
   });
 
+  /**
+   * The anchor. Every other assertion about the bound in this file is derived
+   * from `MAX_PENDING_PUSHES`, which is right — a derived assertion survives
+   * the number moving — but it means none of them can fail when the number
+   * moves, and that is the whole point of having one. `8 -> 1000` was green
+   * across the entire suite.
+   *
+   * The module's own comment used to say the constant is exported "so the test
+   * that pins the bound reads the same number the module enforces rather than
+   * a copy of it". That reasoning is exactly what made every assertion
+   * vacuous, and it has been corrected alongside this test.
+   *
+   * The literal is here rather than beside the constant because a change to
+   * the value should have to come past a test, not past a comment.
+   */
+  it("remembers eight pushes, the number the bound is actually set to", () => {
+    expect(MAX_PENDING_PUSHES).toBe(8);
+  });
+
   it("bounds the pending list so a stranded push cannot accumulate", () => {
     let state = createFilterSync(url());
 
@@ -455,9 +474,15 @@ describe("filterSync", () => {
       state = pushes(state).state;
     }
 
-    expect(state.pending.length).toBeLessThanOrEqual(MAX_PENDING_PUSHES);
+    // `toBe`, not `toBeLessThanOrEqual`: a bound that kept three would also
+    // satisfy "at most eight", and keeping too few loses a push that is still
+    // in flight — the failure in the other direction.
+    expect(state.pending.length).toBe(MAX_PENDING_PUSHES);
     // The newest is always kept — it is the one still most likely in flight.
     expect(state.pending.at(-1)?.filters.query).toBe("q39");
+    // And the oldest kept is the newest minus the bound, so the window is the
+    // bound's own width rather than merely no wider than it.
+    expect(state.pending.at(0)?.filters.query).toBe(`q${40 - MAX_PENDING_PUSHES}`);
   });
 
   it("bounds the disowned list too, so it cannot refuse navigations forever", () => {
@@ -469,7 +494,7 @@ describe("filterSync", () => {
       state = abandonPendingPushes(state);
     }
 
-    expect(state.disowned.length).toBeLessThanOrEqual(MAX_PENDING_PUSHES);
+    expect(state.disowned.length).toBe(MAX_PENDING_PUSHES);
   });
 
   it("normalises the way the page does", () => {
