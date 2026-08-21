@@ -167,6 +167,15 @@ test("the board logs nothing to the console", async ({
  * remounted underneath a cursor is how typed characters and focus go missing.
  * `/sign-up` is the app's second-most-important screen and the only one whose
  * failure costs a user who has not signed up yet.
+ *
+ * **These were written against a reported `/sign-up` hydration mismatch that
+ * does not reproduce.** They have been watched failing — a `typeof window`
+ * branch injected into `SignUpForm` turns them red with "Hydration failed" —
+ * so a red here is real and is not this suite being new. What was tried, the
+ * control that proved it can fail, and the conditions under which the report
+ * should be reopened are in
+ * `docs/decisions/2026-08-21-sign-up-hydration-does-not-reproduce.md`. Read it
+ * before re-running that investigation.
  */
 const expectCleanAuthPage = async (page: Page, path: string, heading: string) => {
   const messages = captureConsole(page);
