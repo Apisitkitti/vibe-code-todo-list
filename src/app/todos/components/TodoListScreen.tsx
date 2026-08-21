@@ -638,6 +638,24 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     urlSync.clearFilters();
   };
 
+  /*
+    `Clear search` clears the search, and that is the whole of it. It used to
+    be `clearFilters` under a second label, so pressing it dropped the status
+    and priority the user had chosen as well as the term they were asking
+    about — and it shares its accessible name with the search field's own
+    `×`, which has only ever cleared the text, so the two answered to one name
+    while doing different amounts.
+
+    The user who reaches `No matches` asked one question: does anything match
+    this term. Dropping the term answers it. If a status or priority filter is
+    also narrowing, they meet that state next and it says so, which is the
+    filter naming itself rather than the app quietly undoing choices to make
+    one card go away.
+  */
+  const clearSearch = () => {
+    urlSync.clearSearch();
+  };
+
   /**
    * The modal writes; the list reports. Keeping the toast here is what lets a
    * later write dismiss an earlier Undo — the modal cannot see the toast it
@@ -1218,7 +1236,11 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     return new Set(pendingTodoIds).add(pendingDelete.id);
   };
 
-  /** Reached from two branches: an explicit priority filter, and the fallback. */
+  /**
+   * The one branch a user actually meets this from is an explicit priority
+   * filter. It is also the fallback below, and **that fallback is unreachable**
+   * — see the note on the last `return` in `resolveEmptyState`.
+   */
   const noMatchingFilters = (): EmptyStateCopy => ({
     heading: "No todos match these filters",
     body: "Try a different status or priority.",
@@ -1244,7 +1266,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
         heading: "No matches",
         body: `No todos match “${query}”.`,
         actionLabel: "Clear search",
-        onAction: clearFilters,
+        onAction: clearSearch,
       };
     }
 
@@ -1266,6 +1288,26 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
       };
     }
 
+    /*
+      The `status === "all"` case, and nothing can reach it — the type
+      narrowing needs a return, not the user.
+
+      Getting here means `totalCount > 0`, `query === ""`, `priority === "all"`
+      and `status === "all"`, which is `GET /api/todos` with no `where` beyond
+      `userId`. That request counts and returns the same rows: `todos.length`
+      is `totalCount`, and `totalCount > 0` was checked at the top. The
+      optimistic paths cannot open a gap either — `removeTodoLocally` drops the
+      row and decrements the count together, and `applyCompletion` only hides a
+      row when a status filter is on, which this branch has already excluded.
+
+      Left as `noMatchingFilters()` rather than given its own copy, because
+      copy nobody will read is copy nobody will keep true. Recorded instead:
+      the sentence here is *false* for the state that reaches it — `No todos
+      match these filters` when no filter is set — so if a future change makes
+      this reachable, it needs its own state and not this one. That is a
+      product question for `docs/DESIGN.md` §7.7, which lists four states and
+      does not list this one.
+    */
     return noMatchingFilters();
   };
 

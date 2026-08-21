@@ -219,8 +219,11 @@ export interface UrlStateChange {
   readonly priority?: TodoListFilters["priority"];
   readonly view?: TodoView;
   /**
-   * Only `Clear filters` passes this. Every other push takes the search text
-   * from the field, which is the only place it is authoritative.
+   * Only the two clears pass this — `Clear filters` and `Clear search`. Every
+   * other push takes the search text from the field, which is the only place
+   * it is authoritative; both clears have to override it because emptying the
+   * field is queued and the push would otherwise carry the text it is
+   * clearing.
    */
   readonly query?: string;
 }

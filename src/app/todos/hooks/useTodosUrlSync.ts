@@ -86,6 +86,17 @@ export interface TodosUrlSync {
   push: (change?: UrlStateChange) => void;
   /** `Clear filters`: the filters go back to their defaults, the view stays. */
   clearFilters: () => void;
+  /**
+   * `Clear search`: the search term goes, and nothing else does.
+   *
+   * Separate from `clearFilters` because the two labels are two promises. The
+   * empty state under `No matches` says `Clear search`, and it used to call
+   * `clearFilters` — dropping the status and priority the user had chosen
+   * along with the term they asked about. It also shares its accessible name
+   * with the search field's own `×`, which has only ever cleared the text, so
+   * one name covered two different amounts of work.
+   */
+  clearSearch: () => void;
 }
 
 export const useTodosUrlSync = (
@@ -205,6 +216,18 @@ export const useTodosUrlSync = (
     clearFilters: () => {
       setSync((current) => setSearchQuery(current, ""));
       push(CLEARED_FILTERS);
+    },
+    /*
+      The same two steps as `clearFilters`, and the same reason for the
+      explicit `query`: emptying the field is queued, so a push that read the
+      text from `synced` would carry the value being cleared. What it does not
+      carry is a status or a priority — `nextUrlState` takes those from the
+      settled target, so whatever the user chose survives, including a press
+      that has not landed yet.
+    */
+    clearSearch: () => {
+      setSync((current) => setSearchQuery(current, ""));
+      push({ query: "" });
     },
   };
 };
