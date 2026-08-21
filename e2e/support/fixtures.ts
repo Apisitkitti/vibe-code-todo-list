@@ -107,6 +107,14 @@ const quickAddField = (page: Page) =>
 /**
  * Waits until no toast view transition is in flight.
  *
+ * **Mostly a no-op since `src/lib/toast.ts` took §4.10's `wrapUpdate` escape
+ * hatch**: the app's queue applies updates directly, so there is no
+ * `::view-transition` animation to wait for and this returns after three quiet
+ * frames. It is kept, and kept accurate, for two reasons — the three frames
+ * are still a real render settle, and this is the executable description of
+ * what putting the transition back would cost. The paragraphs below describe
+ * the behaviour it was written against.
+ *
  * HeroUI runs *every* toast add and close inside `document.startViewTransition`
  * and chains them so they animate one at a time
  * (`node_modules/@heroui/react/dist/components/toast/toast-queue.js`). While
@@ -130,7 +138,7 @@ const quickAddField = (page: Page) =>
  * report calm that is about to end — which is exactly how the click's own
  * built-in hit-target check was fooled on CI.
  */
-const settleToastTransitions = async (page: Page) => {
+export const settleToastTransitions = async (page: Page) => {
   await page.evaluate(async () => {
     const isTransitioning = () =>
       document.getAnimations().some((animation) => {

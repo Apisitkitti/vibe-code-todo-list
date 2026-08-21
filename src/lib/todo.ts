@@ -61,6 +61,22 @@ export type TodoStatusFilter = (typeof STATUS_FILTER_VALUES)[number];
 export type TodoPriorityFilter = (typeof PRIORITY_FILTER_VALUES)[number];
 export type TodoView = (typeof VIEW_VALUES)[number];
 
+/**
+ * Which field the record editor opens on (`docs/DESIGN.md` §7.21).
+ *
+ * A named intent rather than a boolean, because the question the caller is
+ * answering is "what did the user come to change" — and there are two answers
+ * today only by coincidence. `Edit` says `title`; the reschedule menu's
+ * `Pick a date…` says `dueAt`, because a menu item ending in `…` promises a
+ * surface for specifying *this* thing and what arrives is the whole editor.
+ *
+ * It lives here, below the form and below the row's action menu, because both
+ * ends of that handoff need it and neither may import the other.
+ */
+export type TodoFormFocus = "title" | "dueAt";
+
+export const DEFAULT_FORM_FOCUS: TodoFormFocus = "title";
+
 export const PRIORITY_LABELS: Record<TodoPriority, string> = {
   low: "Low",
   medium: "Medium",

@@ -22,6 +22,17 @@ export interface FormDatePickerProps {
   onBlur?: () => void;
   description?: string;
   isDisabled?: boolean;
+  /**
+   * Lands the caret on this field's first segment when it mounts.
+   *
+   * It reaches the `DateField` inside rather than the group: react-aria's
+   * `useDatePicker` forwards `autoFocus` through `fieldProps`, so the segment
+   * takes it and the popover trigger beside it does not. Checked against the
+   * installed types rather than assumed — `DatePickerProps` picks it up from
+   * `FocusableProps` by way of `DateFieldBase`, and it is *not* on
+   * `AriaDatePickerProps`'s own list, which is where looking for it fails.
+   */
+  autoFocus?: boolean;
 }
 
 /**
@@ -50,6 +61,7 @@ export const FormDatePicker = ({
   onBlur,
   description,
   isDisabled = false,
+  autoFocus = false,
 }: FormDatePickerProps) => {
   return (
     <DatePicker
@@ -58,6 +70,7 @@ export const FormDatePicker = ({
       onChange={(date) => onChange(date ? date.toString() : "")}
       onBlur={onBlur}
       isDisabled={isDisabled}
+      autoFocus={autoFocus}
       className={FIELD_GROUP_STACK}
     >
       <Label>{label}</Label>

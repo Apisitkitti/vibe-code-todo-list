@@ -13,7 +13,12 @@ import {
   countRequests,
   expectAbsentNow,
 } from "./support/assertions";
-import { expect, test, type TodosScreen } from "./support/fixtures";
+import {
+  expect,
+  settleToastTransitions,
+  test,
+  type TodosScreen,
+} from "./support/fixtures";
 
 /**
  * Undo semantics — the behaviour no existing test covers and that two rounds
@@ -298,30 +303,28 @@ test.describe("Undo semantics", () => {
 });
 
 /**
- * Every Undo on screen has to say what it undoes — QA's §8 addition.
+ * The one Undo on screen has to say what it undoes — QA's §8 addition,
+ * surviving the cap that removed the stack it was written against.
  *
- * `UNDO_WINDOW_MS` is 12s precisely so a stack of Undos is the ordinary state,
- * and every button in it reads the bare word `Undo`. A sighted user tabbing
- * through reads the toast the focus ring is sitting in. A screen-reader user
- * heard "Undo, button" for all of them, with nothing to separate a
- * completion-revert from an edit-revert.
+ * **What changed and what did not.** The original test stood three Undos up at
+ * once and asserted that no two answered to the same name. That state is now
+ * unreachable: at most one action-bearing toast stands at a time
+ * (`src/lib/toast.ts`), so the recipe yields one button and the "no two alike"
+ * property becomes unfalsifiable — the same reasoning §7.15 already forced on
+ * QA's original two-`added`-toasts version.
  *
- * **The stack is no longer QA's.** Theirs was two `added` toasts and a toggle,
- * which is not a state the app can reach any more: an `added` toast carries no
- * action (`docs/DESIGN.md` §7.15), so that recipe now yields exactly one Undo
- * and the property — that no two Undos on screen answer to the same name —
- * becomes unfalsifiable. This is the same property against the stack that
- * still exists: one edit and two toggles, on three different records.
+ * Stated plainly, because it is the kind of rewrite that deserves suspicion:
+ * this turns a red test green, and the honest justification is that the
+ * precondition became impossible, not that the assertion became inconvenient.
+ * The old body fails at `toHaveCount(3)` against a screen holding exactly one.
  *
- * That is a fair substitute rather than a weaker one. The names have to
- * separate two *kinds* of reversal (an edit's from a toggle's) and two
- * instances of the *same* kind on different records — and the second of those
- * is the harder case, since it is carried entirely by the title the name
- * borrows.
- *
- * The `Tab` ×2 hazard this was originally filed under is closed, by removing
- * the create's Undo (§6.8). The naming still earns its place: the buttons
- * below are still three identical visible words.
+ * What is left is still falsifiable, and it is the half that carries the
+ * accessibility argument. The name must be **this** toast's subject: a name
+ * that dropped the subject, or one left describing the reversal the cap just
+ * took away, both fail below. The second of those is a real hazard the cap
+ * created rather than an invented one — the outgoing toast is still mounted
+ * for a window after it is closed, so "the Undo on screen" and "the Undo the
+ * app thinks is armed" can disagree, and only the name says which is which.
  */
 test.describe("Undo accessible names", () => {
   const TARGET = "target";
@@ -329,80 +332,335 @@ test.describe("Undo accessible names", () => {
   const ANCHOR = "anchor";
   const ANCHOR_EDITED = "anchor edited";
 
-  test("three Undos standing at once are told apart by name", async ({
+  test("the standing Undo is named for its own toast, not the one it replaced", async ({
     signedIn: page,
     todos,
   }) => {
     /*
       Each add is waited for. `quickAdd` fills and presses Enter without
       waiting for anything, and the bar clears asynchronously — three in a row
-      unwaited lose two of the three writes, which quietly builds a stack of
-      one and asserts nothing.
+      unwaited lose two of the three writes.
     */
     for (const title of [ANCHOR, KEEPME, TARGET]) {
       await todos.quickAdd(title);
       await expect(todos.rowByText(title)).toBeVisible();
     }
 
-    /*
-      The slowest write first, and the two fast ones after it, so the whole
-      stack is comfortably inside one 12s window when it is read. An edit
-      drives a modal; a toggle is a single click.
-    */
+    // An edit first, so the reversal being named is a different *kind* from
+    // the toggle that replaces it below.
     await todos.editTodo(ANCHOR, ANCHOR_EDITED);
     await expect(
       todos.toastTitles.filter({ hasText: updatedToast(ANCHOR_EDITED) }),
     ).toBeVisible();
 
-    await todos.toggle(KEEPME, true);
-    await todos.toggle(TARGET, true);
-
-    await expect(
-      todos.toastTitles.filter({ hasText: markedCompleteToast(TARGET) }),
-    ).toBeVisible();
-
     const undoButtons = page.locator('[data-slot="toast-action-button"]');
 
-    /*
-      Three, out of six toasts raised: the three `added` receipts standing
-      beside these contribute no buttons at all, which is the §7.15 change
-      showing up as arithmetic.
-    */
-    await expect(undoButtons).toHaveCount(3);
+    await expect(
+      page.getByRole("button", {
+        name: undoActionLabel(updatedToast(ANCHOR_EDITED)),
+        exact: true,
+      }),
+    ).toHaveCount(1);
+
+    // A write to a different record. Under the cap this replaces the edit's
+    // Undo rather than standing beside it.
+    await todos.toggle(KEEPME, true);
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(KEEPME) }),
+    ).toBeVisible();
+    await settleToastTransitions(page);
 
     /*
-      Asked for by accessible name, which is the thing under test — a name
-      computed from `aria-label`, not from the child text, and each one
-      matching exactly one button. Before this, every one of these three
-      queries would have matched nothing and `Undo` would have matched all
-      three.
+      The name follows the slot. Read as a point-in-time count for the absent
+      half, for the reason this file states throughout: a retrying
+      `toHaveCount(0)` would be satisfied by the replaced toast expiring on its
+      own twelve seconds later and would pass against an app that never
+      replaced anything.
     */
-    for (const title of [
-      markedCompleteToast(TARGET),
-      markedCompleteToast(KEEPME),
-      updatedToast(ANCHOR_EDITED),
-    ]) {
-      await expect(
-        page.getByRole("button", { name: undoActionLabel(title), exact: true }),
-      ).toHaveCount(1);
-    }
+    await expect(
+      page.getByRole("button", {
+        name: undoActionLabel(markedCompleteToast(KEEPME)),
+        exact: true,
+      }),
+    ).toHaveCount(1);
+
+    await expectAbsentNow(
+      page.getByRole("button", {
+        name: undoActionLabel(updatedToast(ANCHOR_EDITED)),
+        exact: true,
+      }),
+      "the replaced edit's Undo was still reachable by its accessible name",
+    );
 
     /*
-      And the property itself, stated once rather than inferred from the three
-      lookups: no two Undos on screen answer to the same name. A per-case
-      literal that drifted, or a name that dropped the subject, would pass the
-      loop above for two of them and fail here.
+      And the name is genuinely computed from `aria-label` rather than from the
+      child text: the visible word is the bare `Undo` the copy deck asks for
+      (§7.13), which is exactly why the name cannot be it.
     */
     const names = await undoButtons.evaluateAll((buttons) =>
       buttons.map((button) => button.getAttribute("aria-label")),
     );
 
-    expect(names.filter((name) => name !== null)).toHaveLength(3);
-    expect(new Set(names).size).toBe(3);
-
-    // The visible word is unchanged — the name is for assistive technology,
-    // not a relabelling of the button (`docs/DESIGN.md` §7.13).
+    expect(names).toEqual([undoActionLabel(markedCompleteToast(KEEPME))]);
     await expect(undoButtons.first()).toHaveText(UNDO_LABEL);
+
+    // `TARGET` is untouched throughout — it exists only so the screen holds
+    // more than the two records the assertions name.
+    await expect(todos.rowByText(TARGET)).toBeVisible();
+  });
+});
+
+/**
+ * The cap: **at most one action-bearing toast stands at a time**, whatever
+ * record it belongs to (`src/lib/toast.ts`).
+ *
+ * The argument is that `Undo` meaning more than one thing at the moment
+ * somebody reaches for it is worse than losing the older reversal. The
+ * `aria-label` disambiguation stays — it is still the only thing that tells a
+ * screen-reader user what the one button does — but it is no longer what holds
+ * the feature up.
+ *
+ * **The cost, accepted deliberately and recorded here so it is not
+ * rediscovered as a bug.** A second write within the 12s window takes the
+ * first Undo away. For a toggle that is free: the checkbox reverses it in one
+ * press. For a **reschedule** it is not — the previous date is on neither the
+ * row nor any toast — so an older reschedule becomes genuinely unrecoverable.
+ * The copy fix that would have covered it (`moved from Aug 22 to Aug 26`) was
+ * declined on the grounds that it lengthens every common case to buy a rare
+ * one. `an older reschedule is unrecoverable once a second write lands` below
+ * pins that as intended behaviour rather than leaving it to be found.
+ */
+test.describe("one action toast at a time", () => {
+  const FIRST = "first";
+  const SECOND = "second";
+
+  test("a write to another record replaces the standing Undo", async ({
+    todos,
+  }) => {
+    for (const title of [FIRST, SECOND]) {
+      await todos.quickAdd(title);
+      await expect(todos.rowByText(title)).toBeVisible();
+    }
+
+    await todos.toggle(FIRST, true);
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(FIRST) }),
+    ).toBeVisible();
+    await expect(todos.undoButton).toHaveCount(1);
+
+    await todos.toggle(SECOND, true);
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(SECOND) }),
+    ).toBeVisible();
+
+    /*
+      Point-in-time, not retried. Both toasts have a 12s life, so a retrying
+      assertion would watch the first expire and report a cap that is not
+      there. This is the read that separates "closed by the cap" from "closed
+      by the clock", and it is the assertion the mutation has to break.
+    */
+    expect(
+      await todos.undoButton.count(),
+      "a second action toast must leave exactly one armed Undo",
+    ).toBe(1);
+  });
+
+  test("a receipt neither takes the slot nor gives it up", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await todos.quickAdd(FIRST);
+    await expect(todos.rowByText(FIRST)).toBeVisible();
+
+    await todos.toggle(FIRST, true);
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(FIRST) }),
+    ).toBeVisible();
+
+    /*
+      A receipt raised *after* an action toast. If receipts took the slot this
+      would close the Undo beside it — which is the wrong trade twice over: the
+      Undo is the thing with an expiry, and §7.17's `hidden by your filters`
+      sentence is the only account a swallowed row ever gets.
+    */
+    await todos.quickAdd(SECOND);
+    await expect(todos.rowByText(SECOND)).toBeVisible();
+    await expect(
+      todos.toastTitles.filter({ hasText: addedToast(SECOND) }),
+    ).toBeVisible();
+
+    expect(
+      await todos.undoButton.count(),
+      "a receipt must not close the standing Undo",
+    ).toBe(1);
+
+    // And the receipts are still on screen beside it — the cap counts actions,
+    // not toasts.
+    await expect(
+      todos.toastTitles.filter({ hasText: addedToast(FIRST) }),
+    ).toHaveCount(1);
+    await expect(
+      todos.toastTitles.filter({ hasText: addedToast(SECOND) }),
+    ).toHaveCount(1);
+
+    /*
+      The surviving Undo is the toggle's, and it still works — activated from
+      the **keyboard**, deliberately.
+
+      A pointer press cannot reach it, and that is not this test being awkward:
+      HeroUI's region stacks the newest toast in front of the older ones with
+      no expand-on-hover, so the receipt raised a moment ago sits over the
+      Undo's centre and takes the press. `e2e/toast-dead-window.spec.ts`
+      measures it. That is a real reachability gap, it is pointer-only, and it
+      is filed rather than fixed here — closing it means either capping
+      receipts too, which §7.17 argues against, or changing how the region
+      stacks, which is a design decision and not this branch's to take.
+
+      Keyboard activation does not hit-test, so this asserts the thing the cap
+      is actually about: the Undo is still armed and still reverses the write
+      it names.
+    */
+    await page
+      .getByRole("button", {
+        name: undoActionLabel(markedCompleteToast(FIRST)),
+        exact: true,
+      })
+      .press("Enter");
+
+    await expect(todos.checkbox(FIRST)).not.toBeChecked();
+  });
+
+  /**
+   * The accepted cost, pinned as behaviour.
+   *
+   * A reschedule's Undo holds the only copy of the date the row used to have.
+   * A second write inside the window takes it, and nothing on screen can
+   * reconstruct it. This test exists so that a future reader finds a decision
+   * rather than a defect — and so that restoring the older Undo, or adding the
+   * `moved from … to …` copy, is a deliberate change that turns a test red.
+   */
+  test("an older reschedule is unrecoverable once a second write lands", async ({
+    todos,
+  }) => {
+    await todos.quickAdd(FIRST);
+    await expect(todos.rowByText(FIRST)).toBeVisible();
+    await todos.quickAdd(SECOND);
+    await expect(todos.rowByText(SECOND)).toBeVisible();
+
+    await todos.reschedule(FIRST, "Today");
+    await expect(
+      todos.toastTitles.filter({ hasText: `“${FIRST}” due Today` }),
+    ).toBeVisible();
+
+    await todos.toggle(SECOND, true);
+    await expect(
+      todos.toastTitles.filter({ hasText: markedCompleteToast(SECOND) }),
+    ).toBeVisible();
+
+    expect(
+      await todos.undoButton.count(),
+      "the reschedule's Undo is gone, and that is the accepted trade",
+    ).toBe(1);
+
+    /*
+      Named, not merely counted: the one that survives is the toggle's. A cap
+      that closed the *newer* toast would also leave a count of one and would
+      be the opposite behaviour.
+    */
+    await expectAbsentNow(
+      todos.toasts.filter({ hasText: `“${FIRST}” due Today` }).locator(
+        '[data-slot="toast-action-button"]',
+      ),
+      "the replaced reschedule still offered its Undo",
+    );
+  });
+});
+
+/**
+ * The other half of the same change: with the cap, every action toast is a
+ * close-then-add, and a close-then-add is where HeroUI's view transition costs
+ * the most (`docs/DESIGN.md` §4.10).
+ *
+ * Measured on this branch with a real pointer press: **swallowed at 729ms,
+ * landing at 760ms** from the user's own press, against 357–417ms for a lone
+ * add. `e2e/toast-dead-window.spec.ts` is the harness. `src/lib/toast.ts`
+ * builds the queue with `wrapUpdate: fn => fn()`, which is the escape hatch
+ * §4.10 names, and this is the test that says it is still taken.
+ *
+ * **It has to be a real pointer press.** Keyboard activation does not
+ * hit-test, and `onPress` called directly does not either, so both are blind
+ * to the whole defect — §4.10 says so and this is the test that would
+ * otherwise be written the useless way.
+ */
+test.describe("an armed Undo is live on its first frame", () => {
+  const TITLE = "immediate";
+
+  test("a press as soon as the button exists is not swallowed", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await todos.quickAdd(TITLE);
+    await expect(todos.rowByText(TITLE)).toBeVisible();
+
+    // An Undo already standing, so the write under test is the close-then-add
+    // the cap makes ordinary rather than a lone add.
+    await todos.toggle(TITLE, true);
+    await expect(todos.undoButton).toHaveCount(1);
+    await settleToastTransitions(page);
+
+    const patches = countRequests(page, TODO_STATUS_URL, "PATCH");
+
+    /*
+      The second write. Its toast replaces the standing one, so the queue does
+      a close and an add — two chained view transitions under HeroUI's default,
+      and none at all under ours.
+    */
+    await todos.toggle(TITLE, false);
+
+    /*
+      Waits in the page for the *new* button's first frame and returns its
+      centre in the same round trip, so nothing between the button existing and
+      the press costs time that would hide the defect. The button is named by
+      its `aria-label`: the replaced one is still mounted for a window after it
+      is closed, and pressing that one proves nothing.
+    */
+    const target = await page.evaluate(
+      async (selector) => {
+        const until = (predicate: () => Element | null) =>
+          new Promise<Element>((resolve) => {
+            const tick = () => {
+              const found = predicate();
+
+              if (found) resolve(found);
+              else requestAnimationFrame(tick);
+            };
+
+            tick();
+          });
+
+        const button = await until(() => document.querySelector(selector));
+        const rect = button.getBoundingClientRect();
+
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      },
+      '[data-slot="toast-action-button"][aria-label*="marked not complete"]',
+    );
+
+    const before = patches.count;
+
+    await page.mouse.click(target.x, target.y);
+
+    /*
+      The undo's own request. Waited for by its effect rather than by a
+      duration: the row goes back to complete only if the press reached the
+      button.
+    */
+    await expect(todos.checkbox(TITLE)).toBeChecked();
+
+    expect(
+      patches.count - before,
+      "a press on the first frame of a replaced toast must reach the button",
+    ).toBe(1);
   });
 });
 

@@ -6,15 +6,19 @@ import {
   Button,
   Modal,
   Spinner,
-  toast,
   useMediaQuery,
   type UseOverlayStateReturn,
 } from "@heroui/react";
 
+import { toast } from "@/lib/toast";
 import { CANCEL_LABEL } from "@/app/todos/constants";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { DIALOG_FOOTER_LAYOUT, FULL_WIDTH_ACTION_SIZING } from "@/lib/styles";
-import { toDueDateInputValue, type TodoItemData } from "@/lib/todo";
+import {
+  toDueDateInputValue,
+  type TodoFormFocus,
+  type TodoItemData,
+} from "@/lib/todo";
 import { createTodo, updateTodo } from "@/service/todo.service";
 
 import {
@@ -57,6 +61,12 @@ export interface TodoFormModalProps {
    */
   draft?: TodoFormValues | null;
   /**
+   * Which field the form opens on. Passed straight through — the modal has no
+   * opinion about it, because the opinion belongs to whatever the user
+   * pressed to get here (`docs/DESIGN.md` §7.21).
+   */
+  autoFocusField?: TodoFormFocus;
+  /**
    * Hands the write's result to the list, which reloads and raises the success
    * toast. `previous` is the record's state when the form opened, or `null` on
    * a create — it is what an Undo restores.
@@ -73,6 +83,7 @@ export const TodoFormModal = ({
   state,
   todo,
   draft = null,
+  autoFocusField,
   onSaved,
 }: TodoFormModalProps) => {
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
@@ -207,6 +218,7 @@ export const TodoFormModal = ({
               defaultValues={toFormValues(todo, draft)}
               serverFieldErrors={serverFieldErrors}
               isDisabled={isPending}
+              autoFocusField={autoFocusField}
               onValidSubmit={(values) => {
                 void handleValidSubmit(values);
               }}

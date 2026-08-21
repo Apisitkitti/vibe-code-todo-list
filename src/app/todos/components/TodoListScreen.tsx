@@ -7,7 +7,6 @@ import {
   Button,
   Card,
   Typography,
-  toast,
   useMediaQuery,
   useOverlayState,
 } from "@heroui/react";
@@ -34,7 +33,15 @@ import {
   undoTokenProps,
 } from "@/lib/rowFocus";
 import {
+  claimActionPress,
+  dismissActionToast,
+  showActionToast,
+  toast,
+} from "@/lib/toast";
+import {
+  DEFAULT_FORM_FOCUS,
   toDueDateInputValue,
+  type TodoFormFocus,
   type TodoItemData,
   type TodoListFilters,
   type TodoView,
@@ -129,11 +136,14 @@ const BOARD_MEDIA_QUERY = "(min-width: 1024px) and (pointer: fine)";
  * that told them Undo was there. Both the designer and the Senior called it
  * too short before anyone was looking for it.
  *
- * It is also the margin that keeps the toast usable at all: the first ~400ms
- * of an action toast is inert while HeroUI's view transition owns hit-testing
- * (`docs/DESIGN.md` §4.10). Shortening this window without taking the
- * `wrapUpdate` escape hatch would eat into a control that is already dead on
- * arrival.
+ * It used to be the margin that kept the toast usable at all — the first
+ * ~400ms of an action toast was inert while HeroUI's view transition owned
+ * hit-testing, and a replaced toast's Undo was dead for ~740ms
+ * (`docs/DESIGN.md` §4.10, measured in `e2e/toast-dead-window.spec.ts`).
+ * **That is no longer true**: the queue in
+ * `src/lib/toast.ts` takes §4.10's `wrapUpdate` escape hatch, and the measured
+ * dead window on both paths is now 0ms. The 12s stands on its own argument
+ * about reading time, which was always the better one.
  */
 const UNDO_WINDOW_MS = 12_000;
 
@@ -187,13 +197,17 @@ const UNDO_LABEL = "Undo";
 /**
  * What a screen reader announces for an Undo (`docs/DESIGN.md` §7.13).
  *
- * The visible word is `Undo` on every one of them, and `UNDO_WINDOW_MS` is 12s
- * precisely so several stand at once — so a sighted user tabbing forward reads
- * which toast they are in, and a screen-reader user hears "Undo, button" three
- * times with nothing to tell a completion-revert from a `DELETE`. QA raised
- * this on the deferred `Tab` ×2 hazard (`docs/QA-REPORT.md` §8): the two
- * presses are the same for everyone, but only some users can see what they
- * land on.
+ * The visible word is `Undo`, and the name is what tells a screen-reader user
+ * which reversal it is. QA raised this against a *stack* of them
+ * (`docs/QA-REPORT.md` §8), which the cap has since removed: at most one
+ * action toast stands at a time (`src/lib/toast.ts`).
+ *
+ * **The name outlived the stack it was written for**, and deliberately. A lone
+ * Undo is still reached by name — by the focus rescue, by every `getByRole` in
+ * the suite, and by anyone navigating the toast region rather than looking at
+ * it — and the toast it belongs to is still one of several on screen, since
+ * receipts are outside the cap. "Undo, button" beside two `added` receipts
+ * says nothing about what it would put back.
  *
  * The subject is the toast's own title rather than a second wording invented
  * here — `Todo “x” added`, `Todo “x” marked complete` — so the name says what
@@ -265,6 +279,12 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     readLandedLoads,
   } = useTodoList(filters);
   const [editingTodo, setEditingTodo] = useState<TodoItemData | null>(null);
+  /**
+   * Which field the editor opens on. Reset by every opener, so a `Pick a
+   * date…` never leaves `dueAt` behind for the next plain `Edit` — the modal
+   * stays mounted between openings, so nothing else would clear it.
+   */
+  const [editFocus, setEditFocus] = useState<TodoFormFocus>(DEFAULT_FORM_FOCUS);
   const [pendingDelete, setPendingDelete] = useState<TodoItemData | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   /**
@@ -324,32 +344,6 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
   const { status, priority, query } = filters;
 
   /**
-   * One owner for every Undo toast, keyed by todo id.
-   *
-   * An Undo toast stays on screen for four seconds after it has been pressed
-   * unless something closes it, and an armed Undo describes a state the todo
-   * may no longer be in. Both problems are the same problem: a toast outliving
-   * the write it belongs to (review M-1, M-2).
-   *
-   * A toggle and a delete dismiss the row's outstanding Undo before they
-   * start. A save cannot — it runs inside the modal — so its dismissal happens
-   * in `handleSaved` once the write resolves, which leaves the older Undo
-   * armed for the length of that round trip. Unreachable today only because
-   * the modal's backdrop covers the toast region and traps focus; a top-placed
-   * toast or a non-modal editor would expose it (review r-2).
-   *
-   * **`added` receipts are deliberately not in here** (`docs/DESIGN.md`
-   * §7.15). Everything this map protects is a property of an *armed* toast:
-   * that it can still be pressed, and that what it would do describes a state
-   * the row has since left. A receipt with no action has neither property, so
-   * registering one would buy no protection and would keep the cost — two
-   * toasts alive under one todo id while HeroUI's serialized view transition
-   * works through the close and the add, which is the frame window DEF-25 and
-   * DEF-26 both lived in. The receipt now simply expires on its own.
-   */
-  const undoToastKeys = useRef(new Map<string, string>());
-
-  /**
    * The outstanding `More options` handoff: what tells the quick-add bar
    * whether the modal it opened saved or was backed out of (QA DEF-23).
    *
@@ -388,20 +382,22 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
   const outstandingCreate = useRef<Promise<boolean> | null>(null);
 
   /**
-   * Returns whether it dismissed anything, which is what makes it usable as a
-   * re-entrancy guard: reading and clearing the key is atomic, so only the
-   * first of two fast presses sees a key and runs the undo (review r-1).
+   * Disarms this row's outstanding Undo, if the standing one is its.
+   *
+   * **The bookkeeping moved to `src/lib/toast.ts`** and with it the rule: at
+   * most one action-bearing toast stands at a time, whatever record it belongs
+   * to. What used to be a `Map<todoId, key>` here is a single slot there,
+   * because there is now only ever one thing in it. Everything the map
+   * protected is still protected — an armed Undo never outlives the write it
+   * describes (review M-1, M-2) — and the re-entrancy guard is stronger, since
+   * the press is claimed by the toast's own token rather than by its row.
+   *
+   * `added` receipts are still deliberately outside all of this
+   * (`docs/DESIGN.md` §7.15, §7.17): they carry no action, so neither thing
+   * the slot protects applies to them, and the `hidden by your filters`
+   * sentence is the only account a swallowed row ever gets.
    */
-  const dismissUndo = (todoId: string) => {
-    const key = undoToastKeys.current.get(todoId);
-
-    if (!key) return false;
-
-    toast.close(key);
-    undoToastKeys.current.delete(todoId);
-
-    return true;
-  };
+  const dismissUndo = (todoId: string) => dismissActionToast(todoId);
 
   /**
    * A toast that reports and stops — no action, no token, no bookkeeping.
@@ -446,11 +442,19 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     message: string,
     undo: () => void,
   ) => {
-    dismissUndo(todoId);
-
     const token = nextUndoToken();
 
-    const key = toast.success(message, {
+    /*
+      No `dismissUndo` first any more: `showActionToast` closes whatever action
+      toast was standing, for any record, which is the cap. The old call
+      dismissed only this row's, and under a single slot that would have been
+      the same thing on the common path and wrong on the one that matters —
+      an Undo for a *different* row left armed beside a newer one.
+    */
+    showActionToast({
+      todoId,
+      token,
+      message,
       timeout: UNDO_WINDOW_MS,
       actionProps: {
         children: UNDO_LABEL,
@@ -460,21 +464,30 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
           `aria-label` overrides the child text for assistive technology and
           leaves the button reading `Undo` on screen, which is what the copy
           deck asks for in both places (§7.13).
+
+          **Kept under the cap**, though the cap removes the stack it was
+          written for. A single Undo still has to say what it reverses to
+          anyone who reaches it by name rather than by looking at the toast
+          above it, and the name is what the focus rescue and every
+          `getByRole` in the suite ask for. It stops being the thing holding
+          the feature up; it does not stop being right.
         */
         "aria-label": undoActionLabel(message),
         ...undoTokenProps(token),
         onPress: () => {
-          // Closing the toast does not remove it immediately — HeroUI defers
-          // the unmount through a view transition, which can outlast a double
-          // click. The key, not the toast, is what makes this fire once.
-          if (!dismissUndo(todoId)) return;
+          /*
+            Claimed by this toast's own token. Closing a toast does not remove
+            it — the removal is deferred — so the press has to name which
+            toast it came from rather than which row: after a repeat write two
+            action buttons for one todo are briefly in the DOM, and only one
+            of them is live.
+          */
+          if (!claimActionPress(token)) return;
 
           undo();
         },
       },
     });
-
-    undoToastKeys.current.set(todoId, key);
 
     return token;
   };
@@ -518,6 +531,9 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     setCreateDraft(draft);
     setCreateSeq((seq) => seq + 1);
     setEditingTodo(null);
+    // A create always opens on `Title`; without this it would inherit whatever
+    // the last `Pick a date…` set, since the modal is never unmounted.
+    setEditFocus(DEFAULT_FORM_FOCUS);
     formState.open();
 
     /*
@@ -545,8 +561,17 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     return answered;
   };
 
-  const openEdit = (todo: TodoItemData) => {
+  /**
+   * Opens the editor on a record, and on the field the press asked for.
+   *
+   * `focus` is carried from the control rather than worked out here, because
+   * here is where it cannot be worked out: `Edit` and `Pick a date…` hand over
+   * the same todo, and the difference between them is the user's intent, which
+   * is not a property of the row (`docs/DESIGN.md` §7.21).
+   */
+  const openEdit = (todo: TodoItemData, focus: TodoFormFocus = DEFAULT_FORM_FOCUS) => {
     setEditingTodo(todo);
+    setEditFocus(focus);
     formState.open();
   };
 
@@ -1483,6 +1508,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
         state={formState}
         todo={editingTodo}
         draft={createDraft}
+        autoFocusField={editFocus}
         onSaved={handleSaved}
       />
 

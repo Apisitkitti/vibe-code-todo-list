@@ -37,12 +37,19 @@
  * focus is inside the region. The reason above is the one that survives a
  * dependency upgrade.
  *
- * Step 2 waits for a frame at a time because HeroUI mounts every toast inside
- * `document.startViewTransition` (`docs/DESIGN.md` §4.10) — the toast is
- * queued before it is in the DOM, so reading for the button synchronously
- * finds nothing. This is the same "read before it rendered" trap that has
- * already produced two defects on this feature, so it is waited on rather than
- * assumed.
+ * Step 2 waits for a frame at a time because the toast is queued before it is
+ * in the DOM, so reading for the button synchronously finds nothing. This is
+ * the same "read before it rendered" trap that has already produced two
+ * defects on this feature, so it is waited on rather than assumed.
+ *
+ * **The wait is now much shorter than it was, and the reason is worth
+ * recording.** It used to include HeroUI's `startViewTransition`
+ * (`docs/DESIGN.md` §4.10), which deferred the mount behind a 350ms slide and
+ * chained a close in front of it. `src/lib/toast.ts` takes §4.10's
+ * `wrapUpdate` escape hatch, so the mount is now a plain React render. The
+ * frame loop stays: "wait for the thing rather than assume it is there" is not
+ * a claim about how long HeroUI takes, and `MAX_WAIT_FRAMES` is a ceiling, not
+ * a duration this spends.
  *
  * **Step 2 names the toast it is waiting for, and waiting was never the
  * missing piece (QA DEF-25, DEF-26).** It used to ask for whichever toast was
@@ -64,10 +71,17 @@
  * walks past; they simply have no button left to be matched by.
  *
  * The same wrong choice is what loses focus altogether. Both toasts in that
- * window are on their way out — `dismissUndo`'s `toast.close` is queued behind
- * the same serialized view transition as the add
- * (`@heroui/react/dist/components/toast/toast-queue.js`), so it lands *after*
- * step 2 has already focused its victim. react-aria's `useToastRegion` then
+ * window are on their way out — `dismissUndo`'s close *was* queued behind the
+ * same serialized view transition as the add
+ * (`@heroui/react/dist/components/toast/toast-queue.js`), so it landed *after*
+ * step 2 had already focused its victim. That serialisation is gone with the
+ * `wrapUpdate` escape hatch, and the measured peak of simultaneous action
+ * buttons during a repeat write is now 1 rather than 2 — so this window is
+ * closed rather than merely narrow. The identity argument below is kept
+ * anyway, and the paragraph is kept in the past tense rather than deleted,
+ * because it is the reason the token exists and a future change that puts the
+ * transition back would put the defect back with it. react-aria's
+ * `useToastRegion` then
  * sees the focused toast removed and re-homes focus onto a neighbouring toast
  * *container* — an element with no action on it — or, when its own index
  * bookkeeping has not caught up, drops it on `<body>`. That is DEF-26 in full:
@@ -137,10 +151,14 @@ const undoActionSelector = (token: string) =>
 
 /**
  * How long step 2 will wait for the view transition to commit the toast.
- * ~1s at 60fps — comfortably longer than the 350–400ms slide plus the doubled
- * window a close-then-add chain costs, and far short of the 12s Undo timeout,
- * so a toast that never arrives leaves focus parked on the row from step 1
- * rather than hanging.
+ * ~1s at 60fps. It was sized against the 350–400ms slide plus the doubled
+ * window a close-then-add chain cost; both are gone with the `wrapUpdate`
+ * escape hatch (`src/lib/toast.ts`), so the budget is now enormous relative to
+ * what it guards. Left as it is: it is a ceiling for the case where the toast
+ * never arrives at all, and shrinking it buys nothing while risking the slow
+ * machine it was chosen for. Far short of the 12s Undo timeout either way, so
+ * a toast that never arrives leaves focus parked on the row from step 1 rather
+ * than hanging.
  *
  * **This budget is only now actually spent.** While step 2 selected by stack
  * position it matched an already-mounted toast on the first frame every time,
