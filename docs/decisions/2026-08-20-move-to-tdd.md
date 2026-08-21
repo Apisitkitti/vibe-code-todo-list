@@ -116,3 +116,12 @@ tests point at it: `junior-dev`, `sdet`, `senior-reviewer`, `ui-designer` and
 `qa` were amended the same day, each with what it actually needs.
 
 Nothing in the body above is retracted.
+
+### Correction to the addendum above, same day
+
+The addendum's e2e figure needs one clarification, appended rather than edited
+for the same reason the addendum itself was. **394 is what Playwright collects;
+361 of those pass and 33 skip** under the current project gates. Both numbers
+are current and they count different populations — the addendum quoted only the
+394, which invites the reading that 33 tests went missing. They did not. The
+open question's 258 was genuinely stale; 361 never was.

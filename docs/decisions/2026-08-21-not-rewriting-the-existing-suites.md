@@ -27,23 +27,48 @@ are the size of the thing being decided about. Measured today on `d670975`:
 
 | | Recorded 2026-08-20 | Measured 2026-08-21 |
 |---|---|---|
-| Vitest (`tests/unit` + `tests/api`) | 400 | **492** in 25 files |
-| Playwright (`e2e`) | 258 | **394** across two projects |
+| Vitest (`tests/unit` + `tests/api`) | 400 | **492** in 25 files, all passing |
+| Playwright (`e2e`) | 258 | **394** collected in 32 files — **361 pass, 33 skip** |
 
 The Vitest number is from `npm run test:run` redirected to a file, exit code 0
-recorded separately: `Test Files 25 passed (25) / Tests 492 passed (492)`. The
-Playwright number is from `npx playwright test --list`, which enumerates without
-running: `Total: 394 tests in 32 files`. It counts each spec once per project it
-is enabled for, and `chromium-mobile` excludes the pointer specs, so it is not
-simply twice the declaration count. Neither number is the number of `test(` calls
-in the files — parameterised loops make the declaration count lower (421 and 193
-respectively).
+recorded separately: `Test Files 25 passed (25) / Tests 492 passed (492)`.
 
-The brief that commissioned this work quoted 492 and **361**. The 492 is exactly
-right; the 361 is not reproducible today and is presumably an e2e count from
-before `fix/e2e-attribution` and `feature/board-view` landed. Recorded because a
-number carried between documents without a re-measurement is how the 400/258
-above went stale in a day.
+The Playwright numbers are two different measurements of two different
+populations, and both are correct:
+
+- **394 is what is collected.** From `npx playwright test --list`, which
+  enumerates without executing: `Total: 394 tests in 32 files`. It counts each
+  spec once per project it is enabled for, and `chromium-mobile` excludes the
+  pointer specs, so it is not simply twice the declaration count.
+- **361 is what runs and passes.** From the last full run on `d670975`: 361
+  passed, 33 skipped. 361 + 33 = 394 exactly.
+
+The skips are runtime gates — `test.skip(isMobile === true, …)` and its inverse
+— rather than anything disabled at the config level, which is why `--list` sees
+them and a run does not. A separate audit is examining each of the 33 as this is
+written, so nothing further is claimed about them here beyond the count.
+
+Neither figure is the number of `test(` calls in the files: parameterised loops
+make the declaration count lower (421 and 193 respectively).
+
+### Two numbers that disagree can both be true
+
+This is worth more than the figures. The brief that commissioned this work
+quoted 492 and 361; `--list` returned 394; and the first explanation reached for
+was that 361 was stale — an e2e count from before `fix/e2e-attribution` and
+`feature/board-view` landed. That was wrong, and wrong in a way that would have
+told a future reader 33 tests had disappeared somewhere.
+
+The measurement was right and the inference was not. **Before concluding that a
+suite size is stale, check whether the two numbers count different populations
+— collected versus executed, passed versus passed-plus-skipped, declarations
+versus expansions.** Every one of those pairs differs in this repo. The
+arithmetic that settles it here took one subtraction.
+
+The 400/258 in the open question really were stale, and that was caught the same
+way: by re-measuring a figure that arrived in a document rather than copying it
+forward. Both halves of the lesson stand — re-measure, and then be as careful
+about the explanation as about the number.
 
 ## Why
 
@@ -139,12 +164,26 @@ the mobile project excludes the pointer specs (read from `playwright.config.ts`)
 
 **Verified by reading:** the five tests named in the move-to-TDD record as
 demonstrated unable to fail — that record is the evidence for them and they were
-not re-demonstrated here; the comment examples in `todoDates` and `filterSync`.
+not re-demonstrated here; the comment examples in `todoDates` and `filterSync`;
+that the e2e skips are runtime `test.skip(…)` gates on the viewport rather than
+config-level exclusions (unpiped `grep -rn skip e2e`).
 
-**Assumed:** that 361 was a pre-merge e2e count. Nothing was found asserting it,
-and no attempt was made to reconstruct it from history.
+**Taken from the coordinator, not measured here:** the 361 passed / 33 skipped
+split of the last full run on `d670975`. It is consistent with the 394 this
+record measured — the two differ by exactly the 33 — and that arithmetic is the
+whole of the corroboration.
 
-**Not done:** the e2e suite was not run for this record. The count comes from
+**Corrected after first writing:** this record originally called 361 stale and
+assumed it predated `fix/e2e-attribution`. That was wrong. 361 and 394 count
+different populations and both are current; see *Two numbers that disagree can
+both be true* above. The correction is left visible rather than quietly applied,
+because the mistaken inference is the part a future reader benefits from.
+
+**Not claimed:** anything about *which* 33 tests skip or whether each skip is
+justified. An audit of exactly that was in flight while this was written and its
+verdict is not in.
+
+**Not done:** the e2e suite was not run for this record. The 394 comes from
 `--list`, which enumerates without executing, chosen deliberately because other
 agents were working in this repo at the time and a full Playwright run competes
 for the shared `todo_app_test` database and a port.
