@@ -86,3 +86,33 @@ that cannot fail.
 Whether to backfill the existing suites — 400 unit and 258 e2e, some of which
 have now been demonstrated unable to fail — or to apply this to new work only
 and fix the existing ones as they are touched.
+
+---
+
+## Addendum, 2026-08-21 — the open question above is settled
+
+*Appended rather than edited: this directory's records are immutable once
+written, and the body above is what was true on 2026-08-20. The section titled
+"Open, to settle when the work starts" is answered here, and its two figures
+have moved.*
+
+**The existing suites are not being rewritten.** New work is test-first from
+today; the tests that cannot fail are found by mutation audit instead of by
+reordering, because reordering after the fact cannot establish the thing
+test-first establishes. The reasoning, the alternatives rejected, and the trap
+in running mutations at scale are in
+`docs/decisions/2026-08-21-not-rewriting-the-existing-suites.md`.
+
+The sizes named in the open question were re-measured on `d670975`: **492**
+Vitest tests in 25 files, not 400, and **394** Playwright tests in 32 files
+across two projects, not 258.
+
+**The operating instruction now lives in `.claude/skills/todo-app-tdd/`.** The
+table in *The shape* above is the doctrine; the skill is what a developer does
+on Monday — naming the mode before the first edit, what red has to look like
+before it counts, the spike throw-away procedure, and the grouping and naming
+rules with this repo's own files as the worked examples. The roles that touch
+tests point at it: `junior-dev`, `sdet`, `senior-reviewer`, `ui-designer` and
+`qa` were amended the same day, each with what it actually needs.
+
+Nothing in the body above is retracted.

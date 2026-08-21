@@ -27,7 +27,7 @@ as "I wrote the code first".
 
 | What you are building | Mode |
 |---|---|
-| Pure modules — `src/lib/quickAdd.ts`, `todoBoard`, `filterSync`, `todoGroups`, `todoDates`, `todoListState`, `rowFocus`, and anything else that is arithmetic over values | **Strict**: red, green, refactor, small cycles |
+| Pure modules — `src/lib/quickAdd.ts`, `todoBoard`, `filterSync`, `todoGroups`, `date`, `todoListState`, `rowFocus`, and anything else that is arithmetic over values | **Strict**: red, green, refactor, small cycles |
 | An API route under `src/app/api/**` | **Strict, contract first**: status, error shape, isolation — before the handler exists |
 | A bug fix, anywhere, including a UI one | **Strict**: the repro is the test, and it is red before the fix |
 | HeroUI composition, focus management, drag | **Spike, then throw the spike away and redo it test-first** — `references/spikes.md` |
