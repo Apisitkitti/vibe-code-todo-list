@@ -37,6 +37,11 @@ import { VIEW_VALUES, type TodoView } from "@/lib/todo";
  * same kind of control — react-aria renders it as a `radiogroup`, which is the
  * right semantics for "one of these at a time" and is what a screen reader will
  * announce it as.
+ *
+ * **And now literally beside it**, at the end of `TodoFilters`' row, which is
+ * what §4.11 asked for and not what shipped. It renders wherever it is put, so
+ * the placement, the `lg` gate and the `hasTodos` gate all belong to
+ * `TodoListScreen` and `TodoFilters` rather than here.
  */
 
 const VIEW_LABELS: Record<TodoView, string> = {

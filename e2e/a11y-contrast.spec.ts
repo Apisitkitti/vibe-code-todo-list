@@ -281,6 +281,16 @@ test.describe("§8.4.2 — the priority chip, at the levels that still draw one"
  * Card — so a heading was visually indistinguishable from row metadata.
  * Dropping `color="muted"` puts it at `--foreground`.
  *
+ * **That 4.83:1 is a pre-DEF-15 reading and is not what `--muted` measures
+ * today.** It is kept because it is the number this change was argued from,
+ * but the token has since been corrected in light, and the figure has been
+ * quoted onwards as if it were current at least once. Measured now:
+ * `--muted` on the Card is **5.60:1** light and **6.75:1** dark, and
+ * `--foreground` — where the heading, and now a `Today` due date, sit — is
+ * **17.72:1** light and **17.27:1** dark. Any argument that needs a current
+ * reading should take it from `e2e/due-date-ramp.spec.ts`, which measures
+ * rather than quotes.
+ *
  * Contrast rises, so there is no a11y exposure; it is measured anyway, and
  * against the due date rather than only against a floor. A floor alone would
  * pass just as happily on the state this change exists to leave behind — the
@@ -442,6 +452,14 @@ test.describe("the row a mutation is working on stays readable", () => {
  * QA measured it at **4.43:1** on the page background in light
  * (`docs/QA-REPORT.md` §A2): 0.07 short of AA, and it fails only *outside* the
  * Card, where the same token reads 4.83:1. Dark passes at 7.72:1.
+ *
+ * **Those three are the readings that named the defect, not the readings the
+ * app has now** — this block describes the before, and the tests under it
+ * assert the after. Post-correction, in light: 5.14:1 on the page background
+ * and 5.60:1 on the Card. Dark is untouched at 7.72:1 on the page, because the
+ * override is scoped to light (§3) — 6.75:1 on the Card, the surface nobody
+ * measured then. Quote the current numbers from a run, not from this
+ * paragraph; the 4.83 has already travelled once as if it were live.
  *
  * QA re-ranked this above DEF-14 for one reason, recorded in §A6: that token
  * now carries `Press Esc to keep your text exactly as typed.` — the only
