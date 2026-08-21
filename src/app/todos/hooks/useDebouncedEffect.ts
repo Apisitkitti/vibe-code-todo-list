@@ -59,6 +59,35 @@ import { useEffect, useRef } from "react";
  * render must be pure and repeatable. The write effect is declared above the
  * timer effect so that on any commit both run, the callback is refreshed
  * before a new timer is scheduled.
+ *
+ * ## Where this hook is tested, and why not here
+ *
+ * **The timer, its cleanup and the latest-callback ref have no unit test, and
+ * that is a decision rather than an oversight.** Do not read the gap as work
+ * left undone and do not close it by reaching for a DOM environment.
+ *
+ * `vitest.config.ts` runs `environment: "node"`, and neither `jsdom` nor a
+ * React testing library is a dependency of this project. Adding both to render
+ * one hook would be a larger change than the hook itself, and it would buy a
+ * weaker check than the one that already exists.
+ *
+ * That is the substantive half of the argument. The behaviour worth protecting
+ * here is **coalescing** — that a burst of dependency changes produces one run
+ * of the effect and not one per change. A fake-timer unit test asserts the
+ * callback ran once against a clock it controls, which is a restatement of the
+ * implementation. `e2e/search-debounce.spec.ts` instead counts
+ * `history.replaceState` calls across a real typed word in a real browser: it
+ * counts the *journey* rather than the destination.
+ *
+ * That distinction is not theoretical. Deleting this hook's `clearTimeout` left
+ * `e2e/search-clear-race.spec.ts` and `e2e/filtered-toggle.spec.ts` both green,
+ * because a debounce with no cleanup reaches the same settled URL — just via
+ * one navigation per keystroke instead of one. The counting spec is what kills
+ * that mutant, and it is the check a unit test would have been added to
+ * duplicate less well.
+ *
+ * What *is* unit-tested is the part that is pure and can be silently wrong:
+ * `debouncedEffectKey`, in `tests/unit/useDebouncedEffect.test.ts`.
  */
 
 /**
