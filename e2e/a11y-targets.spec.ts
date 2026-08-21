@@ -411,8 +411,29 @@ test.describe("DEF-16 — the search clear button is a real target", () => {
 
     await searchFor(signedIn, "something");
 
+    /*
+      **Pinned, not capped**, and the difference is not cosmetic.
+
+      This was `max-width` alone until 2026-08-21, which held the field at 200
+      only for as long as the field could not be shrunk below it — and the
+      filter row could not shrink it, because a flex item's automatic minimum
+      size is its min-content. `TodoFilters` gave the field `min-w-0` so the
+      view toggle would fit at `lg` (see the note there), and the field then
+      settled at 162px on its own. A cap of 200 above a natural 162 creates
+      nothing.
+
+      The re-read below caught it rather than letting it through — "Expected
+      200px, Received 162.031px" — which is exactly what that assertion was
+      written for and worth recording as a case where it paid.
+
+      Note what the number now means: at `lg` the app's own field reaches 162px
+      unaided, so the squeeze is no longer this component's narrowest state and
+      the natural-width sweep above it is the tighter case. 200 is kept because
+      it is the width at which all five probes miss on the unfixed component,
+      which is the failure this test is named after.
+    */
     await signedIn.addStyleTag({
-      content: `${SEARCH_FIELD} { max-width: ${SQUEEZED_FIELD_WIDTH}px !important; }`,
+      content: `${SEARCH_FIELD} { min-width: ${SQUEEZED_FIELD_WIDTH}px !important; max-width: ${SQUEEZED_FIELD_WIDTH}px !important; }`,
     });
 
     /*
