@@ -213,6 +213,22 @@ export const NO_MATCHES_HEADING = "No matches";
 export const NO_MATCHING_FILTERS_HEADING = "No todos match these filters";
 
 /**
+ * The two states a **status** filter is answered with, and the only two of the
+ * five that carry no action at all.
+ *
+ * Heading *and* body, because the body is the whole of the argument for the
+ * missing button: each one names the status the user chose in the filter's own
+ * word — `active`, `finish`/`completed` — and says what would fill the view.
+ * A heading-only assertion would let that sentence drift into something
+ * generic and leave the actionless card unexplained, which is the state the
+ * brief that produced this file believed had already shipped.
+ */
+export const ALL_CAUGHT_UP_HEADING = "All caught up";
+export const ALL_CAUGHT_UP_BODY = "You have no active todos. Nice.";
+export const NOTHING_COMPLETED_HEADING = "Nothing completed yet";
+export const NOTHING_COMPLETED_BODY = "Todos you finish will appear here.";
+
+/**
  * The two empty-state actions that call `clearFilters`, and §7.10's search box.
  *
  * Written down here because until now they were nowhere: `grep -rn "Clear
