@@ -61,7 +61,11 @@ import { QuickAddBar } from "./QuickAddBar";
 import { TodoBoard } from "./TodoBoard";
 import { TodoBoardSkeleton } from "./TodoBoardSkeleton";
 import { TodoEmptyState } from "./TodoEmptyState";
-import { LABELLED_CONTROL_SIZING, PAGE_HEADING_ROW } from "@/lib/styles";
+import {
+  LABELLED_CONTROL_SIZING,
+  PAGE_HEADING_BLOCK,
+  PAGE_HEADING_ROW,
+} from "@/lib/styles";
 
 import { useTodosUrlSync } from "@/app/todos/hooks/useTodosUrlSync";
 
@@ -1349,23 +1353,36 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
 
   return (
     <>
-      <div className={PAGE_HEADING_ROW}>
-        <Typography.Heading level={1}>{PAGE_HEADING}</Typography.Heading>
-        {hasTodos ? (
-          <Typography type="body-sm" color="muted">
-            {`${result.completedCount} of ${result.totalCount} done`}
-          </Typography>
-        ) : null}
-      </div>
-
       {/*
-        US-12. One plain-text line, below the app bar and above the list,
-        reporting the viewer's today and the sizes of the two sections that
-        answer "what now?". It is not gated on `hasTodos`: the date alone is
-        the specified state for an empty list and for a list still loading, and
-        a line that came and went would be a fourth thing moving on the page.
+        The heading and the dated line are one block, not two of `main`'s
+        sections (§7.19). They are one statement — what this page is and what
+        day it is — and as peers under `main`'s `gap-6` they sat 24px apart,
+        the same distance as the quick-add bar from the Card. `gap-1` inside;
+        `main`'s `gap-6` then separates the block from the bar.
+
+        `loading.tsx` renders the same two elements and takes the same
+        constant, or the heading moves when the route settles (§4.8).
       */}
-      <TodoListHeaderLine groups={groups} />
+      <div className={PAGE_HEADING_BLOCK}>
+        <div className={PAGE_HEADING_ROW}>
+          <Typography.Heading level={1}>{PAGE_HEADING}</Typography.Heading>
+          {hasTodos ? (
+            <Typography type="body-sm" color="muted">
+              {`${result.completedCount} of ${result.totalCount} done`}
+            </Typography>
+          ) : null}
+        </div>
+
+        {/*
+          US-12. One plain-text line, below the app bar and above the list,
+          reporting the viewer's today and the sizes of the two sections that
+          answer "what now?". It is not gated on `hasTodos`: the date alone is
+          the specified state for an empty list and for a list still loading,
+          and a line that came and went would be a fourth thing moving on the
+          page.
+        */}
+        <TodoListHeaderLine groups={groups} />
+      </div>
 
       {/*
         Never gated on `hasTodos`, unlike the filter bar below it and unlike

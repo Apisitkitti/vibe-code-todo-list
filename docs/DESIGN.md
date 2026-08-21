@@ -305,18 +305,37 @@ Identical structure to `/sign-in`. Differences only:
 ```
 <Header>                         ← app bar, full-bleed, sticky
 <main className="flex-1 w-full max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8 flex flex-col gap-6">
-  ├─ Page heading + count
-  ├─ Dated header line          ← US-12, §7.19; plain text, always present
+  ├─ Heading block (flex flex-col gap-1)   ← one statement, §7.19
+  │    ├─ Page heading + count
+  │    └─ Dated header line     ← US-12, §7.19; plain text, always present
   ├─ Quick-add bar              ← §7.17; always present, never gated on hasTodos
   ├─ Filter bar                 ← only once the account has todos
   └─ Card (the list, cut into urgency sections — §7.16)
 </main>
 ```
 
-*Amended twice while it was being worked in: the "Add-todo affordance" row is
-the quick-add bar of §7.17, not the retired `New todo` button, and the list
-inside the Card is the sectioned list of §7.16 rather than one flat `<ul>`.
-Both were already true in the code; this diagram had not been told.*
+*Amended three times while it was being worked in: the "Add-todo affordance" row
+is the quick-add bar of §7.17, not the retired `New todo` button; the list
+inside the Card is the sectioned list of §7.16 rather than one flat `<ul>`; and
+the heading and the dated line are now one block rather than two of `main`'s
+sections. The first two were already true in the code and this diagram had not
+been told; the third is the change that made it true.*
+
+**The heading block.** `Your todos` and `Wednesday, 20 August · 3 due today ·
+1 overdue` are one statement — what this page is, and what day it is — and as
+two direct children of `main` they sat `gap-6` apart, the same 24px as the
+quick-add bar from the Card. Four peers, and nothing in the layout said which
+belonged with which. `flex flex-col gap-1` wraps the pair; `main`'s `gap-6` then
+separates the block from the bar, so §2.2's section rhythm is unchanged.
+
+`src/lib/styles.ts` owns the class string as `PAGE_HEADING_BLOCK`, because
+`loading.tsx` renders the same two elements and wrapping one without the other
+moves the heading when the route settles — the swap shift §4.8 is about.
+`error.tsx` renders neither a heading nor a dated line, so it takes no wrapper;
+it shares `TODOS_PAGE_SHELL` with the other two, which is the part all three
+actually have in common. Pinned in `e2e/list-header.spec.ts`, which measures
+both gaps rather than one: a wrapper that pulled the block tight against the bar
+as well would look closer in a screenshot and would have spent §2.2 to do it.
 
 **App bar.** Use `Header` — note it is **not** compound: the exported `Header`
 has no `.Root`, `.Title` etc. It is a single element that renders RAC's
@@ -1595,10 +1614,25 @@ a period.
 
 | Case | Heading | Body | Action |
 |---|---|---|---|
-| No todos | `Nothing here yet` | `Add your first todo and it will show up here.` | `New todo` |
+| No todos | `Nothing here yet` | `Add your first todo and it will show up here.` **plus §7.18's teaching line** | `Add a todo` (§7.18) |
 | Filter=active, none | `All caught up` | `You have no active todos. Nice.` | — |
 | Filter=completed, none | `Nothing completed yet` | `Todos you finish will appear here.` | — |
 | Search, no match | `No matches` | `No todos match "{query}".` | `Clear search` |
+
+**The `No todos` action is `Add a todo`, not `New todo`.** The `New todo`
+string this row carried until now described a modal, and the empty state's
+button has focused the quick-add bar since §7.17 landed; §7.18 is where that
+label lives and this row defers to it. Nothing here opens the modal any more,
+and the deck should not have gone on saying it did. (§4.7's code sample still
+shows `New todo` and `variant="primary"`; both are §4's to correct, and the
+second is the ui-designer's call, not a copy change.)
+
+**Only the never-used state teaches.** `Nothing here yet` is the one empty
+state a user can reach without having typed anything, so it is the one that
+gets §7.18's line. The other three are reached *by* filtering or searching —
+their reader has already used the bar, and a syntax lesson on the way back
+from a search that missed is a lesson delivered at the one moment it cannot
+be acted on.
 
 ### 7.8 Loading
 
@@ -1643,10 +1677,11 @@ matches nothing.
 
 ### 7.11 Mutation confirmations and outcome toasts
 
-Added for the "Mutation UX" section of `docs/CONVENTIONS.md`: every create,
-update, toggle and delete is confirmed first and reports its outcome in a
-toast that names the record. These success-toast strings supersede the
-generic ones in §7.5 and §7.6.
+Added for the "Mutation UX" section of `docs/CONVENTIONS.md`, when every
+create, update, toggle and delete was confirmed first. **That is no longer the
+rule** — the delete alone confirms (§7.6) — but every mutation still reports
+its outcome in a toast that names the record, and those strings are what this
+section is now for. They supersede the generic ones in §7.5 and §7.6.
 
 Any toast here that carries an action (the Undo toasts, §7.13 and §7.15) is
 subject to §4.10: **the action does not respond to a pointer for the first
@@ -1657,24 +1692,33 @@ receipt and nothing else — it has no action at all (§7.15), and neither do th
 toasts an Undo raises when it succeeds. Only the toggle and the edit offer
 Undo.
 
+**The confirm rows of this section are struck.** The Mutation UX rule became
+"confirm what cannot be undone", and the only mutation that cannot is the
+delete — which confirms with §7.6's strings, from the one `ConfirmDialog` the
+app still mounts (`TodoListScreen.tsx`). Create, update and toggle have had no
+confirm dialog for some time; the copy for them sat here regardless, which is
+the failure mode this deck is most prone to and the one that does the most
+damage, because someone builds from it. The toasts below the strike are live
+and unchanged.
+
 | Slot | String |
 |---|---|
-| Confirm cancel (all) | `Cancel` |
-| Create confirm heading | `Add this todo?` |
-| Create confirm body | `“{title}” will be added to your list.` |
-| Create confirm action | `Add todo` |
-| Create confirm pending | `Adding…` |
-| Update confirm heading | `Save these changes?` |
-| Update confirm body | `“{title}” will be updated.` |
-| Update confirm action | `Save changes` |
-| Update confirm pending | `Saving…` |
-| Complete confirm heading | `Mark this todo complete?` |
-| Complete confirm body | `“{title}” will be marked complete.` |
-| Complete confirm action | `Mark complete` |
-| Reopen confirm heading | `Mark this todo not complete?` |
-| Reopen confirm body | `“{title}” will be moved back to active.` |
-| Reopen confirm action | `Mark not complete` |
-| Toggle confirm pending | `Updating…` |
+| ~~Confirm cancel (all)~~ | ~~`Cancel`~~ — **struck.** §7.6 carries the delete's `Cancel`, and it is the only confirm left. |
+| ~~Create confirm heading~~ | ~~`Add this todo?`~~ — **struck.** No create confirm exists. |
+| ~~Create confirm body~~ | ~~`“{title}” will be added to your list.`~~ — **struck.** |
+| ~~Create confirm action~~ | ~~`Add todo`~~ — **struck.** |
+| ~~Create confirm pending~~ | ~~`Adding…`~~ — **struck.** The bar's own pending label is §7.17's. |
+| ~~Update confirm heading~~ | ~~`Save these changes?`~~ — **struck.** No update confirm exists. |
+| ~~Update confirm body~~ | ~~`“{title}” will be updated.`~~ — **struck.** |
+| ~~Update confirm action~~ | ~~`Save changes`~~ — **struck.** It is the modal's submit, and §7.5 has it. |
+| ~~Update confirm pending~~ | ~~`Saving…`~~ — **struck.** §7.5 has it. |
+| ~~Complete confirm heading~~ | ~~`Mark this todo complete?`~~ — **struck.** The checkbox fires immediately and reverses from its toast (§7.13). |
+| ~~Complete confirm body~~ | ~~`“{title}” will be marked complete.`~~ — **struck.** |
+| ~~Complete confirm action~~ | ~~`Mark complete`~~ — **struck.** |
+| ~~Reopen confirm heading~~ | ~~`Mark this todo not complete?`~~ — **struck.** |
+| ~~Reopen confirm body~~ | ~~`“{title}” will be moved back to active.`~~ — **struck.** |
+| ~~Reopen confirm action~~ | ~~`Mark not complete`~~ — **struck.** |
+| ~~Toggle confirm pending~~ | ~~`Updating…`~~ — **struck.** |
 | Create success toast | `Todo “{title}” added` |
 | Update success toast | `Todo “{title}” updated` |
 | Delete success toast | `Todo “{title}” deleted` |
@@ -1687,23 +1731,29 @@ Undo.
 
 ### 7.12 Auth confirmations and outcome toasts
 
-Added for the team lead's ruling recorded in `docs/CONVENTIONS.md` →
-Mutation UX: the confirm-modal rule applies literally to both auth forms.
-Both use the non-destructive `ConfirmDialog` variant, so the primary action
-is autofocused and `Cancel` (§7.11) closes without submitting.
+Added for a ruling recorded in `docs/CONVENTIONS.md` → Mutation UX that the
+confirm-modal rule applied literally to both auth forms. **The confirm half of
+that is gone** — neither form mounts a `ConfirmDialog`, and neither should: a
+sign-in is not a mutation of the user's data and confirming it made the
+cheapest, most repeated action on the app cost two presses.
+
+**The toasts are not gone**, and were reported as dead along with the
+dialogs. They ship: `SignInForm.tsx` and `SignUpForm.tsx` raise both the
+success and the failure toast on every attempt. Do not delete these four
+rows.
 
 | Slot | String |
 |---|---|
-| Sign in confirm heading | `Sign in to your account?` |
-| Sign in confirm body | `You’ll be signed in as “{email}”.` |
-| Sign in confirm action | `Sign in` |
-| Sign in confirm pending | `Signing in…` |
+| ~~Sign in confirm heading~~ | ~~`Sign in to your account?`~~ — **struck.** No such dialog. |
+| ~~Sign in confirm body~~ | ~~`You’ll be signed in as “{email}”.`~~ — **struck.** |
+| ~~Sign in confirm action~~ | ~~`Sign in`~~ — **struck.** §7.1 has the form's own submit. |
+| ~~Sign in confirm pending~~ | ~~`Signing in…`~~ — **struck.** §7.1 has it. |
 | Sign in success toast | `Signed in as “{email}”` |
 | Sign in failure toast | *(the same message shown in the `Sign in failed` Alert)* |
-| Sign up confirm heading | `Create this account?` |
-| Sign up confirm body | `An account will be created for “{email}”.` |
-| Sign up confirm action | `Create account` |
-| Sign up confirm pending | `Creating account…` |
+| ~~Sign up confirm heading~~ | ~~`Create this account?`~~ — **struck.** No such dialog. |
+| ~~Sign up confirm body~~ | ~~`An account will be created for “{email}”.`~~ — **struck.** |
+| ~~Sign up confirm action~~ | ~~`Create account`~~ — **struck.** §7.2 has the form's own submit. |
+| ~~Sign up confirm pending~~ | ~~`Creating account…`~~ — **struck.** §7.2 has it. |
 | Sign up success toast | `Account created for “{email}”` |
 | Sign up failure toast | *(the same message shown in the `Sign up failed` Alert)* |
 
@@ -1969,7 +2019,7 @@ for correcting it:
 | Create success toast (visible) | `Todo “{title}” added` |
 | Create success toast (hidden by filters) | `Todo “{title}” added — hidden by your filters` |
 
-### 7.18 Empty-state call to action
+### 7.18 Empty-state call to action, and the line that teaches the bar
 
 The `No todos` empty state's action no longer opens the modal; it moves focus
 to the quick-add bar. Its label changes with it, because `New todo` described
@@ -1979,6 +2029,79 @@ a modal that is no longer what the button does. This row supersedes the
 | Slot | String |
 |---|---|
 | Empty state action (no todos) | `Add a todo` |
+| Empty state teaching line (no todos only) | `A day and a priority at the end are read — “pay rent friday high” becomes “pay rent”, due Friday, High priority.` |
+
+Rendered as `<Typography type="body-sm" color="muted">`, below the body and
+above the action, and **only in the `Nothing here yet` state** (§7.7). It is
+one line and it carries one example, deliberately.
+
+**Why the line exists, and what it is answering.** A tester on a phone read
+the bar's placeholder — `Add a todo — try "pay rent friday high"` — and said
+in as many words that they had no idea what `high` meant, could not tell
+whether it was the priority or part of some syntax, and were not going to
+spend their four minutes reverse-engineering a hint. That is the correct
+response to that placeholder. A placeholder can show a line that works; it
+cannot say *why* it works, because it vanishes at the first keystroke and
+because a hint the user has to test by typing is a hint that costs a todo to
+read. So the explanation moves to the one surface that is standing still, is
+never in the way, and is only ever seen by somebody who has not used the
+feature yet.
+
+**One example, and it is the placeholder's.** The line quotes
+`pay rent friday high` because the bar quotes it. Two examples would be two
+vocabularies for one parser, and a reader who met `pay rent friday high` on
+the empty state and something else in the field would reasonably conclude
+there was a list of magic phrases somewhere and that they had been shown two
+of them. There is no list, which is the point — so the line shows the *shape*
+(`title`, then a day, then a priority) once, and lets the chips do the rest.
+If a second example ever seems necessary, that is a signal the vocabulary has
+outgrown a one-line explanation and needs a real surface, not that this line
+needs a second sentence.
+
+**No list of tokens.** `today`, `tonight`, `tomorrow`, the seven weekday
+names, `next week`, `in N days` and `YYYY-MM-DD` are eight forms, and a
+muted line enumerating eight forms is a reference card in an empty state —
+the thing a parent with four minutes skips on sight. What the line teaches is
+the *offer*: that the last words of a line can set a day and a priority, and
+that they leave the title when they do. Everything past that is discoverable
+by trying, and trying is safe here, because the chips show what was read and
+one press puts any of it back (§7.17).
+
+**What the line is careful not to promise.**
+
+- **"at the end"** is rule 1 stated in three words. It is the single most
+  useful fact about this parser and the one the placeholder cannot convey:
+  `high priority handover` keeps every word, and a user who does not know
+  that reading is right-to-left has no model for why.
+- It says **"a day"**, not "any way of writing a day". `next friday` is
+  deliberately not vocabulary and lands in the title silently (§7.17, rule 4),
+  and no one-line summary can carry that exception without becoming the token
+  list this line refuses to be. The mitigation is not in this copy: it is that
+  a word which was not read stays visibly in the title, where the user can see
+  it. This line's job is to get the user to look at the chips at all.
+- **`becomes`** describes the whole transaction — the words leave the title
+  and turn into a date and a priority — which is precisely the part the
+  tester could not see. `sets` or `adds` would leave them expecting a todo
+  still called `pay rent friday high`.
+- **`High priority`** is the priority chip's exact string (§7.17), so the
+  words the line uses are the words the user will meet two seconds later.
+
+*One drift accepted, and stated:* `due Friday` is plain English, not a string
+the app renders. The chip and the row both go through `formatDueDate`, which
+says `Today` or `Tomorrow` and otherwise a date — so a Friday three days out
+chips as `Due Aug 24`, not `Due Friday`. The line is teaching the offer, not
+quoting the chip, and "due Friday" is what actually becomes true of the todo.
+Moving the shared example to `tomorrow` would close the gap exactly, and I am
+not proposing it: a weekday is the example that teaches there is a vocabulary
+rather than two magic words, and rent is monthly.
+
+*Open, and addressed to the ui-designer:* I would rather this line **replaced**
+`Add your first todo and it will show up here.` than sat under it. That body
+says nothing the heading and the button do not already say, and three stacked
+lines above a button is a paragraph in a place designed to be read at a
+glance. The additive version is specified above because the slot was
+specified additive and the dev should not be blocked on this; it is one
+string either way.
 
 `Today` is deliberately the same word the row's own due-date label uses (§7.4).
 A row reading `Today` inside a section headed `Today` is a repetition, not a
@@ -1986,6 +2109,13 @@ contradiction, and the alternative — inventing a second word for the same day 
 is worse.
 
 ### 7.19 The dated header line
+
+> **There are two §7.19s in this deck** — this one and *Reschedule from the
+> row* below. Both numbers are cited from `src/` and `e2e/`, so renumbering is
+> a code change and not a doc change; until someone takes it, cite them by
+> title. `src/lib/listHeaderLine.ts`, `src/lib/styles.ts` and
+> `e2e/list-header.spec.ts` mean *this* section; `src/lib/date.ts`,
+> `TodoActions.tsx`, `TodoBoard.tsx` and the `due` route mean the other.
 
 Added for `docs/PRD.md` US-12: one plain-text line above the list and below the
 app bar, telling the user what day it is and how much is due before they read a
@@ -2048,6 +2178,8 @@ titles in prose. Use the ellipsis character `…`.
 
 ### 7.19 Reschedule from the row
 
+> The second §7.19 — see the note under *The dated header line* above.
+
 Added for backlog #5 (`docs/PM-PROPOSAL.md` §3, `docs/PRD.md` US-13). The row
 gets a third action: a `Dropdown` that moves the due date without opening the
 modal. A due date is trivially reversible, so it fires immediately and reports
@@ -2098,6 +2230,36 @@ This is the lesson §7.13 records about Undo, applied before it could be
 re-learned: a screen of twenty rows is a screen of twenty `Reschedule` buttons,
 and `Reschedule, button` twenty times over is not a list a user can navigate.
 The menu borrows the trigger's name rather than inventing a second one.
+
+**`Pick a date…` opens the edit modal, and it stays that way.** A tester
+called it "backwards from what I expected", and they are describing something
+real: a menu item ending in `…` promises a surface for specifying *this*
+thing, and what arrives is the whole record editor. The ruling is that it
+stays, because the alternative is a second date surface — its own popover, its
+own focus and dismissal behaviour, its own small-screen story, its own
+contrast measurements — built to set a field the app already has a screen for.
+That is a large amount of new surface bought with the one accent this app has
+decided not to spend, and it would leave two places to change a date that must
+never disagree.
+
+**What is wrong is not the destination; it is where the caret lands.** The
+form autofocuses `Title` (`TodoForm.tsx`), so a user who asked for a date
+arrives looking at a text field holding words they did not come to change —
+which is exactly the "backwards" the tester reported, and it is one line to
+fix. **When the modal is opened from `Pick a date…`, focus goes to
+`Due date`.** The surface is then bigger than expected but open *on* the thing
+that was asked for, which reads as the app taking the request seriously rather
+than ignoring it. Opened from the row's `Edit` button it still focuses
+`Title`, unchanged.
+
+**No copy change, and the wording was the first thing tried.** Every honest
+rename either lied about the destination or lost the intent: `Edit…` drops
+the date the user came for, `Edit due date…` and `Another date…` promise the
+same date-only surface `Pick a date…` already promises, and anything naming
+the modal (`Pick a date in the editor…`) is a sentence in an option list where
+the other four items are two words. A menu item cannot carry a caveat about
+its own destination; landing on the right field says it in one frame and costs
+nothing to read.
 
 **The reschedule's Undo restores the value the row held before the press**,
 read off the row at the moment of the press and never recomputed. That is the

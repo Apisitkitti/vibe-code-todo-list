@@ -240,3 +240,26 @@ export const LIST_CONTAINER = "flex flex-col gap-1.5 p-2";
  * skeleton is replaced by the real list.
  */
 export const PAGE_HEADING_ROW = "flex items-baseline justify-between gap-4";
+
+/**
+ * The heading row **and** the dated line under it, as one block (§7.19).
+ *
+ * `Your todos` and `Wednesday, 20 August · 3 due today · 1 overdue` are one
+ * statement — what this page is, and what day it is — but they were two direct
+ * children of `main`, so §2.2's `gap-6` put 24px between them: the same
+ * distance as between the quick-add bar and the Card. The page read as four
+ * peers rather than as a titled block followed by three sections. `gap-1` (4px)
+ * inside, and `main`'s `gap-6` then separates the whole block from the bar.
+ *
+ * Here rather than inline for the §4.8 reason `LIST_CONTAINER` and
+ * `PAGE_HEADING_ROW` are: `loading.tsx` renders the same two elements, so a
+ * wrapper applied in one and forgotten in the other moves the heading when the
+ * route settles — which is the shift §4.8 exists to prevent, and which no
+ * amount of care in one file can rule out.
+ *
+ * `error.tsx` does **not** take it, and that is not an oversight: it renders an
+ * `Alert` and a retry button with no heading and no dated line, so there is no
+ * block to wrap. It shares `TODOS_PAGE_SHELL` with the other two, which is the
+ * part all three genuinely have in common.
+ */
+export const PAGE_HEADING_BLOCK = "flex flex-col gap-1";
