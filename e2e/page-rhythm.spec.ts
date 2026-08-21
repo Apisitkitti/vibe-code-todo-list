@@ -32,6 +32,31 @@ import { expect, test } from "./support/fixtures";
  * The rendered gap is read from the boxes rather than from the class string.
  * A `gap-6` on a flex column that some child has escaped with a margin still
  * reads `gap-6` in the DOM and 32px on screen.
+ *
+ * ## The header above this shell measures 67px, and it is not a defect
+ *
+ * Written down here because it is the first surprise anyone measuring the top
+ * of this page meets, QA flagged it as unexplained, and it costs a re-measure
+ * every time. `TodosHeader`'s inner bar names `h-14` — 56px — and the `<header>`
+ * around it measures 67. The 11 is fully accounted for:
+ *
+ * | Source | px |
+ * |---|---|
+ * | The inner bar's own `h-14` | 56 |
+ * | HeroUI's `.header` base class: `pt-1.5 pb-1` (`node_modules/@heroui/styles/dist/components/header.css`) | 10 |
+ * | `TodosHeader`'s `border-b` | 1 |
+ * | **Total** | **67** |
+ *
+ * So the inner bar is exactly the height it says it is, and the element around
+ * it is carrying padding from a library class nobody wrote. Nothing here
+ * asserts it: `TodosHeader.tsx` is outside `<main>` and outside this file's
+ * subject, and pinning another component's height from a rhythm spec would be
+ * claiming ownership of a number this file has no argument about.
+ *
+ * Worth knowing for whoever does own it: the same `.header` class also applies
+ * `px-2 text-xs font-medium text-muted`, all four of which `TodosHeader`'s
+ * inner bar happens to override or not inherit. The padding is the one that
+ * got through.
  */
 
 /** §2.2's section step, in px, and the tolerance sub-pixel layout needs. */
