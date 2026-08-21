@@ -7,12 +7,12 @@ import {
   Dropdown,
   Header,
   ToggleButton,
-  toast,
   useIsHydrated,
   useTheme,
 } from "@heroui/react";
 import { useRouter } from "next/navigation";
 
+import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { ICON_BUTTON_SIZING } from "@/lib/styles";
 import { signOutCurrentUser } from "@/service/auth.service";

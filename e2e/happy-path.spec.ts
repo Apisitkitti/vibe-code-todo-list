@@ -1,6 +1,6 @@
 import {
   DELETE_CONFIRM_HEADING,
-  EDIT_MODAL_HEADING,
+  editModalHeading,
   PAGE_HEADING,
   SIGN_IN_HEADING,
   ACCOUNT_MENU_LABEL,
@@ -65,7 +65,9 @@ test.describe("happy path", () => {
 
     // ── Edit ─────────────────────────────────────────────────────────────────
     await todos.openEdit(TODO_TITLE);
-    await expect(page.getByRole("heading", { name: EDIT_MODAL_HEADING })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: editModalHeading(TODO_TITLE) }),
+    ).toBeVisible();
     await todos.submitEdit(EDITED_TITLE);
 
     await expect(todos.row(EDITED_TITLE)).toBeVisible();

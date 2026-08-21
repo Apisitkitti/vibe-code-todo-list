@@ -12,7 +12,11 @@ import {
   FormTextField,
 } from "@/components/ui";
 import { FORM_FIELD_STACK } from "@/lib/styles";
-import { PRIORITY_VALUES } from "@/lib/todo";
+import {
+  DEFAULT_FORM_FOCUS,
+  PRIORITY_VALUES,
+  type TodoFormFocus,
+} from "@/lib/todo";
 import {
   todoFormSchema,
   type TodoFieldErrors,
@@ -32,6 +36,11 @@ export interface TodoFormProps {
   /** Errors the server reported for a submission the client thought was valid. */
   serverFieldErrors?: TodoFieldErrors | null;
   isDisabled?: boolean;
+  /**
+   * Which field the caret lands on when the form mounts (`docs/DESIGN.md`
+   * §7.21). Defaults to `title`, which is every path but one.
+   */
+  autoFocusField?: TodoFormFocus;
   onValidSubmit: (values: TodoFormValues) => void;
 }
 
@@ -44,6 +53,7 @@ export const TodoForm = ({
   defaultValues,
   serverFieldErrors,
   isDisabled = false,
+  autoFocusField = DEFAULT_FORM_FOCUS,
   onValidSubmit,
 }: TodoFormProps) => {
   const {
@@ -87,7 +97,7 @@ export const TodoForm = ({
             onBlur={field.onBlur}
             isRequired
             isDisabled={isDisabled}
-            autoFocus
+            autoFocus={autoFocusField === "title"}
           />
         )}
       />
@@ -136,6 +146,7 @@ export const TodoForm = ({
             onChange={field.onChange}
             onBlur={field.onBlur}
             isDisabled={isDisabled}
+            autoFocus={autoFocusField === "dueAt"}
           />
         )}
       />

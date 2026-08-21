@@ -97,7 +97,19 @@ export const ADD_TODO_LABEL = "Add todo";
 export const SAVE_CHANGES_LABEL = "Save changes";
 export const TITLE_FIELD_LABEL = "Title";
 export const CREATE_MODAL_HEADING = "New todo";
-export const EDIT_MODAL_HEADING = "Edit todo";
+
+/**
+ * The edit dialog names its record (§7.5).
+ *
+ * Spelled out here for the untruncated case, which is every existing caller —
+ * the bound is 45 characters and these titles are short. **The truncation is
+ * deliberately not reproduced in this deck**: importing the app's own
+ * `truncateForAnnouncement` would make any assertion built on it agree with the
+ * code by construction, and could not catch a wrong bound. The long case is
+ * asserted against literal expected strings in
+ * `e2e/edit-dialog-name.spec.ts`.
+ */
+export const editModalHeading = (title: string) => `Edit “${title}”`;
 
 /** §7.6 — the delete confirm, the one mutation that still asks. */
 export const DELETE_CONFIRM_HEADING = "Delete this todo?";

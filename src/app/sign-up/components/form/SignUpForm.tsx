@@ -11,11 +11,11 @@ import {
   Link,
   Spinner,
   Typography,
-  toast,
 } from "@heroui/react";
 import { useRouter } from "next/navigation";
 import { Controller, useForm } from "react-hook-form";
 
+import { toast } from "@/lib/toast";
 import { FormTextField } from "@/components/ui";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { TODOS_PATH } from "@/lib/routes";
