@@ -7,13 +7,16 @@ import {
   Button,
   Card,
   Typography,
-  toast,
   useMediaQuery,
   useOverlayState,
 } from "@heroui/react";
 import { useFocusVisible } from "react-aria";
 
-import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
+import {
+  PAGE_HEADING,
+  QUICK_ADD_EXAMPLE,
+  TRY_AGAIN_LABEL,
+} from "@/app/todos/constants";
 import { useTodoList } from "@/app/todos/hooks/useTodoList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDueDate } from "@/lib/date";
@@ -30,7 +33,17 @@ import {
   undoTokenProps,
 } from "@/lib/rowFocus";
 import {
+  claimActionPress,
+  dismissActionToast,
+  showActionToast,
+  showSupersedingReceipt,
+  showYieldingReceipt,
+  toast,
+} from "@/lib/toast";
+import {
+  DEFAULT_FORM_FOCUS,
   toDueDateInputValue,
+  type TodoFormFocus,
   type TodoItemData,
   type TodoListFilters,
   type TodoView,
@@ -61,7 +74,11 @@ import { QuickAddBar } from "./QuickAddBar";
 import { TodoBoard } from "./TodoBoard";
 import { TodoBoardSkeleton } from "./TodoBoardSkeleton";
 import { TodoEmptyState } from "./TodoEmptyState";
-import { LABELLED_CONTROL_SIZING, PAGE_HEADING_ROW } from "@/lib/styles";
+import {
+  LABELLED_CONTROL_SIZING,
+  PAGE_HEADING_BLOCK,
+  PAGE_HEADING_ROW,
+} from "@/lib/styles";
 
 import { useTodosUrlSync } from "@/app/todos/hooks/useTodosUrlSync";
 
@@ -121,13 +138,32 @@ const BOARD_MEDIA_QUERY = "(min-width: 1024px) and (pointer: fine)";
  * that told them Undo was there. Both the designer and the Senior called it
  * too short before anyone was looking for it.
  *
- * It is also the margin that keeps the toast usable at all: the first ~400ms
- * of an action toast is inert while HeroUI's view transition owns hit-testing
- * (`docs/DESIGN.md` §4.10). Shortening this window without taking the
- * `wrapUpdate` escape hatch would eat into a control that is already dead on
- * arrival.
+ * It used to be the margin that kept the toast usable at all — the first
+ * ~400ms of an action toast was inert while HeroUI's view transition owned
+ * hit-testing, and a replaced toast's Undo was dead for ~740ms
+ * (`docs/DESIGN.md` §4.10, measured in `e2e/toast-dead-window.spec.ts`).
+ * **That is no longer true**: the queue in
+ * `src/lib/toast.ts` takes §4.10's `wrapUpdate` escape hatch, and the measured
+ * dead window on both paths is now 0ms. The 12s stands on its own argument
+ * about reading time, which was always the better one.
  */
 const UNDO_WINDOW_MS = 12_000;
+
+/**
+ * How long `Todo “{title}” added — hidden by your filters` stays up
+ * (`docs/DESIGN.md` §7.17).
+ *
+ * **Its own 12s, not borrowed from `UNDO_WINDOW_MS`**, and the deck says so
+ * explicitly. It is the longer of the two receipts because it is the longer
+ * sentence and there is nothing on screen to re-read it from — the row it
+ * describes is the one the filter swallowed. Tying it to the Undo window would
+ * make a change to how long a reversal is offered silently change how long the
+ * only account of an invisible write is readable.
+ *
+ * The visible receipt takes no constant at all: §7.17 gives it the queue's own
+ * default, so it is left as the default rather than restated here.
+ */
+const HIDDEN_RECEIPT_WINDOW_MS = 12_000;
 
 /**
  * The empty state's call to action (`docs/DESIGN.md` §7.18). It no longer
@@ -135,6 +171,34 @@ const UNDO_WINDOW_MS = 12_000;
  * capture path, so the label describes that rather than a dialog.
  */
 const ADD_TODO_LABEL = "Add a todo";
+
+/**
+ * The one place the quick-add vocabulary is taught (`docs/DESIGN.md` §7.18,
+ * "Empty state teaching line"; §7.7 for which state may carry it).
+ *
+ * The parser is the one distinctive thing this product does, and until now it
+ * was taught only in a placeholder that disappears on the first keystroke — so
+ * the people who most need it are the ones who never finish reading it. A
+ * tester reported it verbatim: *"I have no idea what 'high' means. Is that the
+ * priority? Is that part of the syntax? Nobody told me, and I didn't figure it
+ * out."*
+ *
+ * **The wording is the copy deck's, not this file's.** §7.18 already carried
+ * the string; it is reproduced here rather than improvised, which is the rule
+ * for every other string in this screen.
+ *
+ * `QUICK_ADD_EXAMPLE` is interpolated because the bar's placeholder shows the
+ * same example and the two must not teach one parser two vocabularies. **Only
+ * the example is shared, and the rest of this sentence is not
+ * example-agnostic**: `pay rent`, `Friday` and `High` are that example's own
+ * reading spelled out, so changing the constant means rewriting the deck entry
+ * and this line with it. Said plainly here because the interpolation otherwise
+ * reads like a promise that it adapts.
+ *
+ * Only the never-used branch of `resolveEmptyState` takes it — see the note on
+ * `TodoEmptyState`'s `hint` prop, and §7.7, for why `No matches` must not.
+ */
+const QUICK_ADD_SYNTAX_HINT = `A day and a priority at the end are read — “${QUICK_ADD_EXAMPLE}” becomes “pay rent”, due Friday, High priority.`;
 
 /**
  * Failure fallbacks from the copy deck (`docs/DESIGN.md` §7.9, §7.13, §7.15),
@@ -151,13 +215,17 @@ const UNDO_LABEL = "Undo";
 /**
  * What a screen reader announces for an Undo (`docs/DESIGN.md` §7.13).
  *
- * The visible word is `Undo` on every one of them, and `UNDO_WINDOW_MS` is 12s
- * precisely so several stand at once — so a sighted user tabbing forward reads
- * which toast they are in, and a screen-reader user hears "Undo, button" three
- * times with nothing to tell a completion-revert from a `DELETE`. QA raised
- * this on the deferred `Tab` ×2 hazard (`docs/QA-REPORT.md` §8): the two
- * presses are the same for everyone, but only some users can see what they
- * land on.
+ * The visible word is `Undo`, and the name is what tells a screen-reader user
+ * which reversal it is. QA raised this against a *stack* of them
+ * (`docs/QA-REPORT.md` §8), which the cap has since removed: at most one
+ * action toast stands at a time (`src/lib/toast.ts`).
+ *
+ * **The name outlived the stack it was written for**, and deliberately. A lone
+ * Undo is still reached by name — by the focus rescue, by every `getByRole` in
+ * the suite, and by anyone navigating the toast region rather than looking at
+ * it — and the toast it belongs to is still one of several on screen, since
+ * receipts are outside the cap. "Undo, button" beside two `added` receipts
+ * says nothing about what it would put back.
  *
  * The subject is the toast's own title rather than a second wording invented
  * here — `Todo “x” added`, `Todo “x” marked complete` — so the name says what
@@ -188,6 +256,8 @@ interface RescheduleOutcome {
 interface EmptyStateCopy {
   heading: string;
   body: string;
+  /** Set by the never-used branch alone — see `resolveEmptyState`. */
+  hint?: string;
   actionLabel?: string;
   onAction?: () => void;
 }
@@ -227,6 +297,12 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     readLandedLoads,
   } = useTodoList(filters);
   const [editingTodo, setEditingTodo] = useState<TodoItemData | null>(null);
+  /**
+   * Which field the editor opens on. Reset by every opener, so a `Pick a
+   * date…` never leaves `dueAt` behind for the next plain `Edit` — the modal
+   * stays mounted between openings, so nothing else would clear it.
+   */
+  const [editFocus, setEditFocus] = useState<TodoFormFocus>(DEFAULT_FORM_FOCUS);
   const [pendingDelete, setPendingDelete] = useState<TodoItemData | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   /**
@@ -286,32 +362,6 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
   const { status, priority, query } = filters;
 
   /**
-   * One owner for every Undo toast, keyed by todo id.
-   *
-   * An Undo toast stays on screen for four seconds after it has been pressed
-   * unless something closes it, and an armed Undo describes a state the todo
-   * may no longer be in. Both problems are the same problem: a toast outliving
-   * the write it belongs to (review M-1, M-2).
-   *
-   * A toggle and a delete dismiss the row's outstanding Undo before they
-   * start. A save cannot — it runs inside the modal — so its dismissal happens
-   * in `handleSaved` once the write resolves, which leaves the older Undo
-   * armed for the length of that round trip. Unreachable today only because
-   * the modal's backdrop covers the toast region and traps focus; a top-placed
-   * toast or a non-modal editor would expose it (review r-2).
-   *
-   * **`added` receipts are deliberately not in here** (`docs/DESIGN.md`
-   * §7.15). Everything this map protects is a property of an *armed* toast:
-   * that it can still be pressed, and that what it would do describes a state
-   * the row has since left. A receipt with no action has neither property, so
-   * registering one would buy no protection and would keep the cost — two
-   * toasts alive under one todo id while HeroUI's serialized view transition
-   * works through the close and the add, which is the frame window DEF-25 and
-   * DEF-26 both lived in. The receipt now simply expires on its own.
-   */
-  const undoToastKeys = useRef(new Map<string, string>());
-
-  /**
    * The outstanding `More options` handoff: what tells the quick-add bar
    * whether the modal it opened saved or was backed out of (QA DEF-23).
    *
@@ -350,40 +400,71 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
   const outstandingCreate = useRef<Promise<boolean> | null>(null);
 
   /**
-   * Returns whether it dismissed anything, which is what makes it usable as a
-   * re-entrancy guard: reading and clearing the key is atomic, so only the
-   * first of two fast presses sees a key and runs the undo (review r-1).
+   * Disarms this row's outstanding Undo, if the standing one is its.
+   *
+   * **The bookkeeping moved to `src/lib/toast.ts`** and with it the rule: at
+   * most one action-bearing toast stands at a time, whatever record it belongs
+   * to. What used to be a `Map<todoId, key>` here is a single slot there,
+   * because there is now only ever one thing in it. Everything the map
+   * protected is still protected — an armed Undo never outlives the write it
+   * describes (review M-1, M-2) — and the re-entrancy guard is stronger, since
+   * the press is claimed by the toast's own token rather than by its row.
+   *
+   * `added` receipts are still deliberately outside all of this
+   * (`docs/DESIGN.md` §7.15, §7.17): they carry no action, so neither thing
+   * the slot protects applies to them, and the `hidden by your filters`
+   * sentence is the only account a swallowed row ever gets.
    */
-  const dismissUndo = (todoId: string) => {
-    const key = undoToastKeys.current.get(todoId);
-
-    if (!key) return false;
-
-    toast.close(key);
-    undoToastKeys.current.delete(todoId);
-
-    return true;
-  };
+  const dismissUndo = (todoId: string) => dismissActionToast(todoId);
 
   /**
-   * A toast that reports and stops — no action, no token, no bookkeeping.
+   * Reports a create, and decides which of the two receipts it is
+   * (`docs/DESIGN.md` §7.17, ruled by §7.13.1).
    *
-   * This is what an `added` toast is now (`docs/DESIGN.md` §7.15). It is a
-   * separate function rather than a flag on `showUndoableSuccess` because
-   * almost nothing that helper does applies: there is no action to mint a
-   * token for, nothing for the focus rescue to wait on, and no armed control
-   * that a later write has to disarm. Threading a `withUndo: false` through it
-   * would leave every one of those branches to read past.
+   * Both are receipts — no action, no token, no bookkeeping (§7.15). They are
+   * **not** the same object, and the difference is whether the row is on
+   * screen:
    *
-   * **The 12s life is kept**, and that is the one thing it does borrow. The
-   * decision was to remove the action, not the receipt: a create's toast that
-   * suddenly outlived — or died before — the Undo toasts stacked beside it
-   * would be a second change nobody asked for, and §7.17's `hidden by your
-   * filters` sentence is the only account the user ever gets of a row the
-   * filter swallowed, so it is the last one that should get shorter.
+   * | receipt | life | against a standing Undo |
+   * |---|---|---|
+   * | `added` | 4s (the queue's default) | yields — not raised at all |
+   * | `added — hidden by your filters` | 12s | takes the slot, closing it |
+   *
+   * The exemption receipts used to have was granted to both by inheritance
+   * rather than by argument. The first confirms something the list has already
+   * confirmed, where the user is looking; the second describes a row nothing on
+   * screen mentions. Where a sentence and a control compete for §4.10.1's one
+   * operable slot, the sentence wins if it cannot be re-derived and the control
+   * can.
+   *
+   * `todoMatchesFilters` only ever claims "hidden" when it is certain, and that
+   * asymmetry now decides more than the wording: being wrong towards "visible"
+   * costs a missing sentence, being wrong towards "hidden" costs a sentence
+   * that is a lie *and* an Undo the user still had every right to.
    */
-  const showReceipt = (message: string) => {
-    toast.success(message, { timeout: UNDO_WINDOW_MS });
+  /*
+    A create can land outside the list the user is looking at, and the row then
+    simply never appears. Inserting it anyway is not an option — a filtered list
+    must match what a reload of the same URL would show at every moment
+    (`docs/PRD.md` US-10, the rule the toggle already follows) — and clearing
+    the filter on their behalf would throw away something they asked for. So the
+    receipt says it.
+  */
+  const reportCreate = (saved: TodoItemData) => {
+    if (todoMatchesFilters(saved, filters)) {
+      /*
+        No explicit timeout: §7.17's 4s is the queue's own default, and it is
+        left as the default rather than restated so the two cannot drift.
+      */
+      showYieldingReceipt(`Todo “${saved.title}” added`);
+
+      return;
+    }
+
+    showSupersedingReceipt(
+      `Todo “${saved.title}” added — hidden by your filters`,
+      HIDDEN_RECEIPT_WINDOW_MS,
+    );
   };
 
   /**
@@ -391,7 +472,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
    *
    * Two callers remain, and they are the two reversals that put a value back:
    * a toggle (§7.13) and an edit (§7.15). A create reports through
-   * `showReceipt` instead — its Undo was a `DELETE`, which is the hazard
+   * `reportCreate` instead — its Undo was a `DELETE`, which is the hazard
    * §6.8 records and this change closes.
    *
    * The token is what the focus rescue waits for (`src/lib/rowFocus.ts`). It
@@ -408,11 +489,19 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     message: string,
     undo: () => void,
   ) => {
-    dismissUndo(todoId);
-
     const token = nextUndoToken();
 
-    const key = toast.success(message, {
+    /*
+      No `dismissUndo` first any more: `showActionToast` closes whatever action
+      toast was standing, for any record, which is the cap. The old call
+      dismissed only this row's, and under a single slot that would have been
+      the same thing on the common path and wrong on the one that matters —
+      an Undo for a *different* row left armed beside a newer one.
+    */
+    showActionToast({
+      todoId,
+      token,
+      message,
       timeout: UNDO_WINDOW_MS,
       actionProps: {
         children: UNDO_LABEL,
@@ -422,21 +511,30 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
           `aria-label` overrides the child text for assistive technology and
           leaves the button reading `Undo` on screen, which is what the copy
           deck asks for in both places (§7.13).
+
+          **Kept under the cap**, though the cap removes the stack it was
+          written for. A single Undo still has to say what it reverses to
+          anyone who reaches it by name rather than by looking at the toast
+          above it, and the name is what the focus rescue and every
+          `getByRole` in the suite ask for. It stops being the thing holding
+          the feature up; it does not stop being right.
         */
         "aria-label": undoActionLabel(message),
         ...undoTokenProps(token),
         onPress: () => {
-          // Closing the toast does not remove it immediately — HeroUI defers
-          // the unmount through a view transition, which can outlast a double
-          // click. The key, not the toast, is what makes this fire once.
-          if (!dismissUndo(todoId)) return;
+          /*
+            Claimed by this toast's own token. Closing a toast does not remove
+            it — the removal is deferred — so the press has to name which
+            toast it came from rather than which row: after a repeat write two
+            action buttons for one todo are briefly in the DOM, and only one
+            of them is live.
+          */
+          if (!claimActionPress(token)) return;
 
           undo();
         },
       },
     });
-
-    undoToastKeys.current.set(todoId, key);
 
     return token;
   };
@@ -480,6 +578,9 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     setCreateDraft(draft);
     setCreateSeq((seq) => seq + 1);
     setEditingTodo(null);
+    // A create always opens on `Title`; without this it would inherit whatever
+    // the last `Pick a date…` set, since the modal is never unmounted.
+    setEditFocus(DEFAULT_FORM_FOCUS);
     formState.open();
 
     /*
@@ -507,8 +608,17 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     return answered;
   };
 
-  const openEdit = (todo: TodoItemData) => {
+  /**
+   * Opens the editor on a record, and on the field the press asked for.
+   *
+   * `focus` is carried from the control rather than worked out here, because
+   * here is where it cannot be worked out: `Edit` and `Pick a date…` hand over
+   * the same todo, and the difference between them is the user's intent, which
+   * is not a property of the row (`docs/DESIGN.md` §7.21).
+   */
+  const openEdit = (todo: TodoItemData, focus: TodoFormFocus = DEFAULT_FORM_FOCUS) => {
     setEditingTodo(todo);
+    setEditFocus(focus);
     formState.open();
   };
 
@@ -534,31 +644,6 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
    * raised two edits ago (review M-2).
    */
   /**
-   * The receipt for a create, and the one sentence that stops a filtered list
-   * from looking like a failure.
-   *
-   * A create can land outside the list the user is looking at, and the row
-   * then simply never appears. Inserting it anyway is not an option — a
-   * filtered list must match what a reload of the same URL would show at every
-   * moment (`docs/PRD.md` US-10, the rule the toggle already follows) — and
-   * clearing the filter on their behalf would throw away something they asked
-   * for. So the receipt says it, and keeps its Undo.
-   *
-   * `todoMatchesFilters` only ever claims "hidden" when it is certain, and
-   * that asymmetry is deliberate: being wrong in this direction costs a
-   * missing sentence, being wrong in the other costs a sentence that is a lie.
-   *
-   * Both readings are receipts and neither carries an Undo (§7.15). The
-   * hidden one is the reason the sentence matters more here than anywhere
-   * else: it is the only evidence the user gets that the write happened at
-   * all, since the row it describes is not on screen to speak for itself.
-   */
-  const createdMessage = (saved: TodoItemData) =>
-    todoMatchesFilters(saved, filters)
-      ? `Todo “${saved.title}” added`
-      : `Todo “${saved.title}” added — hidden by your filters`;
-
-  /**
    * The bar's create. **No skeleton** (review MA-3): nothing closed over the
    * list, the toast is already on screen saying what happened, and blanking
    * every row to report a change to one of them is the disproportion the
@@ -579,7 +664,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
   const handleQuickAdded = (saved: TodoItemData) => {
     reloadSilently();
 
-    showReceipt(createdMessage(saved));
+    reportCreate(saved);
   };
 
   /**
@@ -622,7 +707,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
       return;
     }
 
-    showReceipt(createdMessage(saved));
+    reportCreate(saved);
   };
 
   /**
@@ -988,7 +1073,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
     }
   };
 
-  /** Reports the restored date with the same §7.19 toast, and arms no further Undo. */
+  /** Reports the restored date with the same §7.21 toast, and arms no further Undo. */
   const undoReschedule = async (
     todo: TodoItemData,
     previousDueAt: string | null,
@@ -1146,6 +1231,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
       return {
         heading: "Nothing here yet",
         body: "Add your first todo and it will show up here.",
+        hint: QUICK_ADD_SYNTAX_HINT,
         actionLabel: ADD_TODO_LABEL,
         // Signposts the bar rather than opening a second way to do the same
         // thing (`docs/DESIGN.md` §7.18).
@@ -1242,6 +1328,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
         <TodoEmptyState
           heading={emptyState.heading}
           body={emptyState.body}
+          hint={emptyState.hint}
           actionLabel={emptyState.actionLabel}
           onAction={emptyState.onAction}
         />
@@ -1349,23 +1436,36 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
 
   return (
     <>
-      <div className={PAGE_HEADING_ROW}>
-        <Typography.Heading level={1}>{PAGE_HEADING}</Typography.Heading>
-        {hasTodos ? (
-          <Typography type="body-sm" color="muted">
-            {`${result.completedCount} of ${result.totalCount} done`}
-          </Typography>
-        ) : null}
-      </div>
-
       {/*
-        US-12. One plain-text line, below the app bar and above the list,
-        reporting the viewer's today and the sizes of the two sections that
-        answer "what now?". It is not gated on `hasTodos`: the date alone is
-        the specified state for an empty list and for a list still loading, and
-        a line that came and went would be a fourth thing moving on the page.
+        The heading and the dated line are one block, not two of `main`'s
+        sections (§7.19). They are one statement — what this page is and what
+        day it is — and as peers under `main`'s `gap-6` they sat 24px apart,
+        the same distance as the quick-add bar from the Card. `gap-1` inside;
+        `main`'s `gap-6` then separates the block from the bar.
+
+        `loading.tsx` renders the same two elements and takes the same
+        constant, or the heading moves when the route settles (§4.8).
       */}
-      <TodoListHeaderLine groups={groups} />
+      <div className={PAGE_HEADING_BLOCK}>
+        <div className={PAGE_HEADING_ROW}>
+          <Typography.Heading level={1}>{PAGE_HEADING}</Typography.Heading>
+          {hasTodos ? (
+            <Typography type="body-sm" color="muted">
+              {`${result.completedCount} of ${result.totalCount} done`}
+            </Typography>
+          ) : null}
+        </div>
+
+        {/*
+          US-12. One plain-text line, below the app bar and above the list,
+          reporting the viewer's today and the sizes of the two sections that
+          answer "what now?". It is not gated on `hasTodos`: the date alone is
+          the specified state for an empty list and for a list still loading,
+          and a line that came and went would be a fourth thing moving on the
+          page.
+        */}
+        <TodoListHeaderLine groups={groups} />
+      </div>
 
       {/*
         Never gated on `hasTodos`, unlike the filter bar below it and unlike
@@ -1380,6 +1480,12 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
       />
 
       {/*
+        The view toggle rides at the end of the filter row rather than on a
+        shell band of its own (§4.11, and `TodoFilters` for what that buys). It
+        is passed in rather than owned there because the view is a presentation
+        choice and the rest of that row is the query the API is asked — the same
+        split `page.tsx` makes when it reads the two apart.
+
         Not rendered below `lg`, where the board would not render even if it
         were chosen (`BOARD_MEDIA_QUERY`). A control that changes nothing is
         worse than an absent one: it would report `Board` as selected while the
@@ -1394,28 +1500,33 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
         filter's one. That was a real ambiguity and not only a test's problem —
         the mobile document was carrying a second, inert radiogroup named
         `Choose a view`, which is exactly the sort of thing that ends up
-        announced to somebody.
+        announced to somebody. `e2e/board.spec.ts` asserts the absence at the
+        DOM level for exactly that reason, so this must stay a render decision
+        even now that the toggle sits inside a row that is itself conditional.
 
         Safe against hydration because `isWideEnoughForBoard` is the same
         two-pass reading the board itself uses: false on the server and on the
         first client render, so the markup agrees before the layout effect
         flips it.
 
-        Gated on `hasTodos` like the filter bar beside it, and for the same
-        reason — there is nothing to look at two ways yet.
+        The `hasTodos` gate is now the filter row's own, which is where it
+        always pointed: both controls were gated on it separately and for the
+        same reason — there is nothing to look at two ways yet.
       */}
-      {hasTodos && isWideEnoughForBoard ? (
-        <div className="flex justify-end">
-          <ViewToggle view={view} onSelectView={(next) => urlSync.push({ view: next })} />
-        </div>
-      ) : null}
-
       {hasTodos ? (
         <TodoFilters
           filters={filters}
           query={urlSync.query}
           onQueryChange={urlSync.setQuery}
           onFilterChange={urlSync.push}
+          viewToggle={
+            isWideEnoughForBoard ? (
+              <ViewToggle
+                view={view}
+                onSelectView={(next) => urlSync.push({ view: next })}
+              />
+            ) : undefined
+          }
         />
       ) : null}
 
@@ -1430,6 +1541,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
         state={formState}
         todo={editingTodo}
         draft={createDraft}
+        autoFocusField={editFocus}
         onSaved={handleSaved}
       />
 

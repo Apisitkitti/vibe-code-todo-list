@@ -6,15 +6,20 @@ import {
   Button,
   Modal,
   Spinner,
-  toast,
   useMediaQuery,
   type UseOverlayStateReturn,
 } from "@heroui/react";
 
+import { toast } from "@/lib/toast";
 import { CANCEL_LABEL } from "@/app/todos/constants";
 import { getErrorMessage } from "@/lib/getErrorMessage";
 import { DIALOG_FOOTER_LAYOUT, FULL_WIDTH_ACTION_SIZING } from "@/lib/styles";
-import { toDueDateInputValue, type TodoItemData } from "@/lib/todo";
+import {
+  toDueDateInputValue,
+  truncateForAnnouncement,
+  type TodoFormFocus,
+  type TodoItemData,
+} from "@/lib/todo";
 import { createTodo, updateTodo } from "@/service/todo.service";
 
 import {
@@ -31,6 +36,38 @@ const DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
 // Shown on the submit button while the write is in flight.
 const CREATE_PENDING_LABEL = "Adding…";
 const UPDATE_PENDING_LABEL = "Saving…";
+
+/**
+ * The dialog's name (`docs/DESIGN.md` §7.5).
+ *
+ * **The edit dialog names the record, and it did not use to.** `Edit todo`
+ * named the surface and nothing else; which record was spoken on open only by
+ * accident, because focus landed on `Title` and a screen reader read the
+ * focused field's value. §7.21's `Pick a date…` ruling moves that focus to
+ * `Due date` and takes the accident away — so a user who opened the editor
+ * from a row would hear `Edit todo, dialog. Due date…` and never learn which
+ * todo they were in. The name carries the title instead of depending on a side
+ * effect of focus placement.
+ *
+ * **The string is truncated in the DOM, not only in CSS**, and that is what
+ * makes one value satisfy both of §7.5's bounds at once. A dialog name is read
+ * in full, on open, before the user has been told it is a dialog and with no
+ * way to skip it — and titles here run to `TITLE_MAX_LENGTH`. Truncating only
+ * with CSS would leave the accessible name carrying all 200 characters, since
+ * `text-overflow` clips pixels and not the accessibility tree. Cutting the text
+ * itself bounds the announcement, and `truncate` then keeps the visible
+ * heading to one line if the cut string is still wider than the header band.
+ *
+ * The full title is never lost: it is in the `Title` field two lines below,
+ * which is the same relationship §4.4's truncated row has with its own title.
+ *
+ * Create stays `New todo` — there is no record to name yet, and naming the
+ * draft would present it as one.
+ */
+const CREATE_HEADING = "New todo";
+
+const editHeading = (title: string) =>
+  `Edit “${truncateForAnnouncement(title)}”`;
 
 const toFormValues = (
   todo: TodoItemData | null,
@@ -57,6 +94,12 @@ export interface TodoFormModalProps {
    */
   draft?: TodoFormValues | null;
   /**
+   * Which field the form opens on. Passed straight through — the modal has no
+   * opinion about it, because the opinion belongs to whatever the user
+   * pressed to get here (`docs/DESIGN.md` §7.21).
+   */
+  autoFocusField?: TodoFormFocus;
+  /**
    * Hands the write's result to the list, which reloads and raises the success
    * toast. `previous` is the record's state when the form opened, or `null` on
    * a create — it is what an Undo restores.
@@ -73,6 +116,7 @@ export const TodoFormModal = ({
   state,
   todo,
   draft = null,
+  autoFocusField,
   onSaved,
 }: TodoFormModalProps) => {
   const isDesktop = useMediaQuery(DESKTOP_MEDIA_QUERY);
@@ -198,7 +242,9 @@ export const TodoFormModal = ({
       >
         <Modal.Dialog>
           <Modal.Header>
-            <Modal.Heading>{isEdit ? "Edit todo" : "New todo"}</Modal.Heading>
+            <Modal.Heading className="truncate">
+              {isEdit ? editHeading(todo.title) : CREATE_HEADING}
+            </Modal.Heading>
             <Modal.CloseTrigger aria-label="Close" />
           </Modal.Header>
           <Modal.Body>
@@ -207,6 +253,7 @@ export const TodoFormModal = ({
               defaultValues={toFormValues(todo, draft)}
               serverFieldErrors={serverFieldErrors}
               isDisabled={isPending}
+              autoFocusField={autoFocusField}
               onValidSubmit={(values) => {
                 void handleValidSubmit(values);
               }}

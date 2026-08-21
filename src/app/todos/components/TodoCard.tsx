@@ -6,7 +6,7 @@ import { toggleTargetProps } from "@/lib/rowFocus";
 import { ICON_BUTTON_SIZING } from "@/lib/styles";
 import type { TodoItemData } from "@/lib/todo";
 
-import { PriorityChip } from "./PriorityChip";
+import { PriorityChip, priorityDrawsChip } from "./PriorityChip";
 import { TodoActions } from "./TodoActions";
 import { TodoDueDate } from "./TodoDueDate";
 
@@ -20,9 +20,11 @@ import { TodoDueDate } from "./TodoDueDate";
  * everything a drag can do" a fact about the code rather than a claim in a
  * document (`docs/DESIGN.md` §8.8).
  *
- * Two lines instead of one, because a column is ~200px wide and the row's
- * horizontal arrangement wraps into an unreadable stack at that width: title
- * and checkbox on the first line, metadata and actions on the second.
+ * Stacked instead of arranged along one line, because a column is ~209px wide
+ * and the row's horizontal arrangement wraps into an unreadable stack at that
+ * width: checkbox and title, then the metadata when there is any, then the
+ * actions. Three explicit lines rather than two and a `flex-wrap` — see the
+ * note on the metadata line below for what that bought and what it cost.
  *
  * **The actions are always visible here**, where the row hides them until hover
  * or focus at `lg:`. The row can afford that because it is one of many
@@ -91,6 +93,38 @@ export const TodoCard = ({
     onDragStart(todo);
   };
 
+  /*
+    The metadata, as one fragment — identical to `TodoRow`'s, for the reason the
+    docblock above gives: a card and a row are the same object in two shapes. A
+    completed card goes quiet exactly as a completed row does (§8.5, and
+    `todoGroups`' "a completed todo is done, so its date has nothing left to
+    say"); the note marker stays either way.
+  */
+  const metadata = (
+    <>
+      {todo.completed ? null : (
+        <>
+          <PriorityChip priority={todo.priority} />
+          {todo.dueAt ? <TodoDueDate dueAt={todo.dueAt} /> : null}
+        </>
+      )}
+      {todo.note ? (
+        <>
+          <span aria-hidden="true" className="text-muted">
+            ✎
+          </span>
+          <span className="sr-only">Has a note</span>
+        </>
+      ) : null}
+    </>
+  );
+
+  /** The same predicate `TodoRow` applies, on the same three conditions. */
+  const hasVisibleMetadata =
+    (!todo.completed &&
+      (priorityDrawsChip(todo.priority) || Boolean(todo.dueAt))) ||
+    Boolean(todo.note);
+
   return (
     <li
       aria-busy={isPending}
@@ -119,6 +153,30 @@ export const TodoCard = ({
         isVanishing ? "pointer-events-none" : ""
       }`}
     >
+      {/*
+        `items-start`, and the checkbox is centred on the title's **first
+        line** rather than on the title.
+
+        A card and a row are the same object in two shapes, and this was the
+        clearest place they did not read as one: the row's control and title
+        share a centre line and measure 0.00 apart, and every card sat 6.00px
+        low. The row is not what changes — its centring is correct, and the rule
+        is that text baseline-aligns to text while a box centre-aligns to text.
+        A checkbox is a box.
+
+        But `items-center` here would be the wrong reading of that rule. A row's
+        title truncates and is always one line, so "the title" and "the title's
+        first line" are the same thing; a card's wraps to three, and centring
+        the control against the whole block would put it 24px low on a
+        three-line card — worse than the fault it replaced.
+
+        So the wrapper below is exactly one line tall (`h-6`, the title's
+        `body-sm` `leading-6`) and the 36px tap target is centred inside it,
+        overflowing 6px into the card's own `py-3`. The target keeps §6.3's
+        floor at full size; what it stops doing is setting the height of a block
+        it is only a marker in. `e2e/card-row-parity.spec.ts` measures both the
+        one-line and the wrapped case, and the row alongside them.
+      */}
       <div className="flex items-start gap-2">
         {/*
           The anchor `restoreToggleFocus` finds this card's checkbox by, after a
@@ -126,7 +184,10 @@ export const TodoCard = ({
           On a wrapper rather than on the control — `src/lib/rowFocus.ts` says
           why.
         */}
-        <span {...toggleTargetProps(todo.id)} className="shrink-0">
+        <span
+          {...toggleTargetProps(todo.id)}
+          className="flex h-6 shrink-0 items-center"
+        >
           <Checkbox
             isDisabled={isPending}
             isSelected={todo.completed}
@@ -167,32 +228,66 @@ export const TodoCard = ({
         </Typography>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        {/*
-          A completed card goes quiet, exactly as a completed row does — the
-          §8.5 argument and `todoGroups`' "a completed todo is done, so its date
-          has nothing left to say".
-        */}
-        {todo.completed ? null : (
-          <>
-            <PriorityChip priority={todo.priority} />
-            {todo.dueAt ? <TodoDueDate dueAt={todo.dueAt} /> : null}
-          </>
-        )}
-        {todo.note ? (
-          <>
-            <span aria-hidden="true" className="text-muted">
-              ✎
-            </span>
-            <span className="sr-only">Has a note</span>
-          </>
-        ) : null}
+      {/*
+        Two explicit lines, and **`flex-wrap` is not one of them**.
 
+        The metadata and the actions used to share a single `flex flex-wrap`
+        line, which meant the metadata got whatever `TodoActions` left over.
+        Measured at 1280×800 with five columns: the line is 183.20px,
+        `TodoActions` is a fixed 124.00 and §2.2's `gap-2` is 8 — so the
+        metadata's budget was **51.20px**. `Low` is 48.45 and fitted; `High` is
+        **52.16**, over by 0.95px, and 0.95px of overflow moved the whole action
+        cluster onto a line of its own and the card 28px taller. On a board of
+        otherwise identical cards, whether a card was two lines or three
+        depended on nothing the user can see except whether it said `High`.
+        `Medium` draws no chip, so the untriaged default was the only reason a
+        majority of cards cleared the budget at all
+        (`docs/decisions/2026-08-21-board-card-metadata-line.md`).
+
+        Now the height follows what the card carries, identically for every card
+        of the same content shape and at every column width. Measured, one-line
+        titles, before → after:
+
+        | the card carries | before | after |
+        |---|---|---|
+        | nothing (`Medium`, undated) | 94 | 94 |
+        | a `Low` chip | 94 | 122 |
+        | a `High` chip | 122 | 122 |
+        | a date, either chip | 126 | 126 |
+
+        One shape pays: a `Low`, undated card goes 94 → 122, and that cost is
+        the point rather than a regression — a card is a line taller because it
+        says something more, not because of which chip it drew. Nothing gets
+        shorter, which the deferral record listed as unmeasured and is the thing
+        that decides whether this trade is worth taking; 28px on one shape, to
+        stop a 28px step turning on 0.95px, is.
+
+        The 122/126 step is the date's own line box: `TodoDueDate` is `body-sm`
+        at `leading-6` where the chip is 20px, so a dated line is 4px taller
+        than a chipped one. That is the card carrying more, which is exactly
+        what the height is now allowed to mean.
+
+        The metadata line is rendered only when it has visible content, and the
+        `else` keeps the fragment without a box so `PriorityChip`'s `sr-only`
+        announcement survives — `TodoRow` carries the full argument.
+      */}
+      {hasVisibleMetadata ? (
+        <div className="flex items-center gap-2">{metadata}</div>
+      ) : (
+        metadata
+      )}
+
+      {/*
+        Always, and `justify-end` rather than `ml-auto` on the actions
+        themselves: on a line of its own there is nothing for an auto margin to
+        push against, so the alignment belongs to the line.
+      */}
+      <div className="flex justify-end">
         <TodoActions
           todo={todo}
           isPending={isPending}
           showTooltips={showTooltips}
-          className="ml-auto"
+          className=""
           onEdit={onEdit}
           onReschedule={onReschedule}
           onDelete={onDelete}

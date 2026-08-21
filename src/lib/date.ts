@@ -10,6 +10,20 @@ const OTHER_YEAR_FORMAT = "MMM D, YYYY";
 export interface DueDateDisplay {
   label: string;
   isOverdue: boolean;
+  /**
+   * Whether this is the viewer's today, reported rather than left to be read
+   * back off `label`.
+   *
+   * `TodoDueDate` draws today's date at `--foreground` where every other future
+   * date is `--muted` (`docs/DESIGN.md` §7.4), so it needs to know which day it
+   * is holding, and both of the other ways to find out are worse. Matching
+   * `label === "Today"` would re-derive the treatment from the copy, so a
+   * copy-deck edit would silently take the emphasis with it. Calling
+   * `dueDayOffset` again would ask "what day is it" twice, which is the thing
+   * §7.19 argues against on this exact question: two answers computed from one
+   * input at two moments can differ, and the moment here is midnight.
+   */
+  isToday: boolean;
 }
 
 /**
@@ -34,7 +48,7 @@ export interface DueDateDisplay {
  * `+7` has none of that: it is the same arithmetic as `Tomorrow`'s `+1` with a
  * different number, it lands on a weekday the user can name without being told,
  * and it never resolves to today. The menu shows the resolved date beside the
- * label (`docs/DESIGN.md` §7.19) so the reading is visible before the press
+ * label (`docs/DESIGN.md` §7.21) so the reading is visible before the press
  * rather than discoverable afterwards.
  */
 export const TODAY_DAY_OFFSET = 0;
@@ -45,7 +59,7 @@ export const NEXT_WEEK_DAY_OFFSET = 7;
 export interface RescheduleDay {
   /** `YYYY-MM-DD`, the wire format `PATCH /api/todos/[id]/due` takes. */
   dueAt: string;
-  /** The same day in the row's own words, e.g. `Aug 26` (`docs/DESIGN.md` §7.19). */
+  /** The same day in the row's own words, e.g. `Aug 26` (`docs/DESIGN.md` §7.21). */
   preview: string;
 }
 
@@ -123,20 +137,21 @@ export const formatDueDate = (iso: string, now: Date = new Date()): DueDateDispl
   const dayOffset = dueDayOffset(iso, now);
 
   if (dayOffset === null) {
-    return { label: "", isOverdue: false };
+    return { label: "", isOverdue: false, isToday: false };
   }
 
   const dueDay = toUtcDay(dayjs.utc(iso));
   const todayDay = toUtcDay(dayjs(now));
 
   const isOverdue = dayOffset < 0;
+  const isToday = dayOffset === 0;
 
-  if (dayOffset === 0) return { label: "Today", isOverdue };
-  if (dayOffset === 1) return { label: "Tomorrow", isOverdue };
-  if (dayOffset === -1) return { label: "Yesterday", isOverdue };
+  if (isToday) return { label: "Today", isOverdue, isToday };
+  if (dayOffset === 1) return { label: "Tomorrow", isOverdue, isToday };
+  if (dayOffset === -1) return { label: "Yesterday", isOverdue, isToday };
 
   const format =
     dueDay.year() === todayDay.year() ? SAME_YEAR_FORMAT : OTHER_YEAR_FORMAT;
 
-  return { label: dueDay.format(format), isOverdue };
+  return { label: dueDay.format(format), isOverdue, isToday };
 };

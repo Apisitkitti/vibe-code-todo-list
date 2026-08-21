@@ -5,7 +5,7 @@ import { Checkbox, Typography } from "@heroui/react";
 import { ICON_BUTTON_SIZING, ROW_TITLE_LAYOUT } from "@/lib/styles";
 import type { TodoItemData } from "@/lib/todo";
 
-import { PriorityChip } from "./PriorityChip";
+import { PriorityChip, priorityDrawsChip } from "./PriorityChip";
 import { TodoActions } from "./TodoActions";
 import { TodoDueDate } from "./TodoDueDate";
 
@@ -36,6 +36,61 @@ export const TodoRow = ({
   onReschedule,
   onDelete,
 }: TodoRowProps) => {
+  /*
+    Everything the metadata line can hold, as one fragment, so the two branches
+    below cannot drift into rendering different things.
+
+    A completed row goes quiet: no priority chip and no due date.
+    `src/lib/todoGroups.ts` already argues the date half — "a completed todo is
+    done, so its date has nothing left to say" — and this is the row finally
+    agreeing with it, instead of filing a finished task under `Completed` while
+    it announces `Aug 12`. The priority half is §8.5: once a todo is done its
+    priority is history and it is competing for attention with the active rows
+    above it.
+
+    §6.4 is unaffected. Completion is carried by the checkbox's `aria-checked`
+    and by `line-through` on the title, never by the chip or the date, so
+    nothing that carried meaning has been removed. The `✎` note marker stays — a
+    note is still there to read — and so do the actions.
+  */
+  const metadata = (
+    <>
+      {todo.completed ? null : (
+        <>
+          <PriorityChip priority={todo.priority} />
+          {todo.dueAt ? <TodoDueDate dueAt={todo.dueAt} /> : null}
+        </>
+      )}
+      {todo.note ? (
+        <>
+          <span aria-hidden="true" className="text-muted">
+            ✎
+          </span>
+          <span className="sr-only">Has a note</span>
+        </>
+      ) : null}
+    </>
+  );
+
+  /**
+   * Whether that fragment draws anything, which is what decides whether it gets
+   * a box of its own.
+   *
+   * Written from the same three conditions the fragment above branches on, in
+   * the same order and with the same truthiness — `dueAt` and `note` are
+   * checked for truth rather than for `!== null`, because an empty-string note
+   * renders nothing and would otherwise buy an empty line. The two must agree
+   * exactly: a `true` here with nothing to draw is the defect this replaces, and
+   * a `false` with something to draw would drop visible content.
+   *
+   * `priorityDrawsChip` rather than `priority !== "medium"`, so the level's own
+   * component stays the only file that knows which levels draw.
+   */
+  const hasVisibleMetadata =
+    (!todo.completed &&
+      (priorityDrawsChip(todo.priority) || Boolean(todo.dueAt))) ||
+    Boolean(todo.note);
+
   return (
     <li
       // `pointer-events-none` only stops a mouse. A keyboard user could hold
@@ -156,37 +211,33 @@ export const TodoRow = ({
         >
           {todo.title}
         </Typography>
-        <div className="flex shrink-0 items-center gap-2">
-          {/*
-            A completed row goes quiet: no priority chip and no due date.
-            `src/lib/todoGroups.ts` already argues the date half — "a completed
-            todo is done, so its date has nothing left to say" — and this is
-            the row finally agreeing with it, instead of filing a finished task
-            under `Completed` while it announces `Aug 12`. The priority half is
-            §8.5: once a todo is done its priority is history and it is
-            competing for attention with the active rows above it.
+        {/*
+          The metadata line gets a box **only when it has something to draw**,
+          and the branch is a layout fix rather than a tidy-up.
 
-            §6.4 is unaffected. Completion is carried by the checkbox's
-            `aria-checked` and by `line-through` on the title, never by the
-            chip or the date, so nothing that carried meaning has been removed.
-            The `✎` note marker stays — a note is still there to read — and so
-            do the actions.
-          */}
-          {todo.completed ? null : (
-            <>
-              <PriorityChip priority={todo.priority} />
-              {todo.dueAt ? <TodoDueDate dueAt={todo.dueAt} /> : null}
-            </>
-          )}
-          {todo.note ? (
-            <>
-              <span aria-hidden="true" className="text-muted">
-                ✎
-              </span>
-              <span className="sr-only">Has a note</span>
-            </>
-          ) : null}
-        </div>
+          Below `sm:` this column is a `flex-col gap-1`. A cluster rendered with
+          nothing in it is still a flex item — zero-height, but it takes the 4px
+          gap before it — so the `<li>`'s `items-center` centred the checkbox
+          against a block 4px taller than the title and the control sat
+          **2.00px** below it. At `sm:` and up the same empty box took a 12px
+          `gap-3` in a row the title is `flex-1` of, so it cost nothing visible
+          there; the fault was only ever the stacked half, which is why
+          `e2e/card-row-parity.spec.ts` skipped mobile until now.
+
+          The `else` is the whole of the accessibility trade: the fragment is
+          still rendered, without a box. When it has nothing visible its only
+          content is `PriorityChip`'s `sr-only` `Priority: …`, which is
+          `position: absolute` — so it is not a flex item, takes no gap, and the
+          announcement survives an element that does not. A screen-reader user
+          is exactly who cannot see that the chip is absent, so dropping the
+          announcement with the box would cost the level to the only person
+          relying on it (`e2e/a11y-contrast.spec.ts`).
+        */}
+        {hasVisibleMetadata ? (
+          <div className="flex shrink-0 items-center gap-2">{metadata}</div>
+        ) : (
+          metadata
+        )}
       </div>
 
       {/*

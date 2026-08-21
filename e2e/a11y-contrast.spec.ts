@@ -85,20 +85,23 @@ const expectReadable = async (target: Locator, label: string, theme: Theme) => {
 };
 
 /**
- * §8.4.2 — only `High` is loud.
+ * §8.4.2 — only `High` is loud, and the untriaged default draws nothing.
  *
  * `low` and `medium` moved from `variant="soft"` to `variant="tertiary"`, and
  * `medium` lost `color="warning"` with it: `chip--tertiary` sets only
  * `--chip-bg: transparent`, so the colour class still drives `--chip-fg` and a
  * tertiary+warning chip would have been orange text with the fill removed.
+ * `medium` has since lost the chip itself — it is the schema default, so the
+ * chip was the widest thing in the metadata cluster and reported an absence of
+ * information (`docs/DESIGN.md` §4.4).
  *
- * The chip is where §6.4's priority wording lives, so the label is body text
- * and 4.5:1 binds. A tertiary chip has no fill of its own, which means its
- * label is measured against whatever the row paints — that is the reason to
- * measure rather than to assume the surface is the one the designer's
- * reference reading came from.
+ * The chip is where §6.4's priority wording lives, so the label of a level that
+ * still draws is body text and 4.5:1 binds. A tertiary chip has no fill of its
+ * own, which means its label is measured against whatever the row paints — that
+ * is the reason to measure rather than to assume the surface is the one the
+ * designer's reference reading came from.
  */
-test.describe("§8.4.2 — the priority chip label stays readable at every level", () => {
+test.describe("§8.4.2 — the priority chip, at the levels that still draw one", () => {
   const seedPriority = async (page: Page, title: string, priority: string) => {
     const response = await page.request.post("/api/todos", {
       data: { title, note: "", priority, dueAt: "" },
@@ -107,14 +110,55 @@ test.describe("§8.4.2 — the priority chip label stays readable at every level
     expect(response.status()).toBe(201);
   };
 
-  test("all three levels clear 4.5:1 in both themes", async ({
+  /**
+   * The largest box a visually-hidden element may paint.
+   *
+   * Tailwind's `sr-only` is `position: absolute` at `width: 1px; height: 1px`
+   * with a clip — so 1px is the value, not a tolerance. Anything that renders
+   * larger is on screen.
+   */
+  const SR_ONLY_MAX_PX = 1;
+
+  /**
+   * Every leaf element in the row whose text carries the `Priority:` wording,
+   * with the box it actually paints.
+   *
+   * Leaves only, so a wrapper that merely *contains* the announcement is not
+   * measured as though it were the announcement — the row itself would
+   * otherwise match and report the row's own box.
+   */
+  const announcementBoxesIn = async (row: Locator) =>
+    row.evaluate((element) =>
+      Array.from(element.querySelectorAll<HTMLElement>("*"))
+        .filter(
+          (node) =>
+            node.children.length === 0 &&
+            (node.textContent ?? "").includes("Priority:"),
+        )
+        .map((node) => {
+          const rect = node.getBoundingClientRect();
+
+          return {
+            text: (node.textContent ?? "").trim(),
+            width: rect.width,
+            height: rect.height,
+            position: getComputedStyle(node).position,
+          };
+        }),
+    );
+
+  const seedAllThree = async (page: Page) => {
+    await seedPriority(page, "high chip row", "high");
+    await seedPriority(page, "medium chip row", "medium");
+    await seedPriority(page, "low chip row", "low");
+    await page.reload();
+  };
+
+  test("both drawn levels clear 4.5:1 in both themes", async ({
     signedIn,
     todos,
   }) => {
-    await seedPriority(signedIn, "high chip row", "high");
-    await seedPriority(signedIn, "medium chip row", "medium");
-    await seedPriority(signedIn, "low chip row", "low");
-    await signedIn.reload();
+    await seedAllThree(signedIn);
 
     await expect(todos.row("low chip row")).toBeVisible();
 
@@ -124,38 +168,101 @@ test.describe("§8.4.2 — the priority chip label stays readable at every level
     for (const theme of THEMES) {
       await setTheme(signedIn, theme);
 
-      for (const title of ["high chip row", "medium chip row", "low chip row"]) {
+      for (const title of ["high chip row", "low chip row"]) {
         await expectReadable(chipLabel(title), `${title} chip label`, theme);
       }
     }
   });
 
   /*
-    The variant itself, pinned. Contrast alone would pass just as happily on
-    the column of identical `soft` chips this change exists to break up, so the
-    ratio is not the whole claim — the claim is that two of the three no longer
-    carry a fill.
+    What replaced "low and medium carry no fill, high still does".
+
+    That assertion was about a chip `medium` no longer has, so it could not
+    survive as written — but it is replaced by a **stronger** claim rather than
+    a relaxed one, and the difference is precise. The old test read the *fill*
+    of a `medium` chip, so it goes red the moment that chip stops existing —
+    on the correct implementation and on the broken one alike. It cannot tell
+    "chip removed, level still announced" from "chip removed, level lost",
+    which is the only distinction that matters here.
+
+    This one can, and the second half is what does it. Dropping the `sr-only`
+    `Priority: Medium` is the failure this change actually risks — it costs a
+    screen-reader user the level with nothing on screen to show for it — and it
+    was mutated to confirm the assertion catches it.
+
+    **`toContainText` alone was not enough, and a later mutation proved it.**
+    Removing the `sr-only` *class* while keeping the element leaves the text in
+    the DOM, so `toContainText` passed on a row that had begun painting
+    `Priority: Medium` next to the title in 14px type — the announcement shipped
+    as visible copy nobody wrote, on every untriaged row in the list. The
+    assertion that exists to hold a screen-reader-only announcement could not
+    tell hidden from visible, which is exactly half of what "screen-reader-only"
+    means.
+
+    So the wording is asserted through the accessible content **and** the
+    element carrying it is measured. `sr-only` is a 1px clip, so the box is the
+    thing that discriminates: present in the text, absent from the layout. Note
+    that Playwright's own `toBeHidden` is no use here — a 1px clipped element has
+    a non-empty box and is reported visible — which is why this is geometry
+    rather than a visibility matcher.
   */
-  test("low and medium carry no fill, high still does", async ({
+  test("the default level draws no chip but is still announced", async ({
     signedIn,
     todos,
   }) => {
-    await seedPriority(signedIn, "high chip row", "high");
-    await seedPriority(signedIn, "medium chip row", "medium");
-    await seedPriority(signedIn, "low chip row", "low");
-    await signedIn.reload();
+    await seedAllThree(signedIn);
 
     await expect(todos.row("low chip row")).toBeVisible();
 
     const chip = (title: string) =>
       todos.row(title).locator('[data-slot="chip"]');
 
-    // `--chip-bg: transparent`, resolved by the browser to `rgba(0, 0, 0, 0)`.
+    // The visual half: the untriaged default occupies no room in the cluster.
+    await expect(chip("medium chip row")).toHaveCount(0);
+    await expect(chip("low chip row")).toHaveCount(1);
+    await expect(chip("high chip row")).toHaveCount(1);
+
+    /*
+      The accessible half, and the reason the removal is allowed at all. The
+      wording is byte-for-byte what the chip used to publish, so a screen
+      reader hears the level on all three rows while only two draw it.
+    */
+    for (const [title, level] of [
+      ["high chip row", "High"],
+      ["medium chip row", "Medium"],
+      ["low chip row", "Low"],
+    ] as const) {
+      await expect(todos.row(title)).toContainText(`Priority: ${level}`);
+
+      /*
+        And the half `toContainText` cannot see: every element carrying that
+        wording takes no room. On `medium` that is the whole announcement; on
+        `high` and `low` it is the `Priority: ` prefix inside the chip, which
+        would otherwise read `▲ Priority: High` on screen.
+      */
+      const announcements = await announcementBoxesIn(todos.row(title));
+
+      expect(
+        announcements.length,
+        `${title}: nothing in the row carries the wording at all`,
+      ).toBeGreaterThan(0);
+
+      for (const announcement of announcements) {
+        expect
+          .soft(
+            Math.max(announcement.width, announcement.height),
+            `${title}: “${announcement.text}” paints a ${announcement.width.toFixed(2)}×${announcement.height.toFixed(2)} box at position: ${announcement.position} — a screen-reader-only announcement takes no room`,
+          )
+          .toBeLessThanOrEqual(SR_ONLY_MAX_PX);
+      }
+    }
+
+    /*
+      The fill distinction among the levels that remain: `low` recedes, `high`
+      is the one loud thing left. `--chip-bg: transparent`, resolved by the
+      browser to `rgba(0, 0, 0, 0)`.
+    */
     await expect(chip("low chip row")).toHaveCSS(
-      "background-color",
-      "rgba(0, 0, 0, 0)",
-    );
-    await expect(chip("medium chip row")).toHaveCSS(
       "background-color",
       "rgba(0, 0, 0, 0)",
     );
@@ -173,6 +280,16 @@ test.describe("§8.4.2 — the priority chip label stays readable at every level
  * same token as the due dates in the rows beneath it — both 4.83:1 on the
  * Card — so a heading was visually indistinguishable from row metadata.
  * Dropping `color="muted"` puts it at `--foreground`.
+ *
+ * **That 4.83:1 is a pre-DEF-15 reading and is not what `--muted` measures
+ * today.** It is kept because it is the number this change was argued from,
+ * but the token has since been corrected in light, and the figure has been
+ * quoted onwards as if it were current at least once. Measured now:
+ * `--muted` on the Card is **5.60:1** light and **6.75:1** dark, and
+ * `--foreground` — where the heading, and now a `Today` due date, sit — is
+ * **17.72:1** light and **17.27:1** dark. Any argument that needs a current
+ * reading should take it from `e2e/due-date-ramp.spec.ts`, which measures
+ * rather than quotes.
  *
  * Contrast rises, so there is no a11y exposure; it is measured anyway, and
  * against the due date rather than only against a floor. A floor alone would
@@ -335,6 +452,14 @@ test.describe("the row a mutation is working on stays readable", () => {
  * QA measured it at **4.43:1** on the page background in light
  * (`docs/QA-REPORT.md` §A2): 0.07 short of AA, and it fails only *outside* the
  * Card, where the same token reads 4.83:1. Dark passes at 7.72:1.
+ *
+ * **Those three are the readings that named the defect, not the readings the
+ * app has now** — this block describes the before, and the tests under it
+ * assert the after. Post-correction, in light: 5.14:1 on the page background
+ * and 5.60:1 on the Card. Dark is untouched at 7.72:1 on the page, because the
+ * override is scoped to light (§3) — 6.75:1 on the Card, the surface nobody
+ * measured then. Quote the current numbers from a run, not from this
+ * paragraph; the 4.83 has already travelled once as if it were live.
  *
  * QA re-ranked this above DEF-14 for one reason, recorded in §A6: that token
  * now carries `Press Esc to keep your text exactly as typed.` — the only

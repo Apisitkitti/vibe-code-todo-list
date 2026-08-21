@@ -17,6 +17,8 @@ import {
 import type { TodoListFilters, TodoView } from "@/lib/todo";
 import { CLEARED_FILTERS, todosUrl } from "@/lib/todosUrl";
 
+import { useDebouncedEffect } from "./useDebouncedEffect";
+
 /**
  * The single writer of the `/todos` query string, and the owner of everything
  * about it that is still in flight.
@@ -146,17 +148,29 @@ export const useTodosUrlSync = (
     than at the head: the guard does not rest on "that cannot happen". Do not
     tidy it away as unused — if you are about to, the thing to add first is the
     outside navigation that would prove it.
+
+    **`isPushNeeded` is now asked when the timer fires rather than when it is
+    scheduled**, which is the one behavioural difference the extraction to
+    `useDebouncedEffect` carried with it. A hook cannot be skipped
+    conditionally, so the guard moved inside the callback; the timer is
+    therefore always scheduled and simply does nothing when no push is owed.
+
+    That is the better of the two orders, not merely the reachable one. The
+    question this guard answers — is the URL still owed this state? — is a
+    question about the moment the push would happen, and asking it 300ms early
+    is how a push gets sent for a target that has since been recorded by
+    another writer. `e2e/search-clear-race.spec.ts` is the spec that covers the
+    window it matters in.
   */
-  useEffect(() => {
-    if (!isPushNeeded(synced, { filters, view })) return;
+  useDebouncedEffect(
+    () => {
+      if (!isPushNeeded(synced, { filters, view })) return;
 
-    const timer = setTimeout(() => {
       push();
-    }, SEARCH_DEBOUNCE_MS);
-
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, filters.query, filters.status, filters.priority, view, pushAttempt]);
+    },
+    SEARCH_DEBOUNCE_MS,
+    [query, filters.query, filters.status, filters.priority, view, pushAttempt],
+  );
 
   /*
     Nothing reports a `replace` that was dropped or superseded, so a recording

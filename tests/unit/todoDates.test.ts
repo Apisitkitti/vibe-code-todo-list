@@ -157,6 +157,7 @@ describe("formatDueDate", () => {
     expect(formatDueDate("2026-08-16T00:00:00.000Z", now)).toEqual({
       label: "Today",
       isOverdue: false,
+      isToday: true,
     });
   });
 
@@ -164,6 +165,7 @@ describe("formatDueDate", () => {
     expect(formatDueDate("2026-08-17T00:00:00.000Z", now)).toEqual({
       label: "Tomorrow",
       isOverdue: false,
+      isToday: false,
     });
   });
 
@@ -171,6 +173,7 @@ describe("formatDueDate", () => {
     expect(formatDueDate("2026-08-15T00:00:00.000Z", now)).toEqual({
       label: "Yesterday",
       isOverdue: true,
+      isToday: false,
     });
   });
 
@@ -178,6 +181,7 @@ describe("formatDueDate", () => {
     expect(formatDueDate("2026-12-25T00:00:00.000Z", now)).toEqual({
       label: "Dec 25",
       isOverdue: false,
+      isToday: false,
     });
   });
 
@@ -185,6 +189,7 @@ describe("formatDueDate", () => {
     expect(formatDueDate("2026-01-05T00:00:00.000Z", now)).toEqual({
       label: "Jan 5",
       isOverdue: true,
+      isToday: false,
     });
   });
 
@@ -192,6 +197,7 @@ describe("formatDueDate", () => {
     expect(formatDueDate("2027-03-01T00:00:00.000Z", now)).toEqual({
       label: "Mar 1, 2027",
       isOverdue: false,
+      isToday: false,
     });
   });
 
@@ -199,6 +205,7 @@ describe("formatDueDate", () => {
     expect(formatDueDate("2025-11-30T00:00:00.000Z", now)).toEqual({
       label: "Nov 30, 2025",
       isOverdue: true,
+      isToday: false,
     });
   });
 
@@ -206,11 +213,16 @@ describe("formatDueDate", () => {
     expect(formatDueDate("not-a-date", now)).toEqual({
       label: "",
       isOverdue: false,
+      isToday: false,
     });
   });
 
   test("an empty string renders as nothing", () => {
-    expect(formatDueDate("", now)).toEqual({ label: "", isOverdue: false });
+    expect(formatDueDate("", now)).toEqual({
+      label: "",
+      isOverdue: false,
+      isToday: false,
+    });
   });
 
   /**
@@ -221,6 +233,42 @@ describe("formatDueDate", () => {
   test("compares calendar days, not instants", () => {
     expect(formatDueDate("2026-08-16T23:59:59.000Z", now).label).toBe("Today");
     expect(formatDueDate("2026-08-16T00:00:00.000Z", now).label).toBe("Today");
+  });
+
+  /**
+   * `isToday` is reported here rather than re-derived by the row.
+   *
+   * `TodoDueDate` draws today's date at `--foreground` where every other future
+   * date is `--muted` (`docs/DESIGN.md` §7.4, §8.4.5 in part), so it needs to
+   * know which one it is holding. Two ways were available and one of them is
+   * wrong in a way this project has already paid for:
+   *
+   * - comparing the rendered `label` against the string `"Today"` re-derives
+   *   identity from an incidental property — the copy — so the treatment would
+   *   silently follow a copy-deck edit;
+   * - calling `dueDayOffset` a second time asks "what day is it" twice, and
+   *   §7.19 is the standing argument against exactly that: two answers computed
+   *   from one input at two moments can differ, and the moment here is midnight.
+   *
+   * So the one call that already knows says so. The property is the pairing —
+   * `isToday` is true for precisely the value `dueDayOffset` calls `0` — which
+   * is what keeps it from drifting into "starts with T".
+   */
+  test("reports today, for exactly the day the offset calls today", () => {
+    for (let dayOffset = -3; dayOffset <= 3; dayOffset += 1) {
+      const day = new Date(Date.UTC(2026, 7, 16 + dayOffset));
+      const iso = day.toISOString();
+
+      expect(dueDayOffset(iso, now), `offset for ${iso}`).toBe(dayOffset);
+      expect(formatDueDate(iso, now).isToday, `isToday for ${iso}`).toBe(
+        dayOffset === 0,
+      );
+    }
+  });
+
+  test("a value with no day at all is not today", () => {
+    expect(formatDueDate("not-a-date", now).isToday).toBe(false);
+    expect(formatDueDate("", now).isToday).toBe(false);
   });
 });
 

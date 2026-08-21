@@ -134,6 +134,34 @@ const eslintConfig = defineConfig([
                 "docs/CONVENTIONS.md → Route handlers are the trust boundary: database access happens only inside src/app/api/**. A client component that imports Prisma pulls DATABASE_URL toward the browser bundle. Call the route handler through src/service/*.service.ts instead.",
             },
           ],
+          /*
+            `docs/DESIGN.md` §4.10 / `src/lib/toast.ts` — one queue, and it is
+            not HeroUI's.
+
+            The app renders its toast region over its own `ToastQueue`, built
+            with the `wrapUpdate` escape hatch §4.10 names. HeroUI's exported
+            `toast` is bound at module load to a *different* queue — the
+            default one — and nothing renders a region for it.
+
+            This shares the Prisma rule's failure mode, which is why it sits
+            beside it: nothing fails loudly. A call on the wrong `toast`
+            type-checks, lints, builds, runs, throws nothing, and simply never
+            shows the user anything. Five call sites were on it when the queue
+            was introduced and four of the five were the *failure* message —
+            the one nobody exercises by accident.
+
+            Only the `toast` binding is restricted. `Toast`, `ToastQueue` and
+            `toastVariants` are the region, the class and the styles, and all
+            three are imported legitimately.
+          */
+          paths: [
+            {
+              name: "@heroui/react",
+              importNames: ["toast"],
+              message:
+                "docs/DESIGN.md §4.10: HeroUI's `toast` writes to a queue no region renders, so the toast silently never appears. Import { toast } from '@/lib/toast' instead.",
+            },
+          ],
         },
       ],
     },

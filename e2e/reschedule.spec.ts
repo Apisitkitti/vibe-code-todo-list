@@ -2,7 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 
 import {
   CLEAR_DUE_DATE_ITEM_LABEL,
-  EDIT_MODAL_HEADING,
+  editModalHeading,
   NEXT_WEEK_ITEM_LABEL,
   PICK_A_DATE_ITEM_LABEL,
   TODAY_ITEM_LABEL,
@@ -171,7 +171,9 @@ test.describe("the quick days write the viewer's own day", () => {
     await todos.reschedule("choose a holiday", PICK_A_DATE_ITEM_LABEL);
 
     await expect(
-      signedIn.getByRole("heading", { name: EDIT_MODAL_HEADING }),
+      signedIn.getByRole("heading", {
+        name: editModalHeading("choose a holiday"),
+      }),
     ).toBeVisible();
   });
 });
@@ -238,7 +240,7 @@ test.describe("the toast reverses exactly what the press changed", () => {
     /*
       Every Undo in the stack reads `Undo`, and the stack is the ordinary case
       at a 12s window — the name is the only thing separating a date revert from
-      a completion revert for a screen-reader user (§7.13, §7.19).
+      a completion revert for a screen-reader user (§7.13, §7.21).
     */
     await expect(
       todos.undoButton.and(

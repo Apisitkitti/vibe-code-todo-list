@@ -12,7 +12,7 @@ import {
 } from "@/lib/date";
 import { rescheduleTriggerProps } from "@/lib/rowFocus";
 import { ICON_BUTTON_SIZING } from "@/lib/styles";
-import type { TodoItemData } from "@/lib/todo";
+import type { TodoFormFocus, TodoItemData } from "@/lib/todo";
 
 /**
  * The three controls a todo carries — reschedule, edit, delete — and the menu
@@ -34,7 +34,7 @@ import type { TodoItemData } from "@/lib/todo";
 
 
 /**
- * The reschedule menu's copy (`docs/DESIGN.md` §7.19). The three quick days
+ * The reschedule menu's copy (`docs/DESIGN.md` §7.21). The three quick days
  * carry the offset each means; `Next week` is `+7` and the reasoning for that
  * lives with the constant in `src/lib/date.ts`, not here.
  */
@@ -283,7 +283,7 @@ const RescheduleMenu = ({
                     {/*
                       The resolved date, so `Next week` states what it means at
                       the moment of the decision instead of after it
-                      (`docs/DESIGN.md` §7.19).
+                      (`docs/DESIGN.md` §7.21).
 
                       A plain `<span>`, deliberately, where the rest of the app
                       would reach for `Typography`. react-aria's `MenuItem`
@@ -336,7 +336,13 @@ export interface TodoActionsProps {
   showTooltips: boolean;
   /** Positioning is the caller's: a row right-aligns them, a card does not. */
   className: string;
-  onEdit: (todo: TodoItemData) => void;
+  /**
+   * Opens the record editor. `focus` names the field the caret should land on
+   * — the intent the press carried, not a property of the record
+   * (`docs/DESIGN.md` §7.21). Omitted means `title`, which is what the `Edit`
+   * button asks for.
+   */
+  onEdit: (todo: TodoItemData, focus?: TodoFormFocus) => void;
   /** `dueAt` is the `YYYY-MM-DD` wire day, or `null` to clear it. */
   onReschedule: (todo: TodoItemData, dueAt: string | null) => void;
   onDelete: (todo: TodoItemData) => void;
@@ -365,8 +371,20 @@ export const TodoActions = ({
         isDisabled={isPending}
         showTooltip={showTooltips}
         onReschedule={onReschedule}
-        /* `Pick a date…` is the existing edit modal, not a second picker. */
-        onPickDate={onEdit}
+        /*
+          `Pick a date…` is the existing edit modal, not a second picker — and
+          it opens on `Due date` rather than on `Title` (`docs/DESIGN.md`
+          §7.21). The destination is the defensible part; where the caret lands
+          was not. A menu item ending in `…` promises a surface for specifying
+          *this* thing, and the app answered with a text field holding words
+          the user did not come to change.
+
+          The intent travels as an argument rather than being re-derived at the
+          other end, because there is nothing at the other end to derive it
+          from: the modal sees a todo and a draft, and a todo reached through
+          `Pick a date…` is byte-identical to one reached through `Edit`.
+        */
+        onPickDate={(target) => onEdit(target, "dueAt")}
       />
       <ActionTooltip label="Edit" isEnabled={showTooltips}>
         <Button

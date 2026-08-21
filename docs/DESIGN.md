@@ -16,7 +16,12 @@ There are no per-component import paths.
 - **Calm surface, loud content.** One accent colour only (`--accent`). Chrome is
   neutral; the only saturated pixels on `/todos` are the priority indicator and a
   single primary button. No gradients, no shadow stacking beyond the HeroUI
-  defaults.
+  defaults. *"A single primary button" is counted, not assumed:*
+  `e2e/empty-state-accent.spec.ts` walks every element on the empty screen,
+  resolves each painted background, and asserts that **exactly one** — the
+  quick-add `Add`, by role and name — is `--accent`. Exactly one rather than at
+  most one: zero would satisfy the rule while meaning the accent had left the
+  screen.
 - **Content-first density.** The todo list is the product. Header, filters and
   padding must never push the first todo row below the fold on a 375×667 phone.
 - **Scannable in one pass.** Every row uses the same left-to-right rhythm:
@@ -57,7 +62,7 @@ Reference them in Tailwind v4 arbitrary-value syntax, e.g.
 | Accent tint | `--accent-soft` / `--accent-soft-foreground` | Selected filter chip. |
 | Danger | `--danger` / `--danger-foreground` | Delete confirm button. |
 | Danger tint | `--danger-soft` / `--danger-soft-foreground` | High-priority chip, error text. |
-| Warning tint | `--warning-soft` / `--warning-soft-foreground` | Overdue date. **No longer the medium-priority chip** — see §4.4. |
+| Warning tint | `--warning-soft` / `--warning-soft-foreground` | Overdue date. **No longer the medium-priority chip**, which no longer exists at all — see §4.4. |
 | Success tint | `--success-soft` / `--success-soft-foreground` | Completed-state affordances. |
 | Neutral tint | `--default-soft` / `--default-soft-foreground` | Unused since §4.4 took the low/medium chips to `tertiary`, which has no fill. |
 | Overlay (modal/menu) | `--overlay` / `--overlay-foreground` | Handled by HeroUI. |
@@ -305,18 +310,37 @@ Identical structure to `/sign-in`. Differences only:
 ```
 <Header>                         ← app bar, full-bleed, sticky
 <main className="flex-1 w-full max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8 flex flex-col gap-6">
-  ├─ Page heading + count
-  ├─ Dated header line          ← US-12, §7.19; plain text, always present
+  ├─ Heading block (flex flex-col gap-1)   ← one statement, §7.19
+  │    ├─ Page heading + count
+  │    └─ Dated header line     ← US-12, §7.19; plain text, always present
   ├─ Quick-add bar              ← §7.17; always present, never gated on hasTodos
   ├─ Filter bar                 ← only once the account has todos
   └─ Card (the list, cut into urgency sections — §7.16)
 </main>
 ```
 
-*Amended twice while it was being worked in: the "Add-todo affordance" row is
-the quick-add bar of §7.17, not the retired `New todo` button, and the list
-inside the Card is the sectioned list of §7.16 rather than one flat `<ul>`.
-Both were already true in the code; this diagram had not been told.*
+*Amended three times while it was being worked in: the "Add-todo affordance" row
+is the quick-add bar of §7.17, not the retired `New todo` button; the list
+inside the Card is the sectioned list of §7.16 rather than one flat `<ul>`; and
+the heading and the dated line are now one block rather than two of `main`'s
+sections. The first two were already true in the code and this diagram had not
+been told; the third is the change that made it true.*
+
+**The heading block.** `Your todos` and `Wednesday, 20 August · 3 due today ·
+1 overdue` are one statement — what this page is, and what day it is — and as
+two direct children of `main` they sat `gap-6` apart, the same 24px as the
+quick-add bar from the Card. Four peers, and nothing in the layout said which
+belonged with which. `flex flex-col gap-1` wraps the pair; `main`'s `gap-6` then
+separates the block from the bar, so §2.2's section rhythm is unchanged.
+
+`src/lib/styles.ts` owns the class string as `PAGE_HEADING_BLOCK`, because
+`loading.tsx` renders the same two elements and wrapping one without the other
+moves the heading when the route settles — the swap shift §4.8 is about.
+`error.tsx` renders neither a heading nor a dated line, so it takes no wrapper;
+it shares `TODOS_PAGE_SHELL` with the other two, which is the part all three
+actually have in common. Pinned in `e2e/list-header.spec.ts`, which measures
+both gaps rather than one: a wrapper that pulled the block tight against the bar
+as well would look closer in a screenshot and would have spent §2.2 to do it.
 
 **App bar.** Use `Header` — note it is **not** compound: the exported `Header`
 has no `.Root`, `.Title` etc. It is a single element that renders RAC's
@@ -538,7 +562,7 @@ pass `aria-label`.
 | `priority` | Chip props | Glyph prefix | Label |
 |---|---|---|---|
 | `high` | `color="danger" variant="soft" size="sm"` | `▲` | `High` |
-| `medium` | `color="default" variant="tertiary" size="sm"` | `■` | `Medium` |
+| `medium` | *no chip* — `sr-only` `Priority: Medium` only | — | *(announced, not drawn)* |
 | `low` | `color="default" variant="tertiary" size="sm"` | `▼` | `Low` |
 
 ```tsx
@@ -553,7 +577,7 @@ screen readers and for colour-blind sighted users alike.
 **Only `High` is loud** (§8.4.2, taken). This table used to give all three
 `variant="soft"`, and `medium` is the schema default, so a real list was a
 column of near-identical warning-tinted chips with nothing for `High` to stand
-out against. `low` and `medium` are now `tertiary`.
+out against. `low` and `medium` went to `tertiary`.
 
 `medium` loses `color="warning"` along with the variant, and that is forced by
 the CSS rather than chosen: `chip--tertiary` sets only
@@ -563,23 +587,61 @@ the CSS rather than chosen: `chip--tertiary` sets only
 louder against a quiet row, not quieter. `default` is the pairing that makes
 the chip recede.
 
-**§6.4 is untouched**: the word and the shape glyph are unchanged, so colour is
-still not carrying the meaning. No token is overridden, so §3's exception is
-not engaged. Measured through the browser's parser, label against the composited
-backdrop:
+**And then the default level loses the chip entirely — §8.4.2 finished.**
+Taking `medium` to `tertiary` made it quiet; it did not stop it taking up room.
+`medium` is not a level anyone chose, it is the level a todo has when nobody has
+triaged it, and a twenty-row list still drew twenty chips of which most said
+`■ Medium`. The chip was the **widest** element in the metadata cluster and what
+it reported was an absence of information. Todoist's P4 is the reference and
+makes the same argument: the default priority renders no flag, so only the
+levels somebody actually set occupy a row.
+
+`low` keeps `tertiary` rather than going with it, because a deliberate
+down-rank *is* information — somebody looked at the todo and said it could wait.
+
+**The trade, written down rather than left to be discovered.** Removing the chip
+removes the word `Medium` and the `■` glyph from the screen, and §6.4 asks for
+both. So the row keeps the accessible wording exactly as it was: the chip is
+replaced by a `sr-only` `Priority: Medium`, byte-for-byte the accessible content
+the chip published, and only the drawn chip goes.
+
+That asymmetry is the decision, not a side effect of it. A sighted user infers
+`Medium` from absence, exactly as a Todoist user infers P4 from an absent flag —
+the information is still on screen, carried by the two levels that *do* draw. A
+screen-reader user meets the row's metadata as a sequence of announcements and
+cannot perceive absence the same way: a row that simply stopped mentioning
+priority would be indistinguishable from a row whose priority failed to render.
+The two audiences therefore get the same information through different carriers,
+rather than the visual saving being taken out of the accessible tree.
+
+`sr-only` is `position: absolute`, so it contributes no width and no `gap-2`
+step to the cluster — the metadata column's right edge is unmoved, which is §1's
+reflow promise and is measured in `e2e/row-layout.spec.ts` across rows with and
+without a chip.
+
+**§6.4 is amended rather than reinterpreted** — see the note there. It still
+requires the word plus the shape glyph wherever a priority is *drawn*; it now
+records that the default level is not drawn and is announced instead. No token
+is overridden, so §3's exception is not engaged. Measured through the browser's
+parser, label against the composited backdrop, for the levels that still draw:
 
 | Level | Light, before → after | Dark, before → after |
 |---|---|---|
 | `high` | 5.49 : 1 → **5.49 : 1** (unchanged) | 5.51 : 1 → **5.51 : 1** (unchanged) |
-| `medium` | 5.16 : 1 → **17.72 : 1** | 9.21 : 1 → **17.27 : 1** |
+| `medium` | 5.16 : 1 → **17.72 : 1** → *(no chip to measure)* | 9.21 : 1 → **17.27 : 1** → *(no chip to measure)* |
 | `low` | 16.25 : 1 → **17.72 : 1** | 15.86 : 1 → **17.27 : 1** |
 
-Contrast rises on both levels that moved, because a tertiary chip's label is
-`--default-foreground` on the row rather than a soft-tint foreground on a soft
-fill. Pinned in `e2e/a11y-contrast.spec.ts`, which measures all three levels in
-both themes **and** asserts the fill itself — a ratio alone would have passed
+Contrast rose on both levels that moved to `tertiary`, because a tertiary chip's
+label is `--default-foreground` on the row rather than a soft-tint foreground on
+a soft fill. `medium` then stopped drawing, so it has no ratio of its own any
+more — its row's accessible content is what is pinned instead.
+
+`e2e/a11y-contrast.spec.ts` measures the two drawn levels in both themes,
+asserts the fill on each of them, and asserts that `medium` renders no chip
+while the row still carries `Priority: Medium`. A ratio alone would have passed
 just as happily on the column of identical soft chips this change exists to
-break up.
+break up, and a chip-count alone would pass just as happily on a row that had
+silently dropped the level altogether.
 
 **Due date.** `<Typography type="body-sm" color="muted">` inside a `<time>`:
 
@@ -672,7 +734,7 @@ so the most common single edit does not cost the modal (`docs/PM-PROPOSAL.md`
 
 The three quick days render their resolved date beside the label — `Next week`
 `Aug 26` — so the reading is visible at the moment of the decision rather than
-discoverable after it. §7.19 has the copy and §2 of `docs/PRD.md` has why
+discoverable after it. §7.21 has the copy and §2 of `docs/PRD.md` has why
 `Next week` is `+7` rather than "the start of next week".
 
 Two implementation constraints, both learned the hard way on this branch:
@@ -803,7 +865,7 @@ const state = useOverlayState();
   <Modal.Container size="md" placement="center" className="sm:placement-center">
     <Modal.Dialog>
       <Modal.Header>
-        <Modal.Heading>{mode === "create" ? "New todo" : "Edit todo"}</Modal.Heading>
+        <Modal.Heading>{mode === "create" ? "New todo" : editHeading(todo.title)}</Modal.Heading>
         <Modal.CloseTrigger aria-label="Close" />
       </Modal.Header>
       <Modal.Body>
@@ -960,6 +1022,43 @@ styled container. **Compose the inside yourself:**
 Render it **inside** the list `Card` (replacing the `<ul>`), so the page layout
 does not jump when the first todo is added.
 
+**The action is `variant="secondary"`, not `primary`** — §1 allows the empty
+`/todos` screen *one* primary button, and it shipped with two about 150px apart:
+the quick-add `Add`, and this one, whose entire job is to move focus to that
+one. The button that performs the capture keeps the accent; the button that
+points at it does not. The snippet above still shows `primary` because it is the
+§4.7 sketch of the component; this paragraph is the specification.
+
+`secondary` rather than `tertiary`, **and the reason first given for that was
+wrong.** The case made was that a fill-less button becomes a text link wearing
+button spacing — true of `ghost` and `outline`, and measurably not true of
+`tertiary`: `button--secondary` and `button--tertiary` both set
+`--button-bg: var(--default)` and paint the identical fill. What separates them
+is `--button-fg`; `secondary` takes `--accent-soft-foreground`, so its label is
+accent-tinted and reads as the call to action. The conclusion stands on the
+corrected reason.
+
+Measured through the browser's parser, on the empty screen, both themes:
+
+| | Light | Dark |
+|---|---|---|
+| Action label, on its own composited fill | 6.25:1 | 5.05:1 |
+| Action fill vs the Card | 1.19:1 | 1.19:1 |
+| Quick-add `Add` fill vs the page (unchanged) | 4.37:1 | 4.25:1 |
+| Elements painting `--accent` | 2 → **1** | 2 → **1** |
+
+**The 1.19:1 is stated rather than buried, and it is not a regression this
+change introduced.** SC 1.4.11's 3:1 covers the visual information required to
+*identify* a component, and this button is identified by the words
+`Add a todo` at 6.25:1 / 5.05:1. No variant in this design system except the
+ones carrying `--accent` or `--danger` clears 3:1 against a surface —
+`More options` measures 1.09:1 light / 1.36:1 dark and always has — so a
+blanket boundary floor here would condemn every `Try again`, `Cancel` and
+parsed chip the app ships. What `e2e/empty-state-accent.spec.ts` pins instead is
+that the fill **resolves and is distinct from the surface**, which is the
+property that separates a button from a text link and is the one this decision
+actually turns on; a `ghost` variant reads 1.00 there and fails.
+
 Three distinct empty states — do not reuse one string for all:
 
 | Condition | Heading | Body | Action |
@@ -1059,6 +1158,10 @@ page-scoped Alert plus `Try again` (calls `reset()`).
 ### 4.10 Toast actions — the first moments are dead
 
 **Constraint, not a bug we introduced.** Design in-toast affordances around it.
+**The escape hatch at the end of this section has since been taken**, so the
+dead window described here is history on `/todos`; the mechanism is kept
+because it is the argument for the queue we now own, and because anything that
+raises a toast outside `src/lib/toast.ts` would inherit it again.
 
 HeroUI runs *every* toast queue update — each add and each close — inside
 `document.startViewTransition` (`dist/components/toast/toast-queue.js`, the
@@ -1091,16 +1194,80 @@ Three things follow, and each of them is a design constraint:
 and expect the first press to land — the affordance the user reaches for
 fastest is the one most likely to be swallowed. Our Undo survives this only
 because its timeout is generous relative to the dead window; a short-lived toast
-with an action would be substantially worse. If a future affordance needs to be
-live on the first frame, the escape hatch is a `ToastQueue` constructed with an
-explicit `wrapUpdate: fn => fn()` (the option is public), which trades the slide
-animation for a correct hit target. **That trade is worth making the moment an
-action matters more than the animation** — and I would take it now if the Undo
-timeout were ever shortened.
+with an action would be substantially worse.
+
+**The escape hatch, and it is taken.** A `ToastQueue` constructed with an
+explicit `wrapUpdate: fn => fn()` (the option is public) trades the slide
+animation for a correct hit target. This section used to say the trade was
+worth making "the moment an action matters more than the animation"; §7.13's
+one-armed-toast rule is what made that moment arrive, since under a single slot
+*every* action toast is a close-then-add and close-then-add is where the window
+is worst. The app now owns its queue in `src/lib/toast.ts` and the region is
+bound to it in `AppToastProvider`. Measured on this project's own Chromium with
+a real pointer press, before → after:
+
+| case | first press that lands |
+|---|---|
+| lone add, HeroUI's default `wrapUpdate` | 357–417ms |
+| close-then-add, HeroUI's default `wrapUpdate` | 729–760ms |
+| close-then-add, `wrapUpdate: fn => fn()` | 200ms, 0 blocked frames |
+
+That reproduces the 350–400ms and 700–800ms this section had inferred, rather
+than inheriting them. What it costs is the queue's slide: the animation is
+defined entirely on `::view-transition-old` / `::view-transition-new` in
+`@heroui/styles/dist/components/toast.css`, so toasts now cut in and out. Take
+both or take neither — the cap without `wrapUpdate` makes the stack tidier and
+the one remaining button less reliable.
 
 Related, and the same shape of problem: `toast.close()` does not unmount
-immediately for the same reason, which is why `TodoListScreen` guards
-double-presses on the *key* rather than on the toast's presence.
+immediately for the same reason, which is why the press guard is keyed on the
+toast's own token rather than on its presence (§7.13).
+
+#### 4.10.1 The toast region is a deck, and only its front card is a control
+
+A second constraint, found when the §7.13 cap shipped, and **not caused by it**.
+
+HeroUI's region draws toasts as a stack of cards, not a list. Every toast is
+`position: absolute` at the region's edge; the one at index *n* is offset by
+`n × gap` (12px) and scaled by `1 − n × 0.05`. So the second toast peeks 12px
+out from behind the first and is otherwise underneath it, at a lower `z-index`.
+Three further things are true of any toast that is not frontmost
+(`dist/components/toast/toast.js`, `styles/dist/components/toast.css`):
+
+- it is clipped to `height: var(--front-height)` with `overflow: hidden` — the
+  height of *the toast in front of it*, so a two-line title behind a one-line
+  toast loses its second line;
+- its close button is `opacity: 0` and `pointer-events: none`;
+- `tabIndex` is set to `-1` **on its wrapper**. Its action button keeps its own
+  tab stop, which is why keyboard activation still reaches a buried Undo — the
+  wrapper is what leaves the tab order, not the control inside it.
+
+**So the region has exactly one operable slot, and the newest toast always
+takes it.** A buried Undo is present, announced, still ticking and cannot be
+pressed by pointer. `document.elementFromPoint` at its own centre returns the
+toast in front.
+
+This corrects something §7.13 and §7.15 both assumed. Those sections argued
+about a *stack* of Undos in one tab-ordered region, and treated burial as
+survivable because there were others to reach. There were not: a buried Undo
+was never pointer-reachable, before the cap or after it. The cap did not create
+this failure. It removed the second and third toasts that made the region look
+as though it had somewhere else to press.
+
+**What this means for design.** Two toasts up at once is one toast up at once
+plus a rumour. Never design a moment where the thing the user needs is not the
+newest toast — and where two messages compete for the same twelve seconds, rule
+on which one gets the slot rather than raising both and hoping. §7.13 does that
+for receipts against Undos.
+
+Restacking the region into a real list is cheaper than it looks and still not
+worth it: `gap` and `scaleFactor` are public props on `Toast.Provider`, and
+`gap={72} scaleFactor={0}` would lay three toasts out without overlap. But the
+`--front-height` clip and the suppressed close button live in HeroUI's own
+component CSS, which §3 forbids overriding outside a stated exception, and both
+existing exceptions are WCAG floors rather than layout preferences. And a
+bottom-centre column of three 460px cards eats roughly 230px of viewport over
+the list on every write. The everyday cost is worse than the thing it fixes.
 
 ---
 
@@ -1118,13 +1285,28 @@ list, matching the status filter beside it, and remembered in the URL as
 | Column | `<section>` with an `<h2>` and its own `<ul>` — the same structure §7.16 gives the list's sections, so switching views does not reshape the heading tree |
 | Column heading | The §7.16 heading and its `aria-hidden` count, at `--foreground`. **No colour, no fill, no per-column accent** — the columns are structure, and §3's one-saturated-element budget is not spent on decoration |
 | Empty column | One muted line (§7.20), never hidden — an empty column is a drop target |
-| Card | `TodoCard`: checkbox and title on the first line, chip / date / note marker and the three actions on the second. `rounded-2xl border border-border-secondary`, the row's own §8.7 outline |
+| Card | `TodoCard`: three explicit lines, never a `flex-wrap` — checkbox and title, then the metadata (chip / date / note marker) **only when there is any**, then the three actions. `rounded-2xl border border-border-secondary`, the row's own §8.7 outline |
 | Card title | Wraps to at most three lines, where the row truncates. A row truncates because it is scanned against its neighbours down a shared right edge (§1); a card has no such column to keep |
 | Card actions | Always visible, where the row hides them until hover at `lg:`. A card is a discrete object with room around it |
 | Drag affordance | The carried card and the column that would take it are outlined `--accent` with an 8–12% tint. Both are **transient** — present only while a drag is in progress — and the moved card's settle ring lasts 2.5s. Nothing on this screen is accent-tinted at rest |
 | Loading | Five skeleton columns, two card outlines each (§4.8) |
 | Empty account / filter | The §4.7 empty state, not five empty columns — five columns saying "nothing" say nothing, and would push the call to action off the bottom |
 | Error | One §4.9 alert above the columns. One `GET` backs all five, so five identical alerts would be five lies about five failures |
+
+**Why the metadata gets a line of its own, and why that line disappears.** It
+used to share one `flex-wrap` line with the actions, which meant it got
+whatever `TodoActions` left over. At 1280×800 with five columns that line is
+183.20px and `TodoActions` is a fixed 124.00, so after `gap-2` the metadata's
+budget was 51.20px. `Low` measures 48.45 and fitted; `High` measures 52.16 and
+did not, and 0.95px of overflow wrapped the whole action cluster onto its own
+line and made the card 28px taller. On a board of otherwise identical cards,
+whether a card was two lines or three turned on nothing the user could see
+except which word its chip said. Giving the actions their own line removes the
+competition; rendering the metadata line only when it has content stops an
+empty one paying for it. **A card's height now means the card carries more, and
+nothing else.** One shape pays for that: a `Low`, undated card goes 94px → 122.
+That is the trade, and it is the right way round — a line for something is
+better than a line for the width of a word.
 
 **On the accent budget.** §3 allows one saturated element at rest, and `/todos`
 is already over it (§8.4). This view adds nothing at rest: the column headings
@@ -1222,9 +1404,18 @@ Do not introduce them without updating this document.
    `sm:min-h-9 sm:min-w-9` on pointer devices. Adjacent targets keep ≥8px
    (`gap-2`) between them.
 4. **Colour is never the only carrier of meaning.**
-   - Priority: the `Chip` always renders the **word** (`High`/`Medium`/`Low`)
-     plus a distinct shape glyph (`▲`/`■`/`▼`). A user in greyscale must still
-     be able to rank them.
+   - Priority: wherever a priority is **drawn**, the `Chip` renders the **word**
+     (`High`/`Low`) plus a distinct shape glyph (`▲`/`▼`). A user in greyscale
+     must still be able to rank them.
+
+     **`medium` is not drawn** (§4.4). It is the schema default rather than a
+     level anyone chose, so the row publishes it as a `sr-only`
+     `Priority: Medium` and draws nothing — byte-for-byte the accessible content
+     the chip used to carry. This clause used to read "always renders", and the
+     word was load-bearing enough that changing it is an amendment and not a
+     reading: a sighted user now infers the default from absence, and a
+     screen-reader user, who cannot perceive absence the same way, still hears
+     the level. §4.4 carries the argument for the asymmetry.
    - Overdue: `⚠` glyph plus a visually-hidden `Overdue —` prefix, not just a
      warning-tinted colour.
    - Completed: the checkbox's checked state **and** `line-through` on the
@@ -1514,7 +1705,7 @@ a period.
 
 | Slot | String (create) | String (edit) |
 |---|---|---|
-| Heading | `New todo` | `Edit todo` |
+| Heading | `New todo` | `Edit “{title}”` |
 | Close `aria-label` | `Close` | `Close` |
 | Title label | `Title` | `Title` |
 | Title placeholder | `What needs doing?` | `What needs doing?` |
@@ -1529,8 +1720,36 @@ a period.
 | Cancel | `Cancel` | `Cancel` |
 | Submit (idle) | `Add todo` | `Save changes` |
 | Submit (pending) | `Adding…` | `Saving…` |
-| Success toast | `Todo added` | `Changes saved` |
+| Success toast | §7.15 and §7.17 own these — `Todo “{title}” added` | §7.15 owns this — `Todo “{title}” updated` |
 | Failure toast | `Couldn't add the todo. Try again.` | `Couldn't save your changes. Try again.` |
+
+**The edit dialog names the record, and it did not used to.** `Edit todo` named
+the surface and nothing else; the record was spoken on open only by accident,
+because focus landed on `Title` and a screen reader read the focused field's
+value. §7.21's `Pick a date…` ruling moves that focus to `Due date`, which
+takes the accident away — a user who opened the editor from a row would hear
+`Edit todo, dialog. Due date…` and never learn which todo they were in. So the
+name carries the title: a dialog that edits one record should say which, and it
+should not have needed a side effect of focus placement to do it.
+
+**Two bounds on it, because a dialog name is read in full, on open, before the
+user has been told it is a dialog, with no way to skip it — and titles here run
+to 200 characters.**
+
+- **Visually the heading is one line and truncates.** The modal header is a
+  fixed-width band above the form; a 200-character heading would push `Title`
+  off a short viewport, and the full string is legible in the `Title` field two
+  lines below. This is the same relationship §4.4's truncated row has with its
+  own title.
+- **The accessible name carries the title truncated to 60 characters plus a
+  single `…`.** Sixty is my judgement, not a measurement: it is roughly where a
+  title stops behaving like a title and starts being a note, and it keeps the
+  announcement under about four seconds of speech. If QA measures where the row
+  actually truncates at `max-w-2xl` I would rather this matched that number
+  than kept mine — the point is that there **is** a bound, not that it is 60.
+
+The create side stays `New todo`. There is no record to name yet, and
+`New “{whatever is typed}”` would name a draft as though it were a record.
 
 ### 7.6 Delete confirmation
 
@@ -1548,10 +1767,25 @@ a period.
 
 | Case | Heading | Body | Action |
 |---|---|---|---|
-| No todos | `Nothing here yet` | `Add your first todo and it will show up here.` | `New todo` |
+| No todos | `Nothing here yet` | `Add your first todo and it will show up here.` **plus §7.18's teaching line** | `Add a todo` (§7.18) |
 | Filter=active, none | `All caught up` | `You have no active todos. Nice.` | — |
 | Filter=completed, none | `Nothing completed yet` | `Todos you finish will appear here.` | — |
 | Search, no match | `No matches` | `No todos match "{query}".` | `Clear search` |
+
+**The `No todos` action is `Add a todo`, not `New todo`.** The `New todo`
+string this row carried until now described a modal, and the empty state's
+button has focused the quick-add bar since §7.17 landed; §7.18 is where that
+label lives and this row defers to it. Nothing here opens the modal any more,
+and the deck should not have gone on saying it did. (§4.7's code sample still
+shows `New todo` and `variant="primary"`; both are §4's to correct, and the
+second is the ui-designer's call, not a copy change.)
+
+**Only the never-used state teaches.** `Nothing here yet` is the one empty
+state a user can reach without having typed anything, so it is the one that
+gets §7.18's line. The other three are reached *by* filtering or searching —
+their reader has already used the bar, and a syntax lesson on the way back
+from a search that missed is a lesson delivered at the one moment it cannot
+be acted on.
 
 ### 7.8 Loading
 
@@ -1596,10 +1830,11 @@ matches nothing.
 
 ### 7.11 Mutation confirmations and outcome toasts
 
-Added for the "Mutation UX" section of `docs/CONVENTIONS.md`: every create,
-update, toggle and delete is confirmed first and reports its outcome in a
-toast that names the record. These success-toast strings supersede the
-generic ones in §7.5 and §7.6.
+Added for the "Mutation UX" section of `docs/CONVENTIONS.md`, when every
+create, update, toggle and delete was confirmed first. **That is no longer the
+rule** — the delete alone confirms (§7.6) — but every mutation still reports
+its outcome in a toast that names the record, and those strings are what this
+section is now for. They supersede the generic ones in §7.5 and §7.6.
 
 Any toast here that carries an action (the Undo toasts, §7.13 and §7.15) is
 subject to §4.10: **the action does not respond to a pointer for the first
@@ -1610,24 +1845,33 @@ receipt and nothing else — it has no action at all (§7.15), and neither do th
 toasts an Undo raises when it succeeds. Only the toggle and the edit offer
 Undo.
 
+**The confirm rows of this section are struck.** The Mutation UX rule became
+"confirm what cannot be undone", and the only mutation that cannot is the
+delete — which confirms with §7.6's strings, from the one `ConfirmDialog` the
+app still mounts (`TodoListScreen.tsx`). Create, update and toggle have had no
+confirm dialog for some time; the copy for them sat here regardless, which is
+the failure mode this deck is most prone to and the one that does the most
+damage, because someone builds from it. The toasts below the strike are live
+and unchanged.
+
 | Slot | String |
 |---|---|
-| Confirm cancel (all) | `Cancel` |
-| Create confirm heading | `Add this todo?` |
-| Create confirm body | `“{title}” will be added to your list.` |
-| Create confirm action | `Add todo` |
-| Create confirm pending | `Adding…` |
-| Update confirm heading | `Save these changes?` |
-| Update confirm body | `“{title}” will be updated.` |
-| Update confirm action | `Save changes` |
-| Update confirm pending | `Saving…` |
-| Complete confirm heading | `Mark this todo complete?` |
-| Complete confirm body | `“{title}” will be marked complete.` |
-| Complete confirm action | `Mark complete` |
-| Reopen confirm heading | `Mark this todo not complete?` |
-| Reopen confirm body | `“{title}” will be moved back to active.` |
-| Reopen confirm action | `Mark not complete` |
-| Toggle confirm pending | `Updating…` |
+| ~~Confirm cancel (all)~~ | ~~`Cancel`~~ — **struck.** §7.6 carries the delete's `Cancel`, and it is the only confirm left. |
+| ~~Create confirm heading~~ | ~~`Add this todo?`~~ — **struck.** No create confirm exists. |
+| ~~Create confirm body~~ | ~~`“{title}” will be added to your list.`~~ — **struck.** |
+| ~~Create confirm action~~ | ~~`Add todo`~~ — **struck.** |
+| ~~Create confirm pending~~ | ~~`Adding…`~~ — **struck.** The bar's own pending label is §7.17's. |
+| ~~Update confirm heading~~ | ~~`Save these changes?`~~ — **struck.** No update confirm exists. |
+| ~~Update confirm body~~ | ~~`“{title}” will be updated.`~~ — **struck.** |
+| ~~Update confirm action~~ | ~~`Save changes`~~ — **struck.** It is the modal's submit, and §7.5 has it. |
+| ~~Update confirm pending~~ | ~~`Saving…`~~ — **struck.** §7.5 has it. |
+| ~~Complete confirm heading~~ | ~~`Mark this todo complete?`~~ — **struck.** The checkbox fires immediately and reverses from its toast (§7.13). |
+| ~~Complete confirm body~~ | ~~`“{title}” will be marked complete.`~~ — **struck.** |
+| ~~Complete confirm action~~ | ~~`Mark complete`~~ — **struck.** |
+| ~~Reopen confirm heading~~ | ~~`Mark this todo not complete?`~~ — **struck.** |
+| ~~Reopen confirm body~~ | ~~`“{title}” will be moved back to active.`~~ — **struck.** |
+| ~~Reopen confirm action~~ | ~~`Mark not complete`~~ — **struck.** |
+| ~~Toggle confirm pending~~ | ~~`Updating…`~~ — **struck.** |
 | Create success toast | `Todo “{title}” added` |
 | Update success toast | `Todo “{title}” updated` |
 | Delete success toast | `Todo “{title}” deleted` |
@@ -1640,23 +1884,29 @@ Undo.
 
 ### 7.12 Auth confirmations and outcome toasts
 
-Added for the team lead's ruling recorded in `docs/CONVENTIONS.md` →
-Mutation UX: the confirm-modal rule applies literally to both auth forms.
-Both use the non-destructive `ConfirmDialog` variant, so the primary action
-is autofocused and `Cancel` (§7.11) closes without submitting.
+Added for a ruling recorded in `docs/CONVENTIONS.md` → Mutation UX that the
+confirm-modal rule applied literally to both auth forms. **The confirm half of
+that is gone** — neither form mounts a `ConfirmDialog`, and neither should: a
+sign-in is not a mutation of the user's data and confirming it made the
+cheapest, most repeated action on the app cost two presses.
+
+**The toasts are not gone**, and were reported as dead along with the
+dialogs. They ship: `SignInForm.tsx` and `SignUpForm.tsx` raise both the
+success and the failure toast on every attempt. Do not delete these four
+rows.
 
 | Slot | String |
 |---|---|
-| Sign in confirm heading | `Sign in to your account?` |
-| Sign in confirm body | `You’ll be signed in as “{email}”.` |
-| Sign in confirm action | `Sign in` |
-| Sign in confirm pending | `Signing in…` |
+| ~~Sign in confirm heading~~ | ~~`Sign in to your account?`~~ — **struck.** No such dialog. |
+| ~~Sign in confirm body~~ | ~~`You’ll be signed in as “{email}”.`~~ — **struck.** |
+| ~~Sign in confirm action~~ | ~~`Sign in`~~ — **struck.** §7.1 has the form's own submit. |
+| ~~Sign in confirm pending~~ | ~~`Signing in…`~~ — **struck.** §7.1 has it. |
 | Sign in success toast | `Signed in as “{email}”` |
 | Sign in failure toast | *(the same message shown in the `Sign in failed` Alert)* |
-| Sign up confirm heading | `Create this account?` |
-| Sign up confirm body | `An account will be created for “{email}”.` |
-| Sign up confirm action | `Create account` |
-| Sign up confirm pending | `Creating account…` |
+| ~~Sign up confirm heading~~ | ~~`Create this account?`~~ — **struck.** No such dialog. |
+| ~~Sign up confirm body~~ | ~~`An account will be created for “{email}”.`~~ — **struck.** |
+| ~~Sign up confirm action~~ | ~~`Create account`~~ — **struck.** §7.2 has the form's own submit. |
+| ~~Sign up confirm pending~~ | ~~`Creating account…`~~ — **struck.** §7.2 has it. |
 | Sign up success toast | `Account created for “{email}”` |
 | Sign up failure toast | *(the same message shown in the `Sign up failed` Alert)* |
 
@@ -1680,8 +1930,8 @@ reports its own outcome with the §7.11 toast for the flipped state.
 | Sign out failure toast | `Couldn’t sign you out. Try again.` |
 
 **Why the action has an `aria-label` at all, when its visible word is already
-its name.** `UNDO_WINDOW_MS` is 12s so that several Undo toasts stand at once,
-and every one of their buttons reads `Undo`. A sighted user tabbing forward
+its name.** It was written when `UNDO_WINDOW_MS`'s 12s let several Undo toasts
+stand at once, every one of their buttons reading `Undo`. A sighted user tabbing forward
 sees which toast they are in; a screen-reader user hears "Undo, button" for
 every one of them with no way to tell a completion-revert from an edit-revert
 (`docs/QA-REPORT.md` §8, written when the worst case in that stack was an
@@ -1693,10 +1943,95 @@ overrides the child text for assistive technology only.
 
 The `Tab` ×2 hazard this was first written against is now closed, by dropping
 the `added` toast's Undo rather than by naming it (§6.8, §7.15). **The naming
-stays**, and not out of sentiment: the remaining Undos still stack, still read
-`Undo` on every button, and a name is still the only thing separating them.
-What changed is that none of the things a name has to describe is destructive
-any more.
+stays**, and not out of sentiment: a name is confirmation of what you reached,
+which is what an accessible name is for. What changed is that none of the
+things a name has to describe is destructive any more, and — since the cap
+below — there is never more than one of them to tell apart.
+
+**One armed toast at a time. Shipped.** `dismissUndo` used to be keyed per todo
+id, so it disarmed a *repeat write to the same row* and nothing else; two rows
+toggled inside 12s left two live Undos in one region, both reading `Undo`. The
+key is now a single slot in `src/lib/toast.ts`: raising any action-bearing toast
+closes whatever action-bearing toast is standing, whatever record it belonged
+to. The press guard moved with it, and is keyed on the toast's **own token**
+rather than on its row, because closing a toast does not unmount it — for a
+window after a replacement the DOM holds two action buttons for the same todo,
+and a row-keyed guard said yes to both.
+
+**It is not separable from §4.10's `wrapUpdate` escape hatch**, and both landed
+together. Under a single slot every action toast is a close-then-add, which is
+where §4.10's dead window is worst — measured at 729–760ms before, 200ms with
+zero blocked frames after. The cap without `wrapUpdate` would make the region
+tidier and the one remaining button less reliable. Take both or take neither.
+
+**What the cap costs, stated:** a second write inside 12s takes the first Undo
+away. For a toggle that is nearly free — the checkbox that made the change
+reverses it, on screen, in one press. For a **reschedule** it is not free: the
+previous date is not on the row any more and not in any toast, so the older
+reschedule becomes genuinely unrecoverable rather than merely inconvenient. I
+accept that. It is two reschedules in twelve seconds followed by regret about
+the first, against an ambiguous `Undo` in every ordinary session — and the fix
+for the rare case is `Pick a date…`, not a second armed button. No copy change:
+putting the old date in the toast (`Todo “x” moved from Aug 22 to Aug 26`) buys
+that case and lengthens every other one.
+
+#### 7.13.1 Receipts against the standing Undo — the exemption, narrowed
+
+This section previously exempted receipts from the cap outright, on the grounds
+that an `added` toast carries no action so neither thing the slot protects
+applies to it. **That was granted too broadly and I am narrowing it.** The
+evidence is §4.10.1: the region has one operable slot and the newest toast
+takes it, so a receipt raised after a toggle sits over the standing Undo's
+centre and holds it there, inert to pointer, for the receipt's full 12 seconds.
+"Toggle a row, then capture something" is an ordinary minute in this app.
+
+The reasoning that granted the exemption was that receipts carry information no
+other surface carries. **That is true of one of the two receipts and false of
+the other**, and the exemption was extended to both by inheritance rather than
+by argument:
+
+- `Todo “{title}” added` — **the row is on screen.** This receipt confirms
+  something the list has already confirmed, in the place the user is looking.
+  It **yields**: if an action-bearing toast is standing, it is not raised at
+  all. When nothing is standing it is raised as before, and its life drops from
+  12s to HeroUI's default 4s — it borrowed 12s from a window it does not have.
+- `Todo “{title}” added — hidden by your filters` (§7.17) — **the row is not on
+  screen**, and this sentence is the only account the user will ever get that
+  the write happened. It **takes the slot**, closing the standing Undo.
+
+That second line is a reversal of the reversal, and it is deliberate: where a
+sentence and a control compete for the one slot, the sentence wins if it cannot
+be re-derived and the control can. A toggle's Undo is a convenience over a
+checkbox that is still on the row, in the place the user just pressed it. A row
+the filter swallowed has no such backup — nothing on screen says it exists.
+
+**What this costs, and what I am accepting rather than solving.** Suppressing
+the visible-row receipt also suppresses its announcement, so a screen-reader
+user who captures within 12s of a write hears nothing about the create. The row
+is inserted into the list, which is the subject of the announcement, but that is
+a weaker guarantee than a spoken sentence and I am not going to pretend
+otherwise. I would rather owe that than hand every pointer user an inert Undo
+in an ordinary minute. If it is measured to matter the fix is a polite
+live-region line, not a toast — a toast is what costs the slot. Burst capture is
+unaffected: an add arms nothing, so a run of adds has no standing Undo to yield
+to. And the hidden-by-filters receipt closing an Undo is the same price this
+section already accepted for a second write, applied to one narrow branch.
+
+**What I rejected.** Restacking the region — §4.10.1 prices it: two public
+props get most of the way, HeroUI's own component CSS blocks the rest, and the
+everyday viewport cost is worse than the fault. Expand-on-hover — a pointer
+affordance for a pointer bug on a region whose back toasts are clipped and
+untabbable, which is the rewrite. Reserving the front for the armed toast — it
+does not help, because the buried receipt is then the unreadable one and the
+`hidden by your filters` sentence is exactly what must not be buried. Shortening
+the Undo's 12s — §4.10's whole argument is that a short-lived toast with an
+action is worse.
+
+**And a correction to what this section used to argue.** It reasoned about a
+*stack* of Undos and treated burial as survivable because there were others to
+reach. §4.10.1 shows there never were: a buried Undo has never been
+pointer-reachable in this library. The cap did not cause this. It uncovered it,
+and it is still the right call.
 
 ### 7.15 Edit Undo, and why the create has none
 
@@ -1720,13 +2055,15 @@ review (M-3) for naming nothing.
 | Undo failure | `Couldn’t undo that. Try again.` (shared with §7.13) |
 
 **Why the create's Undo went.** It was a `DELETE` wearing the same word, and
-the same shape, as three reversals that put things back. `UNDO_WINDOW_MS` is
-12s precisely so several of these toasts stand at once, in one tab-ordered
-region — so two forward `Tab`s from the toast the app had just moved focus to
-reached a neighbour's Undo, and if that neighbour was an `added` toast the
-press destroyed a record with no confirm and nothing behind it (§6.8, and QA's
-§8 against DEF-25). Naming the buttons made the destination audible on arrival
-but left the distance at two.
+the same shape, as three reversals that put things back. At the time
+`UNDO_WINDOW_MS`'s 12s let several of these toasts stand at once in one
+tab-ordered region — so two forward `Tab`s from the toast the app had just
+moved focus to reached a neighbour's Undo, and if that neighbour was an `added`
+toast the press destroyed a record with no confirm and nothing behind it (§6.8,
+and QA's §8 against DEF-25). Naming the buttons made the destination audible on
+arrival but left the distance at two. **§7.13's cap has since removed the
+neighbour**, which does not put the create's Undo back: the argument below is
+about what the control *means*, not about how far away it was.
 
 The alternative fix was a roving tabindex over the toast region. It shortens
 the walk, and leaves the control — and the control is the part that has to be
@@ -1743,12 +2080,17 @@ two, since a delete confirms instead of offering one (§7.6). The distinction
 that decided this is what the action *does*: those two write a value back,
 where the create's removed a record.
 
-An Undo is offered for one write only. A later write to the same todo dismisses
-the earlier toast, so an Undo can never restore a record past a change the user
-made after it. A toggle and a delete dismiss before they start; a save dismisses
-when its write resolves, since it runs behind a modal that covers the toast.
-An `added` receipt is not part of that bookkeeping: it arms nothing, so there
-is nothing about it that can outlive the write it describes.
+An Undo is offered for one write only, and **only one Undo stands at a time**
+(§7.13). Raising any action toast closes whichever one was standing, and a
+write to the same todo dismisses its own toast before it starts — a toggle and
+a delete before, a save when the write resolves, since it runs behind a modal
+that covers the toast. Either way an Undo can never restore a record past a
+change the user made after it.
+
+An `added` receipt arms nothing, so none of that bookkeeping applies to it. It
+is **not** therefore free of the slot: §7.13.1 rules on which of the two
+receipts may take it from a standing Undo, because §4.10.1's region has one
+operable slot and the newest toast wins it whether it wanted it or not.
 
 ### 7.14 Malformed request
 
@@ -1917,12 +2259,20 @@ The receipt says so instead. Like every other `added` toast it carries no
 action (§7.15) — it is the sentence that explains the absence, not a control
 for correcting it:
 
-| Slot | String |
-|---|---|
-| Create success toast (visible) | `Todo “{title}” added` |
-| Create success toast (hidden by filters) | `Todo “{title}” added — hidden by your filters` |
+| Slot | String | Life | Against a standing Undo |
+|---|---|---|---|
+| Create success toast (visible) | `Todo “{title}” added` | 4s | **yields** — not raised at all |
+| Create success toast (hidden by filters) | `Todo “{title}” added — hidden by your filters` | 12s | **takes the slot**, closing it |
 
-### 7.18 Empty-state call to action
+Those last two columns are §7.13.1's ruling and its reasoning is there. The
+short version: the visible receipt describes a row the user is looking at, so
+it is the cheaper of the two things competing for §4.10.1's one operable slot;
+the hidden one describes a row nothing on screen mentions, so it is the dearer.
+The 12s here is not borrowed from `UNDO_WINDOW_MS` any more — it is this
+sentence's own, because it is longer than the other and there is nothing on
+screen to re-read it from.
+
+### 7.18 Empty-state call to action, and the line that teaches the bar
 
 The `No todos` empty state's action no longer opens the modal; it moves focus
 to the quick-add bar. Its label changes with it, because `New todo` described
@@ -1932,6 +2282,91 @@ a modal that is no longer what the button does. This row supersedes the
 | Slot | String |
 |---|---|
 | Empty state action (no todos) | `Add a todo` |
+| Empty state teaching line (no todos only) | `A day and a priority at the end are read — “pay rent friday high” becomes “pay rent”, due Friday, High priority.` |
+
+**Shipped.** `TodoEmptyState` takes an optional `hint`, rendered as a second
+`body-sm` `--muted` line under the body copy, and only `resolveEmptyState`'s
+never-used branch passes it. The example is held once as `QUICK_ADD_EXAMPLE`
+(`src/app/todos/constants`) and read by both this line and §7.17's placeholder,
+so the two cannot drift into teaching one parser two vocabularies — but **only
+the example is shared**: `pay rent`, `Friday` and `High` in the sentence above
+are that example's own reading spelled out, so changing the constant means
+rewriting this row with it. Pinned in `e2e/quick-add.spec.ts`, which asserts the
+line on the never-used state, that it shows exactly one example, that the
+placeholder still shows the same one, and that `No matches` carries no such
+line.
+
+Rendered as `<Typography type="body-sm" color="muted">`, below the body and
+above the action, and **only in the `Nothing here yet` state** (§7.7). It is
+one line and it carries one example, deliberately.
+
+**Why the line exists, and what it is answering.** A tester on a phone read
+the bar's placeholder — `Add a todo — try "pay rent friday high"` — and said
+in as many words that they had no idea what `high` meant, could not tell
+whether it was the priority or part of some syntax, and were not going to
+spend their four minutes reverse-engineering a hint. That is the correct
+response to that placeholder. A placeholder can show a line that works; it
+cannot say *why* it works, because it vanishes at the first keystroke and
+because a hint the user has to test by typing is a hint that costs a todo to
+read. So the explanation moves to the one surface that is standing still, is
+never in the way, and is only ever seen by somebody who has not used the
+feature yet.
+
+**One example, and it is the placeholder's.** The line quotes
+`pay rent friday high` because the bar quotes it. Two examples would be two
+vocabularies for one parser, and a reader who met `pay rent friday high` on
+the empty state and something else in the field would reasonably conclude
+there was a list of magic phrases somewhere and that they had been shown two
+of them. There is no list, which is the point — so the line shows the *shape*
+(`title`, then a day, then a priority) once, and lets the chips do the rest.
+If a second example ever seems necessary, that is a signal the vocabulary has
+outgrown a one-line explanation and needs a real surface, not that this line
+needs a second sentence.
+
+**No list of tokens.** `today`, `tonight`, `tomorrow`, the seven weekday
+names, `next week`, `in N days` and `YYYY-MM-DD` are eight forms, and a
+muted line enumerating eight forms is a reference card in an empty state —
+the thing a parent with four minutes skips on sight. What the line teaches is
+the *offer*: that the last words of a line can set a day and a priority, and
+that they leave the title when they do. Everything past that is discoverable
+by trying, and trying is safe here, because the chips show what was read and
+one press puts any of it back (§7.17).
+
+**What the line is careful not to promise.**
+
+- **"at the end"** is rule 1 stated in three words. It is the single most
+  useful fact about this parser and the one the placeholder cannot convey:
+  `high priority handover` keeps every word, and a user who does not know
+  that reading is right-to-left has no model for why.
+- It says **"a day"**, not "any way of writing a day". `next friday` is
+  deliberately not vocabulary and lands in the title silently (§7.17, rule 4),
+  and no one-line summary can carry that exception without becoming the token
+  list this line refuses to be. The mitigation is not in this copy: it is that
+  a word which was not read stays visibly in the title, where the user can see
+  it. This line's job is to get the user to look at the chips at all.
+- **`becomes`** describes the whole transaction — the words leave the title
+  and turn into a date and a priority — which is precisely the part the
+  tester could not see. `sets` or `adds` would leave them expecting a todo
+  still called `pay rent friday high`.
+- **`High priority`** is the priority chip's exact string (§7.17), so the
+  words the line uses are the words the user will meet two seconds later.
+
+*One drift accepted, and stated:* `due Friday` is plain English, not a string
+the app renders. The chip and the row both go through `formatDueDate`, which
+says `Today` or `Tomorrow` and otherwise a date — so a Friday three days out
+chips as `Due Aug 24`, not `Due Friday`. The line is teaching the offer, not
+quoting the chip, and "due Friday" is what actually becomes true of the todo.
+Moving the shared example to `tomorrow` would close the gap exactly, and I am
+not proposing it: a weekday is the example that teaches there is a vocabulary
+rather than two magic words, and rent is monthly.
+
+*Open, and addressed to the ui-designer:* I would rather this line **replaced**
+`Add your first todo and it will show up here.` than sat under it. That body
+says nothing the heading and the button do not already say, and three stacked
+lines above a button is a paragraph in a place designed to be read at a
+glance. The additive version is specified above because the slot was
+specified additive and the dev should not be blocked on this; it is one
+string either way.
 
 `Today` is deliberately the same word the row's own due-date label uses (§7.4).
 A row reading `Today` inside a section headed `Today` is a repetition, not a
@@ -1997,9 +2432,44 @@ Punctuation notes: use the typographic apostrophe (`'`) in contractions
 (`don't`, `can't`, `Couldn't`) and curly double quotes around interpolated
 titles in prose. Use the ellipsis character `…`.
 
----
+### 7.20 Board view
 
-### 7.19 Reschedule from the row
+`docs/PRD.md` US-14. The column headings are §7.16's, unchanged — the board is
+the list's own sections laid out sideways, and a second set of names for the
+same five groups would be the first sign it had become a second opinion about
+where a todo belongs.
+
+| Slot | String |
+|---|---|
+| View toggle `aria-label` | `Choose a view` |
+| Toggle option 1 | `List` |
+| Toggle option 2 | `Board` |
+| Column headings | §7.16's five, with §7.16's `aria-hidden` count |
+| Empty `Overdue` | `Nothing overdue.` |
+| Empty `Today` | `Nothing due today.` |
+| Empty `Upcoming` | `Nothing scheduled ahead.` |
+| Empty `No date` | `Every todo has a date.` |
+| Empty `Completed` | `Nothing completed yet.` |
+| Order note, under the columns | `Cards are ordered by due date within each column. Dropping a card chooses its column, not its place in it.` |
+| Drag picked up | `Picked up “{title}”. Drop it on {columns, comma-separated}.` |
+| Drag picked up, nowhere to go | `Picked up “{title}”. There is nowhere to move it.` |
+| Drag dropped | `Dropped “{title}” on {column}.` |
+| Drag abandoned | `Move cancelled.` |
+| Anything written | §7.21's and §7.13's toasts, unchanged |
+
+**Two empty columns are good news and are worded as such.** `Nothing overdue.`
+and `Nothing due today.` are not the same kind of statement as
+`Every todo has a date.`, and five identical "Nothing here" lines would say
+nothing at all.
+
+**The drag messages describe the gesture; the toasts describe the write.** They
+are split that way so nothing is announced twice: a keyboard user never drags —
+their equivalent is the card's reschedule menu — and only ever hears the toast,
+while a pointer user with a screen reader hears the pick-up and the drop, which
+no toast covers, because a drag that is picked up and put down again writes
+nothing at all.
+
+### 7.21 Reschedule from the row
 
 Added for backlog #5 (`docs/PM-PROPOSAL.md` §3, `docs/PRD.md` US-13). The row
 gets a third action: a `Dropdown` that moves the due date without opening the
@@ -2052,50 +2522,48 @@ re-learned: a screen of twenty rows is a screen of twenty `Reschedule` buttons,
 and `Reschedule, button` twenty times over is not a list a user can navigate.
 The menu borrows the trigger's name rather than inventing a second one.
 
+**`Pick a date…` opens the edit modal, and it stays that way.** A tester
+called it "backwards from what I expected", and they are describing something
+real: a menu item ending in `…` promises a surface for specifying *this*
+thing, and what arrives is the whole record editor. The ruling is that it
+stays, because the alternative is a second date surface — its own popover, its
+own focus and dismissal behaviour, its own small-screen story, its own
+contrast measurements — built to set a field the app already has a screen for.
+That is a large amount of new surface bought with the one accent this app has
+decided not to spend, and it would leave two places to change a date that must
+never disagree.
+
+**What is wrong is not the destination; it is where the caret lands.** The
+form autofocuses `Title` (`TodoForm.tsx`), so a user who asked for a date
+arrives looking at a text field holding words they did not come to change —
+which is exactly the "backwards" the tester reported, and it is one line to
+fix. **When the modal is opened from `Pick a date…`, focus goes to
+`Due date`.** The surface is then bigger than expected but open *on* the thing
+that was asked for, which reads as the app taking the request seriously rather
+than ignoring it. Opened from the row's `Edit` button it still focuses
+`Title`, unchanged.
+
+**No copy change, and the wording was the first thing tried.** Every honest
+rename either lied about the destination or lost the intent: `Edit…` drops
+the date the user came for, `Edit due date…` and `Another date…` promise the
+same date-only surface `Pick a date…` already promises, and anything naming
+the modal (`Pick a date in the editor…`) is a sentence in an option list where
+the other four items are two words. A menu item cannot carry a caveat about
+its own destination; landing on the right field says it in one frame and costs
+nothing to read.
+
 **The reschedule's Undo restores the value the row held before the press**,
 read off the row at the moment of the press and never recomputed. That is the
 same rule §7.15 states for an edit, and the reason is the same: a reversal that
 derives what to put back is guessing, and "the date it used to have" is exactly
-the kind of thing that can be derived wrongly. A later write to the same todo
-dismisses the toast (`dismissUndo`, keyed per todo id) so an Undo can never
-reach past a change the user made after it.
-
-### 7.20 Board view
-
-`docs/PRD.md` US-14. The column headings are §7.16's, unchanged — the board is
-the list's own sections laid out sideways, and a second set of names for the
-same five groups would be the first sign it had become a second opinion about
-where a todo belongs.
-
-| Slot | String |
-|---|---|
-| View toggle `aria-label` | `Choose a view` |
-| Toggle option 1 | `List` |
-| Toggle option 2 | `Board` |
-| Column headings | §7.16's five, with §7.16's `aria-hidden` count |
-| Empty `Overdue` | `Nothing overdue.` |
-| Empty `Today` | `Nothing due today.` |
-| Empty `Upcoming` | `Nothing scheduled ahead.` |
-| Empty `No date` | `Every todo has a date.` |
-| Empty `Completed` | `Nothing completed yet.` |
-| Order note, under the columns | `Cards are ordered by due date within each column. Dropping a card chooses its column, not its place in it.` |
-| Drag picked up | `Picked up “{title}”. Drop it on {columns, comma-separated}.` |
-| Drag picked up, nowhere to go | `Picked up “{title}”. There is nowhere to move it.` |
-| Drag dropped | `Dropped “{title}” on {column}.` |
-| Drag abandoned | `Move cancelled.` |
-| Anything written | §7.19's and §7.13's toasts, unchanged |
-
-**Two empty columns are good news and are worded as such.** `Nothing overdue.`
-and `Nothing due today.` are not the same kind of statement as
-`Every todo has a date.`, and five identical "Nothing here" lines would say
-nothing at all.
-
-**The drag messages describe the gesture; the toasts describe the write.** They
-are split that way so nothing is announced twice: a keyboard user never drags —
-their equivalent is the card's reschedule menu — and only ever hears the toast,
-while a pointer user with a screen reader hears the pick-up and the drop, which
-no toast covers, because a drag that is picked up and put down again writes
-nothing at all.
+the kind of thing that can be derived wrongly. An Undo can never reach past a
+change the user made after it, and since §7.13's cap that is enforced by the
+single action slot in `src/lib/toast.ts` rather than by a per-todo key: a write
+to this row dismisses this row's toast before it starts, and raising **any**
+action toast closes whichever one was standing. A reschedule is the write that
+pays most for the second half of that rule — §7.13 states the cost and accepts
+it, and the answer for the case that hurts is `Pick a date…`, not a second
+armed button.
 
 ---
 

@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import {
   HEADER_LINE_PATTERN,
@@ -307,5 +307,94 @@ test.describe("the dated header line", () => {
     expect(headingAncestors, "the line sits inside a heading or a control").toBe(
       false,
     );
+  });
+});
+
+/**
+ * §7.19 — the line is a **subtitle of the heading**, not a peer of the
+ * quick-add bar.
+ *
+ * `Your todos` and `Wednesday, 20 August · 3 due today · 1 overdue` are one
+ * statement, and they were two direct children of `main`, so §2.2's `gap-6`
+ * put the same 24px between them as between the bar and the Card. Nothing in
+ * the DOM said which of the four things on the page belonged with which.
+ *
+ * Measured rather than eyeballed, and measured as **two** numbers rather than
+ * one: a wrapper that tightened the heading to its line while also tightening
+ * the block to the bar would look "closer" in a screenshot and would have
+ * destroyed §2.2's section rhythm to do it. The claim is that one gap shrank
+ * and the other did not.
+ */
+test.describe("§7.19 — the dated line belongs to the heading", () => {
+  /** §2.2: `gap-1` inside the block, `gap-6` between `main`'s sections. */
+  const SUBTITLE_GAP = 4;
+  const SECTION_GAP = 24;
+
+  /**
+   * Sub-pixel only. These are computed flex gaps, not two edges that happen to
+   * land near each other, so anything at or above 1px is a different layout.
+   */
+  const TOLERANCE = 1;
+
+  const gapBetween = async (above: Locator, below: Locator) => {
+    const [top, bottom] = await Promise.all([above.boundingBox(), below.boundingBox()]);
+
+    expect(top, "the element above has no box").not.toBeNull();
+    expect(bottom, "the element below has no box").not.toBeNull();
+
+    return bottom!.y - (top!.y + top!.height);
+  };
+
+  test("sits 4px under the heading row while the block stays 24px off the bar", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await seed(page, [
+      { title: "Due today one", dueAt: localDay(0) },
+      { title: "Was due last week", dueAt: localDay(-7) },
+    ]);
+    await page.reload();
+
+    await expect(todos.row("Due today one")).toBeVisible();
+
+    /*
+      The heading **row**, not the `h1`: the row is the flex child `gap-1`
+      actually applies to, and it is taller than the `h1` whenever the
+      `{done} of {total} done` counter beside it is on screen. Measuring the
+      heading itself would report the row's own baseline alignment as part of
+      the gap.
+    */
+    const headingRow = page
+      .getByRole("heading", { level: 1 })
+      .locator("xpath=..");
+    /*
+      The quick-add bar is the next of `main`'s sections. Located as the form
+      rather than by a class, because the class is the thing under test.
+    */
+    const quickAddBar = page.locator("main form");
+
+    const subtitleGap = await gapBetween(headingRow, line(page));
+    const sectionGap = await gapBetween(line(page), quickAddBar);
+
+    expect(
+      Math.abs(subtitleGap - SUBTITLE_GAP),
+      `heading row to dated line: ${subtitleGap.toFixed(2)}px, expected ${SUBTITLE_GAP}px — the line is the heading's subtitle`,
+    ).toBeLessThan(TOLERANCE);
+
+    expect(
+      Math.abs(sectionGap - SECTION_GAP),
+      `dated line to quick-add bar: ${sectionGap.toFixed(2)}px, expected ${SECTION_GAP}px — §2.2's gap between page sections is unchanged`,
+    ).toBeLessThan(TOLERANCE);
+
+    /*
+      And the two are genuinely different distances now, which is the whole
+      point and is worth asserting on its own: the failure this replaces was
+      not "the gap is wrong", it was "every gap is the same, so the page has no
+      structure".
+    */
+    expect(
+      sectionGap,
+      "the block is further from the bar than the line is from the heading",
+    ).toBeGreaterThan(subtitleGap);
   });
 });

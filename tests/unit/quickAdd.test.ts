@@ -329,12 +329,15 @@ describe("parseQuickAdd — where it must NOT fire", () => {
   });
 
   test("rule 4: the multi-word phrases are closed too", () => {
-    // `next week` is vocabulary; nothing else beginning `next` or `this` is,
-    // and `in N days` does not generalise to other units.
+    // `next week` is vocabulary; nothing else beginning `next`, `last` or
+    // `this` is, and `in N days` does not generalise to other units.
     for (const phrase of [
       "next month",
       "next year",
       "next friday",
+      "last week",
+      "last month",
+      "last year",
       "this week",
       "this month",
       "in a week",
@@ -346,6 +349,71 @@ describe("parseQuickAdd — where it must NOT fire", () => {
 
       expect(parse(input), input).toMatchObject({ title: input, dueAt: "" });
     }
+  });
+
+  /**
+   * `last <date word>`, which is the defect this test was written against.
+   *
+   * The parser has no past-tense vocabulary, and `last` was not in any table,
+   * so the scan lifted the weekday on its own and then met `last` as an
+   * unknown word and stopped. That produced the two failures at once that
+   * rule 4 exists to prevent: a word the parser did **not** understand left
+   * sitting in the title, and a date attached that points the opposite way to
+   * what was typed — `pay rent last tuesday` became "pay rent last" due the
+   * Tuesday *coming*, when the user named the one just gone.
+   *
+   * The refusal is the same one `next` already had, for the same stated
+   * reason, and it can only ever keep more words than it takes. Why refusing
+   * beats reading `last <weekday>` as a past date is argued in
+   * `docs/decisions/2026-08-21-quick-add-last-weekday.md`.
+   */
+  test("rule 4: `last` is a modifier the parser cannot read, so the phrase stays whole", () => {
+    for (const phrase of [
+      "last tuesday",
+      "last monday",
+      "last sunday",
+      // Every other date word `last` can precede — the refusal is about the
+      // modifier, not about weekdays specifically.
+      "last today",
+      "last tonight",
+      "last tomorrow",
+      "last 2026-12-25",
+    ]) {
+      const input = `pay rent ${phrase}`;
+
+      expect(parse(input), input).toMatchObject({
+        title: input,
+        dueAt: "",
+        tokens: [],
+        // Nothing was read at all, so the scan never entered the phrase.
+        tail: [],
+      });
+    }
+  });
+
+  test("rule 4: refusing `last <weekday>` does not cost the bare weekday", () => {
+    // The guard keys on the preceding word, so a weekday that is not modified
+    // still fires. Kills the mutant that refuses every weekday outright.
+    expect(parse("pay rent tuesday").dueAt).toBe("2026-08-18");
+    // And `last` on its own is an ordinary title word, as it always was.
+    expect(parse("read the last")).toMatchObject({
+      title: "read the last",
+      dueAt: "",
+    });
+  });
+
+  test("rule 4: the modifiers are whole words, so a word merely containing one is not one", () => {
+    /*
+      Found by mutation: loosening `UNREAD_DATE_MODIFIERS`'s `includes` to a
+      substring test survived every other test in this file, and it is a real
+      defect rather than an academic one — `context` contains `next`, so
+      `book the context friday` would have silently lost its date, and the
+      user would get no chip and no reason. Whole words, per rule 4.
+    */
+    expect(parse("book the context friday").dueAt).toBe("2026-08-21");
+    expect(parse("check the ballast tuesday").dueAt).toBe("2026-08-18");
+    expect(parse("do it lastly monday").dueAt).toBe("2026-08-24");
+    expect(parse("read the nextdoor notice tomorrow").dueAt).toBe("2026-08-18");
   });
 
   test("rule 4: the `in N days` horizon has an exact edge", () => {

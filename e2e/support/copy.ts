@@ -48,6 +48,12 @@ export const doneCount = (done: number, total: number) =>
  */
 export const QUICK_ADD_LABEL = "Add a todo";
 export const QUICK_ADD_PLACEHOLDER = 'Add a todo — try "pay rent friday high"';
+/*
+  Written out rather than built from `QUICK_ADD_EXAMPLE` below, and that is the
+  point: the app builds *both* of its two showings from one constant, so a test
+  that also shared one string could not catch the two drifting apart. This is
+  the independent copy.
+*/
 export const QUICK_ADD_SUBMIT_LABEL = "Add";
 export const MORE_OPTIONS_LABEL = "More options";
 export const CHIP_GROUP_LABEL = "Read from your text";
@@ -91,7 +97,19 @@ export const ADD_TODO_LABEL = "Add todo";
 export const SAVE_CHANGES_LABEL = "Save changes";
 export const TITLE_FIELD_LABEL = "Title";
 export const CREATE_MODAL_HEADING = "New todo";
-export const EDIT_MODAL_HEADING = "Edit todo";
+
+/**
+ * The edit dialog names its record (§7.5).
+ *
+ * Spelled out here for the untruncated case, which is every existing caller —
+ * the bound is 45 characters and these titles are short. **The truncation is
+ * deliberately not reproduced in this deck**: importing the app's own
+ * `truncateForAnnouncement` would make any assertion built on it agree with the
+ * code by construction, and could not catch a wrong bound. The long case is
+ * asserted against literal expected strings in
+ * `e2e/edit-dialog-name.spec.ts`.
+ */
+export const editModalHeading = (title: string) => `Edit “${title}”`;
 
 /** §7.6 — the delete confirm, the one mutation that still asks. */
 export const DELETE_CONFIRM_HEADING = "Delete this todo?";
@@ -111,7 +129,7 @@ export const EDIT_TOOLTIP = "Edit";
 export const DELETE_TOOLTIP = "Delete";
 
 /**
- * §7.19 — the reschedule menu (backlog #5).
+ * §7.21 — the reschedule menu (backlog #5).
  *
  * The trigger's name is built the same way Edit's and Delete's are — straight
  * quotes, because it is an `aria-label` — and the menu borrows it, so a screen
@@ -126,7 +144,7 @@ export const NEXT_WEEK_ITEM_LABEL = "Next week";
 export const PICK_A_DATE_ITEM_LABEL = "Pick a date…";
 export const CLEAR_DUE_DATE_ITEM_LABEL = "Clear due date";
 
-/** §7.19 — what a reschedule reports, and what its Undo reports when it lands. */
+/** §7.21 — what a reschedule reports, and what its Undo reports when it lands. */
 export const dueToast = (title: string, dayLabel: string) =>
   `Todo ${quoted(title)} due ${dayLabel}`;
 export const dueClearedToast = (title: string) =>
@@ -186,6 +204,29 @@ export const TRY_AGAIN_LABEL = "Try again";
 
 /** §7.7 — empty states. */
 export const EMPTY_HEADING = "Nothing here yet";
+export const NO_MATCHES_HEADING = "No matches";
+/**
+ * The heading `resolveEmptyState` reaches for when a status or priority filter
+ * matches none of the account's todos — the longest of the five, and the only
+ * one that wraps inside the 320px this app supports.
+ */
+export const NO_MATCHING_FILTERS_HEADING = "No todos match these filters";
+
+/**
+ * §7.18 "Empty state teaching line" / §7.7 — the one worked example of the
+ * quick-add vocabulary, and the one line that teaches it.
+ *
+ * The example is shared with the bar's placeholder in the app (`QUICK_ADD_EXAMPLE`
+ * in `src/app/todos/constants`), so it is written out once here too — a test
+ * that hard-coded a second example would pass while the product taught two.
+ *
+ * Curly quotes: this is prose in an empty state, so §7.19's punctuation note
+ * applies, where the placeholder is a field hint and uses straight quotes. The
+ * two are not interchangeable and asserting the wrong one silently matches
+ * nothing.
+ */
+export const QUICK_ADD_EXAMPLE = "pay rent friday high";
+export const EMPTY_STATE_SYNTAX_HINT = `A day and a priority at the end are read — ${quoted(QUICK_ADD_EXAMPLE)} becomes ${quoted("pay rent")}, due Friday, High priority.`;
 
 /** §7.16 — the list's section headings, in the order the list shows them. */
 export const OVERDUE_HEADING = "Overdue";
