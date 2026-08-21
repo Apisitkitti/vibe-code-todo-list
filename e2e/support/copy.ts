@@ -213,6 +213,40 @@ export const NO_MATCHES_HEADING = "No matches";
 export const NO_MATCHING_FILTERS_HEADING = "No todos match these filters";
 
 /**
+ * The two empty-state actions that call `clearFilters`, and §7.10's search box.
+ *
+ * Written down here because until now they were nowhere: `grep -rn "Clear
+ * filters" e2e/` returned nothing across the whole suite, which is how `U4`
+ * survived 41 tests. A documented product ruling
+ * (`CLEARED_FILTERS` in `src/lib/todosUrl.ts`) with a dedicated constant, a
+ * dedicated comment, and no test that pressed the button.
+ *
+ * They are two labels for one handler — which is exactly why both are here.
+ * `resolveEmptyState` picks between them by whether a search term is set, and a
+ * test that only ever pressed one would leave the other branch's label free to
+ * drift.
+ */
+export const CLEAR_FILTERS_LABEL = "Clear filters";
+export const CLEAR_SEARCH_LABEL = "Clear search";
+export const SEARCH_BOX_LABEL = "Search todos";
+
+/**
+ * §7.3 — the priority filter, which is a HeroUI `Select` behind a popover
+ * rather than a radiogroup like the status one.
+ *
+ * It is the **only** filter that reaches `noMatchingFilters()` and therefore
+ * the only one that renders `Clear filters`: `resolveEmptyState` answers
+ * `status=active` and `status=completed` with their own states, each of which
+ * carries no action at all.
+ */
+export const PRIORITY_FILTER_ARIA_LABEL = "Filter todos by priority";
+export const PRIORITY_FILTER_LABELS = {
+  all: "All priorities",
+  high: "High",
+  low: "Low",
+} as const;
+
+/**
  * §7.18 "Empty state teaching line" / §7.7 — the one worked example of the
  * quick-add vocabulary, and the one line that teaches it.
  *
