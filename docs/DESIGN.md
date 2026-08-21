@@ -57,7 +57,7 @@ Reference them in Tailwind v4 arbitrary-value syntax, e.g.
 | Accent tint | `--accent-soft` / `--accent-soft-foreground` | Selected filter chip. |
 | Danger | `--danger` / `--danger-foreground` | Delete confirm button. |
 | Danger tint | `--danger-soft` / `--danger-soft-foreground` | High-priority chip, error text. |
-| Warning tint | `--warning-soft` / `--warning-soft-foreground` | Overdue date. **No longer the medium-priority chip** — see §4.4. |
+| Warning tint | `--warning-soft` / `--warning-soft-foreground` | Overdue date. **No longer the medium-priority chip**, which no longer exists at all — see §4.4. |
 | Success tint | `--success-soft` / `--success-soft-foreground` | Completed-state affordances. |
 | Neutral tint | `--default-soft` / `--default-soft-foreground` | Unused since §4.4 took the low/medium chips to `tertiary`, which has no fill. |
 | Overlay (modal/menu) | `--overlay` / `--overlay-foreground` | Handled by HeroUI. |
@@ -538,7 +538,7 @@ pass `aria-label`.
 | `priority` | Chip props | Glyph prefix | Label |
 |---|---|---|---|
 | `high` | `color="danger" variant="soft" size="sm"` | `▲` | `High` |
-| `medium` | `color="default" variant="tertiary" size="sm"` | `■` | `Medium` |
+| `medium` | *no chip* — `sr-only` `Priority: Medium` only | — | *(announced, not drawn)* |
 | `low` | `color="default" variant="tertiary" size="sm"` | `▼` | `Low` |
 
 ```tsx
@@ -553,7 +553,7 @@ screen readers and for colour-blind sighted users alike.
 **Only `High` is loud** (§8.4.2, taken). This table used to give all three
 `variant="soft"`, and `medium` is the schema default, so a real list was a
 column of near-identical warning-tinted chips with nothing for `High` to stand
-out against. `low` and `medium` are now `tertiary`.
+out against. `low` and `medium` went to `tertiary`.
 
 `medium` loses `color="warning"` along with the variant, and that is forced by
 the CSS rather than chosen: `chip--tertiary` sets only
@@ -563,23 +563,61 @@ the CSS rather than chosen: `chip--tertiary` sets only
 louder against a quiet row, not quieter. `default` is the pairing that makes
 the chip recede.
 
-**§6.4 is untouched**: the word and the shape glyph are unchanged, so colour is
-still not carrying the meaning. No token is overridden, so §3's exception is
-not engaged. Measured through the browser's parser, label against the composited
-backdrop:
+**And then the default level loses the chip entirely — §8.4.2 finished.**
+Taking `medium` to `tertiary` made it quiet; it did not stop it taking up room.
+`medium` is not a level anyone chose, it is the level a todo has when nobody has
+triaged it, and a twenty-row list still drew twenty chips of which most said
+`■ Medium`. The chip was the **widest** element in the metadata cluster and what
+it reported was an absence of information. Todoist's P4 is the reference and
+makes the same argument: the default priority renders no flag, so only the
+levels somebody actually set occupy a row.
+
+`low` keeps `tertiary` rather than going with it, because a deliberate
+down-rank *is* information — somebody looked at the todo and said it could wait.
+
+**The trade, written down rather than left to be discovered.** Removing the chip
+removes the word `Medium` and the `■` glyph from the screen, and §6.4 asks for
+both. So the row keeps the accessible wording exactly as it was: the chip is
+replaced by a `sr-only` `Priority: Medium`, byte-for-byte the accessible content
+the chip published, and only the drawn chip goes.
+
+That asymmetry is the decision, not a side effect of it. A sighted user infers
+`Medium` from absence, exactly as a Todoist user infers P4 from an absent flag —
+the information is still on screen, carried by the two levels that *do* draw. A
+screen-reader user meets the row's metadata as a sequence of announcements and
+cannot perceive absence the same way: a row that simply stopped mentioning
+priority would be indistinguishable from a row whose priority failed to render.
+The two audiences therefore get the same information through different carriers,
+rather than the visual saving being taken out of the accessible tree.
+
+`sr-only` is `position: absolute`, so it contributes no width and no `gap-2`
+step to the cluster — the metadata column's right edge is unmoved, which is §1's
+reflow promise and is measured in `e2e/row-layout.spec.ts` across rows with and
+without a chip.
+
+**§6.4 is amended rather than reinterpreted** — see the note there. It still
+requires the word plus the shape glyph wherever a priority is *drawn*; it now
+records that the default level is not drawn and is announced instead. No token
+is overridden, so §3's exception is not engaged. Measured through the browser's
+parser, label against the composited backdrop, for the levels that still draw:
 
 | Level | Light, before → after | Dark, before → after |
 |---|---|---|
 | `high` | 5.49 : 1 → **5.49 : 1** (unchanged) | 5.51 : 1 → **5.51 : 1** (unchanged) |
-| `medium` | 5.16 : 1 → **17.72 : 1** | 9.21 : 1 → **17.27 : 1** |
+| `medium` | 5.16 : 1 → **17.72 : 1** → *(no chip to measure)* | 9.21 : 1 → **17.27 : 1** → *(no chip to measure)* |
 | `low` | 16.25 : 1 → **17.72 : 1** | 15.86 : 1 → **17.27 : 1** |
 
-Contrast rises on both levels that moved, because a tertiary chip's label is
-`--default-foreground` on the row rather than a soft-tint foreground on a soft
-fill. Pinned in `e2e/a11y-contrast.spec.ts`, which measures all three levels in
-both themes **and** asserts the fill itself — a ratio alone would have passed
+Contrast rose on both levels that moved to `tertiary`, because a tertiary chip's
+label is `--default-foreground` on the row rather than a soft-tint foreground on
+a soft fill. `medium` then stopped drawing, so it has no ratio of its own any
+more — its row's accessible content is what is pinned instead.
+
+`e2e/a11y-contrast.spec.ts` measures the two drawn levels in both themes,
+asserts the fill on each of them, and asserts that `medium` renders no chip
+while the row still carries `Priority: Medium`. A ratio alone would have passed
 just as happily on the column of identical soft chips this change exists to
-break up.
+break up, and a chip-count alone would pass just as happily on a row that had
+silently dropped the level altogether.
 
 **Due date.** `<Typography type="body-sm" color="muted">` inside a `<time>`:
 
@@ -1222,9 +1260,18 @@ Do not introduce them without updating this document.
    `sm:min-h-9 sm:min-w-9` on pointer devices. Adjacent targets keep ≥8px
    (`gap-2`) between them.
 4. **Colour is never the only carrier of meaning.**
-   - Priority: the `Chip` always renders the **word** (`High`/`Medium`/`Low`)
-     plus a distinct shape glyph (`▲`/`■`/`▼`). A user in greyscale must still
-     be able to rank them.
+   - Priority: wherever a priority is **drawn**, the `Chip` renders the **word**
+     (`High`/`Low`) plus a distinct shape glyph (`▲`/`▼`). A user in greyscale
+     must still be able to rank them.
+
+     **`medium` is not drawn** (§4.4). It is the schema default rather than a
+     level anyone chose, so the row publishes it as a `sr-only`
+     `Priority: Medium` and draws nothing — byte-for-byte the accessible content
+     the chip used to carry. This clause used to read "always renders", and the
+     word was load-bearing enough that changing it is an amendment and not a
+     reading: a sighted user now infers the default from absence, and a
+     screen-reader user, who cannot perceive absence the same way, still hears
+     the level. §4.4 carries the argument for the asymmetry.
    - Overdue: `⚠` glyph plus a visually-hidden `Overdue —` prefix, not just a
      warning-tinted colour.
    - Completed: the checkbox's checked state **and** `line-through` on the
