@@ -33,8 +33,26 @@ export const createHandoff = <T,>(): Handoff<T> => {
   const answer = (value: T) => {
     const resolve = pending;
 
-    // Cleared before resolving, so a continuation that asks again during its
-    // own resolution cannot be answered by the call it is still inside.
+    /*
+      Cleared before resolving, and this ordering is hygiene rather than a
+      guard. It used to say it stopped "a continuation that asks again during
+      its own resolution being answered by the call it is still inside", which
+      describes something that cannot happen: `resolve()` settles the promise
+      and queues its continuations as microtasks, so nothing awaiting this
+      handoff runs before `answer` has returned, and `pending` is already
+      `null` by then either way.
+
+      Established by execution, not by reading: the mutation audit reported
+      the swapped ordering as a surviving mutant (H1) and proposed a
+      re-entrancy test to close it. That test was written, and the swapped
+      ordering still passed the whole suite — twice, with the comment left in
+      and taken out. It is an equivalent mutant, so there is deliberately no
+      test below pinning the order; a test that cannot fail is worse than none.
+
+      The order is kept because reading `pending` between the two lines would
+      be a latent trap if this ever gained a synchronous callback, and because
+      "clear the slot, then hand over" is the honest reading order.
+    */
     pending = null;
     resolve?.(value);
 

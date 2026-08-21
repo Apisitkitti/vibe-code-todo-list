@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   afterAll,
   beforeAll,
@@ -414,6 +416,35 @@ describe("search stays inside the caller's own rows", () => {
       todoOfB.id,
     ]);
   });
+
+  /**
+   * The title arm's own case-insensitivity, positively.
+   *
+   * `a case-insensitive match on A's title still matches nothing` above looks
+   * like it covers this and does not: it asserts `[]`, which a case-*sensitive*
+   * title arm satisfies just as well — it would return nothing for the reason
+   * the test is not looking at. So the title arm losing `mode: "insensitive"`
+   * survived the whole suite (mutation audit C5) while the note arm's loss was
+   * caught, because only the note arm had a case-folded match it was required
+   * to *find*.
+   *
+   * `errand` is in B's title and in no note anywhere, so this can only pass
+   * through the title arm.
+   *
+   * The audit filed this under "not defects — a gap of one fixture, not of a
+   * property", on the grounds that the property is pinned. Closing it anyway:
+   * one arm of a two-arm `OR` being unwatched is the same shape as the note
+   * arm's escaping gap that `searchWildcards.test.ts` had to be tightened for
+   * once already, and a fixture that only happens to land on the right arm is
+   * exactly the kind of accidental coverage this audit exists to remove.
+   */
+  test("a case-insensitive match on B's own title is found, not merely refused", async () => {
+    const response = await GET(getRequest("/api/todos?query=ERRAND"));
+
+    expect((await readList(response)).todos.map((todo) => todo.id)).toEqual([
+      todoOfB.id,
+    ]);
+  });
 });
 
 describe("signed out, every endpoint refuses and writes nothing", () => {
@@ -428,16 +459,49 @@ describe("signed out, every endpoint refuses and writes nothing", () => {
     expect((await readError(response)).code).toBe("UNAUTHORIZED");
   });
 
+  /**
+   * The two reads below are scoped, and that is not tidiness.
+   *
+   * This test used to read `prisma.todo.count()` account-wide. Two worktrees
+   * resolve the same `todo_app_test`, so any row another suite created between
+   * the two reads landed in this count and failed it — observed twice in one
+   * day with different numbers (`expected 2 to be 8`, then `expected 8 to be
+   * 6`). Reproduced deterministically by creating one unrelated user's row
+   * between the reads: `expected 1 to be +0`. It is not a flake, it is a
+   * global read, and `references/testing.md` says not to write one.
+   *
+   * Scoping does not weaken the claim. A create by a signed-out caller has
+   * exactly two places it could land — attached to one of this file's two
+   * accounts (the `userId` would have to come from somewhere), or somewhere
+   * else under the title it was given. Both are checked, and neither can be
+   * moved by a stranger's row.
+   *
+   * The title carries a fresh id per run, and that is load-bearing rather
+   * than decorative. A fixed title is scoped in the concurrent direction but
+   * not in the *durable* one: while proving this test still discriminates, a
+   * deliberately broken handler wrote one such row onto an unrelated
+   * `@e2e.invalid` account, which no cleanup in this file reaches, and the
+   * assertion then failed on every subsequent run. A per-run title cannot be
+   * satisfied by a row this request did not create.
+   */
   test("POST /api/todos is a 401 and creates nothing", async () => {
-    const before = await prisma.todo.count();
+    const SNEAKED_TITLE = `Sneaked in by a signed-out caller ${randomUUID()}`;
+    const before = await prisma.todo.count({
+      where: { userId: { in: [userA.id, userB.id] } },
+    });
 
     const response = await POST(
-      jsonRequest("/api/todos", "POST", validBody("Sneaked in")),
+      jsonRequest("/api/todos", "POST", validBody(SNEAKED_TITLE)),
     );
 
     expect(response.status).toBe(401);
     expect((await readError(response)).code).toBe("UNAUTHORIZED");
-    expect(await prisma.todo.count()).toBe(before);
+    expect(
+      await prisma.todo.count({
+        where: { userId: { in: [userA.id, userB.id] } },
+      }),
+    ).toBe(before);
+    expect(await prisma.todo.count({ where: { title: SNEAKED_TITLE } })).toBe(0);
   });
 
   test("PATCH /api/todos/[id] is a 401 and the row is untouched", async () => {

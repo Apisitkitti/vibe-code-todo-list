@@ -447,6 +447,104 @@ describe("filterSync", () => {
     expect(abandonPendingPushes(state)).toBe(state);
   });
 
+  /**
+   * Two pushes outstanding at once, which every other sequence in this file
+   * stops one short of.
+   *
+   * The file does build two pending pushes — the "recognises its own echo
+   * anywhere in pending" case needs them — but it never asks `nextUrlState`
+   * what the target is while both are in flight. So "a new push builds on the
+   * newest thing we asked for" was only ever exercised where the newest and
+   * the oldest were the same entry, and `state.pending.at(-1)` could be
+   * `at(0)` with the suite green (mutation audit F1, F1b).
+   *
+   * The window is real: two pushes are outstanding whenever a filter press
+   * lands inside another press's still-unacknowledged `replace`, which on a
+   * slow navigation is a second of ordinary clicking. Building on the oldest
+   * spreads a value the user has already superseded — which is the exact
+   * defect the module's second half exists to stop, arrived at from one press
+   * deeper.
+   */
+  it("builds a third push on the newest target, not the first one still in flight", () => {
+    let state = createFilterSync(url());
+
+    // Press one: status. Nothing has landed, so it is outstanding.
+    state = pushes(state, { status: "active" }).state;
+    // Press two, inside that window: priority, laid over the first press.
+    state = pushes(state, { priority: "high" }).state;
+
+    expect(state.pending).toHaveLength(2);
+
+    // Press three, with both still outstanding. It must carry both.
+    const third = nextUrlState(state, { view: "board" });
+
+    expect(third).toEqual(
+      url({ status: "active", priority: "high", view: "board" }),
+    );
+    // Named individually as well, because the failure is a *dropped* field and
+    // `toEqual` on its own does not say which one went missing.
+    expect(third.filters.status).toBe("active");
+    expect(third.filters.priority).toBe("high");
+  });
+
+  /**
+   * The control for the case above. At depth 1 the newest and the oldest are
+   * the same entry, so this passes under either reading — which is precisely
+   * why depth 1 could never have caught it, and saying that with a test is
+   * cheaper than saying it in a comment alone.
+   */
+  it("agrees with itself at one push deep, where newest and oldest coincide", () => {
+    let state = createFilterSync(url());
+
+    state = pushes(state, { status: "active" }).state;
+
+    expect(state.pending).toHaveLength(1);
+    expect(nextUrlState(state, { view: "board" })).toEqual(
+      url({ status: "active", view: "board" }),
+    );
+  });
+
+  /**
+   * And once the first push lands, the second is still the target — the newest
+   * entry is read from `pending` while it is there and from `applied` only
+   * when nothing is outstanding.
+   */
+  it("keeps building on the outstanding push after the earlier one lands", () => {
+    let state = createFilterSync(url());
+
+    const first = pushes(state, { status: "active" });
+
+    state = first.state;
+
+    const second = pushes(state, { priority: "high" });
+
+    state = lands(second.state, first.pushed);
+
+    expect(state.pending).toHaveLength(1);
+    expect(nextUrlState(state, { view: "board" })).toEqual(
+      url({ status: "active", priority: "high", view: "board" }),
+    );
+  });
+
+  /**
+   * The anchor. Every other assertion about the bound in this file is derived
+   * from `MAX_PENDING_PUSHES`, which is right — a derived assertion survives
+   * the number moving — but it means none of them can fail when the number
+   * moves, and that is the whole point of having one. `8 -> 1000` was green
+   * across the entire suite.
+   *
+   * The module's own comment used to say the constant is exported "so the test
+   * that pins the bound reads the same number the module enforces rather than
+   * a copy of it". That reasoning is exactly what made every assertion
+   * vacuous, and it has been corrected alongside this test.
+   *
+   * The literal is here rather than beside the constant because a change to
+   * the value should have to come past a test, not past a comment.
+   */
+  it("remembers eight pushes, the number the bound is actually set to", () => {
+    expect(MAX_PENDING_PUSHES).toBe(8);
+  });
+
   it("bounds the pending list so a stranded push cannot accumulate", () => {
     let state = createFilterSync(url());
 
@@ -455,9 +553,15 @@ describe("filterSync", () => {
       state = pushes(state).state;
     }
 
-    expect(state.pending.length).toBeLessThanOrEqual(MAX_PENDING_PUSHES);
+    // `toBe`, not `toBeLessThanOrEqual`: a bound that kept three would also
+    // satisfy "at most eight", and keeping too few loses a push that is still
+    // in flight — the failure in the other direction.
+    expect(state.pending.length).toBe(MAX_PENDING_PUSHES);
     // The newest is always kept — it is the one still most likely in flight.
     expect(state.pending.at(-1)?.filters.query).toBe("q39");
+    // And the oldest kept is the newest minus the bound, so the window is the
+    // bound's own width rather than merely no wider than it.
+    expect(state.pending.at(0)?.filters.query).toBe(`q${40 - MAX_PENDING_PUSHES}`);
   });
 
   it("bounds the disowned list too, so it cannot refuse navigations forever", () => {
@@ -469,7 +573,7 @@ describe("filterSync", () => {
       state = abandonPendingPushes(state);
     }
 
-    expect(state.disowned.length).toBeLessThanOrEqual(MAX_PENDING_PUSHES);
+    expect(state.disowned.length).toBe(MAX_PENDING_PUSHES);
   });
 
   it("normalises the way the page does", () => {

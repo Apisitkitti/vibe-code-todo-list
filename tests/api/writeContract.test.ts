@@ -15,10 +15,14 @@ vi.mock("next/headers", () => ({
 }));
 
 import { PATCH as patchDue } from "@/app/api/todos/[id]/due/route";
-import { PATCH as patchFields } from "@/app/api/todos/[id]/route";
+import {
+  DELETE,
+  PATCH as patchFields,
+} from "@/app/api/todos/[id]/route";
 import { PATCH as patchStatus } from "@/app/api/todos/[id]/status/route";
 import { POST } from "@/app/api/todos/route";
 import { prisma } from "@/lib/prisma";
+import { NOTE_MAX_LENGTH } from "@/lib/todo";
 
 import {
   createTestUser,
@@ -27,7 +31,13 @@ import {
   readTodo,
   type TestUser,
 } from "../support/factory";
-import { idContext, jsonRequest, readError, readTodoBody } from "../support/request";
+import {
+  deleteRequest,
+  idContext,
+  jsonRequest,
+  readError,
+  readTodoBody,
+} from "../support/request";
 
 /**
  * The rule that completion is changed only by `/status`, never by a save.
@@ -492,6 +502,247 @@ describe("PATCH /api/todos/[id]/due takes a due date and nothing else", () => {
 
     expect((await readTodo(todo.id))?.dueAt?.toISOString()).toBe(
       "2026-08-16T00:00:00.000Z",
+    );
+  });
+});
+
+/**
+ * What a *successful* delete answers.
+ *
+ * `isolation.test.ts` pins DELETE's 404 twice over — the cross-account refusal
+ * is the property that file exists for — and nothing anywhere asserted the
+ * success path. So the handler could answer `200 {ok:true}`, or a **500**,
+ * having deleted the row, and the suite stayed green (mutation audit I3,
+ * I3b). `deleteTodo` in the service layer branches on the response, and a
+ * client reading a 500 as a failure would leave the row on screen after the
+ * server had destroyed it — the disagreement between the screen and the
+ * database that QA is told to look for.
+ *
+ * 204 rather than 200: there is no body worth sending, and the empty body is
+ * part of the contract rather than an accident of having nothing to say.
+ */
+describe("DELETE /api/todos/[id] answers 204 with nothing in it", () => {
+  test("reports 204, not a 200 with a body and not an error", async () => {
+    const response = await DELETE(
+      deleteRequest(`/api/todos/${todo.id}`),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+  });
+
+  /** And the 204 is telling the truth: the row is gone from the database. */
+  test("the row is actually gone, so the status is not a claim about nothing", async () => {
+    await DELETE(deleteRequest(`/api/todos/${todo.id}`), idContext(todo.id));
+
+    expect(await readTodo(todo.id)).toBeNull();
+  });
+
+  /**
+   * The counterpart that keeps 204 meaning something: deleting the same row
+   * twice is a 404 the second time, so 204 is "I deleted it" rather than "I
+   * have nothing to say about this id".
+   */
+  test("deleting it again is a 404, so 204 means the row was there", async () => {
+    await DELETE(deleteRequest(`/api/todos/${todo.id}`), idContext(todo.id));
+
+    const response = await DELETE(
+      deleteRequest(`/api/todos/${todo.id}`),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(404);
+  });
+});
+
+/**
+ * What `POST` stores in `note`.
+ *
+ * `note` was asserted on the *update* path and never on create, so the create
+ * handler could store every note as `NULL` (mutation audit C14b) — silently
+ * discarding the 2000-character field where the detail actually lives — or
+ * store `""` where the schema means "no note" (C14), with 492 tests passing.
+ *
+ * The `"" -> NULL` mapping is not cosmetic: `null` is what the row renderer
+ * and `todoMatchesFilters` read as "there is no note", and an empty string is
+ * a note that happens to be empty. Both handlers do it, and only one of them
+ * was watched.
+ */
+describe("POST /api/todos stores the note it was given", () => {
+  test("keeps a supplied note verbatim", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", {
+        ...formBody("With a note"),
+        note: "Ring the caterer first",
+      }),
+    );
+
+    expect(response.status).toBe(201);
+
+    const body = await readTodoBody(response);
+
+    expect(body.note).toBe("Ring the caterer first");
+    expect((await readTodo(body.id))?.note).toBe("Ring the caterer first");
+  });
+
+  /** An omitted note is no note, and no note is `NULL` rather than `""`. */
+  test("stores no note as null when the key is absent altogether", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", formBody("Without a note")),
+    );
+
+    expect(response.status).toBe(201);
+
+    const body = await readTodoBody(response);
+
+    expect(body.note).toBeNull();
+    expect((await readTodo(body.id))?.note).toBeNull();
+  });
+
+  /** A cleared textarea sends `""`, and that is the same thing as no note. */
+  test("stores an empty note as null too, the way a save does", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", { ...formBody("Cleared note"), note: "" }),
+    );
+
+    expect(response.status).toBe(201);
+
+    const body = await readTodoBody(response);
+
+    expect(body.note).toBeNull();
+    expect((await readTodo(body.id))?.note).toBeNull();
+  });
+
+  /** Trimmed on the way in, like the title, so whitespace is not a note. */
+  test("stores a note that is only whitespace as null", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", { ...formBody("Blank note"), note: "   " }),
+    );
+
+    expect(response.status).toBe(201);
+    expect((await readTodoBody(response)).note).toBeNull();
+  });
+});
+
+/**
+ * What a 400 actually *says*, as opposed to the fact that it is a 400.
+ *
+ * `grep -rn "fieldErrors" tests/` returned nothing before this block existed.
+ * `tests/api/` asserted `response.status` around forty times and never once
+ * read a validation body, so the whole field-error mechanism could be deleted
+ * — every 400 answering `fieldErrors: {}` and a generic sentence — with 492
+ * tests passing. What a user gets from that is a form that refuses their
+ * input and marks no field, or a toast with no sentence in it.
+ *
+ * The client is the reason these are contract, not decoration: `Form` wires
+ * `fieldErrors` onto inputs by key, and `getErrorMessage` hands `message`
+ * straight to `toast.danger`.
+ *
+ * Note what is *not* asserted here, deliberately. Two of this mechanism's
+ * rules — dropping a zod path the form has no input for, and keeping the
+ * first message per field rather than the last — cannot be reached through
+ * these routes at all, because `todoFormSchema` is a non-strict `z.object`
+ * whose keys are exactly the form's and no field of it collects two failing
+ * checks. An assertion here that "`completed` never appears in `fieldErrors`"
+ * would pass with the guard and without it. Those two live in
+ * `tests/unit/toFieldErrors.test.ts`, at the function, which is the lowest
+ * layer that can fail for the reason they exist.
+ */
+describe("a 400 from validation says which field and why", () => {
+  const invalidBody = {
+    title: "",
+    note: "n".repeat(NOTE_MAX_LENGTH + 1),
+    priority: "urgent",
+    dueAt: "not a date",
+  };
+
+  test("POST marks every field the schema complained about, and only those", async () => {
+    const response = await POST(jsonRequest("/api/todos", "POST", invalidBody));
+
+    expect(response.status).toBe(400);
+
+    const body = await readError(response);
+
+    expect(Object.keys(body.fieldErrors ?? {}).sort()).toEqual([
+      "dueAt",
+      "note",
+      "priority",
+      "title",
+    ]);
+  });
+
+  test("the message on a field is the one the person can act on", async () => {
+    const response = await POST(jsonRequest("/api/todos", "POST", invalidBody));
+    const body = await readError(response);
+
+    expect(body.fieldErrors?.title).toBe("Enter a title.");
+    expect(body.fieldErrors?.priority).toBe("Choose a priority: low, medium, high.");
+  });
+
+  /**
+   * The top-level sentence is what `toast.danger` shows. Without it the code's
+   * generic default surfaces instead, so the toast says "that request wasn't
+   * valid" about a form that has already marked four fields — which is the
+   * one thing it must not do.
+   */
+  test("the toast sentence is the first field's message, not the generic default", async () => {
+    const response = await POST(jsonRequest("/api/todos", "POST", invalidBody));
+    const body = await readError(response);
+
+    expect(body.message).toBe("Enter a title.");
+    expect(body.message).not.toBe("That request wasn’t valid.");
+  });
+
+  /** A single bad field marks that field alone — the block above is not just "everything". */
+  test("only the offending field is marked when the rest of the body is fine", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", { ...formBody("Fine"), priority: "urgent" }),
+    );
+
+    expect(response.status).toBe(400);
+
+    const body = await readError(response);
+
+    expect(Object.keys(body.fieldErrors ?? {})).toEqual(["priority"]);
+    expect(body.message).toBe("Choose a priority: low, medium, high.");
+  });
+
+  test("PATCH answers with the same shape, so the form reads one contract", async () => {
+    const response = await patchFields(
+      jsonRequest(`/api/todos/${todo.id}`, "PATCH", invalidBody),
+      idContext(todo.id),
+    );
+
+    expect(response.status).toBe(400);
+
+    const body = await readError(response);
+
+    expect(body.fieldErrors?.title).toBe("Enter a title.");
+    expect(body.message).toBe("Enter a title.");
+  });
+
+  /**
+   * The counterpart, and the case that stops the four above from being read as
+   * "a 400 always carries fieldErrors". A body the schema never got to see is
+   * nobody's field, and marking one would send the user to an input that is
+   * not the problem.
+   */
+  test("a 400 that no field is to blame for carries no fieldErrors at all", async () => {
+    const response = await POST(
+      jsonRequest("/api/todos", "POST", {
+        ...formBody("Already done"),
+        completed: true,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+
+    const body = await readError(response);
+
+    expect(body.fieldErrors).toBeUndefined();
+    expect(body.message).toBe(
+      "Completion is changed by the checkbox, not by saving the todo.",
     );
   });
 });
