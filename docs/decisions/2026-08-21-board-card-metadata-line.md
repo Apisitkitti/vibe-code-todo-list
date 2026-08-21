@@ -107,3 +107,82 @@ decides whether the proposal is right. Measure it before building it.
   wrapped one. That file's row test is skipped below `sm:` precisely because of
   the 2.00px above, and un-skipping it is how the row half of this proposal
   proves it landed.
+
+---
+
+## Addendum, later on 2026-08-21 — built. This deferral is closed.
+
+*Appended rather than edited: this directory's records are immutable once
+written, and the body above is what was true on 2026-08-21. This says what
+happened next, so nobody reads the deferral as though it still stood.*
+
+**Built on `fix/layout`, both halves in one change**, as the body predicted it
+would have to be. Two of the four expiry conditions had come due — the row's
+`sm:` stacking was being touched anyway, and the row half is the same change —
+and the brief asked for it directly.
+
+### What was measured, and what the body got wrong
+
+Re-measured at 1280×800, five columns, Chromium, before touching anything.
+Everything in *The measurement* table above reproduced exactly:
+
+| Reading | Recorded | Re-measured |
+|---|---|---|
+| Metadata row width | 183.20 | 183.203125 |
+| `TodoActions` | 124.00 | 124.00 |
+| `gap-2` | 8.00 | 8.00 |
+| Budget | 51.20 | 51.203125 |
+| `Low` chip | 48.45 | 48.453125 |
+| `High` chip | 52.16 | 52.15625 |
+
+So the sub-pixel claim holds. The overflow is **0.953125px**, which the body
+and the brief both round to 0.96; it is 0.95 to two places. That is the only
+number in the record that was off, and it is off in the third decimal.
+
+### The cost the body left unmeasured
+
+The body closed with: *"Not verified: that an explicit two-line card is what the
+ui-designer's proposal should become — the height cost to the currently-correct
+cards has not been measured, and it is the thing that decides whether the
+proposal is right."* It is now measured. One-line titles, before → after:
+
+| The card carries | Before | After |
+|---|---|---|
+| nothing (`Medium`, undated) | 94 | 94 |
+| a `Low` chip | 94 | **122** |
+| a `High` chip | 122 | 122 |
+| a date, either chip | 126 | 126 |
+
+**One shape pays, and nothing gets shorter.** A `Low`, undated card grows 28px;
+every other shape is unchanged. The trade is 28px on one shape against a 28px
+step that turned on 0.95px, and it is worth taking — but the record was right
+that this was the number the decision rested on, and it is not free.
+
+The 122/126 step is the date's own line box: `TodoDueDate` is `body-sm` at
+`leading-6` (24px) where a chip is 20px. That is the card carrying more, which
+is what a height is now allowed to mean.
+
+### The row half
+
+`e2e/card-row-parity.spec.ts`'s row test is **no longer skipped below `sm:`**,
+which the body named as the proof that the row half landed. Measured on a Pixel
+7 viewport: the control-to-title-first-line delta on an untriaged, undated,
+noteless row went **2.00px → 0.00px**.
+
+### What the record did not say, and should have
+
+A mobile row that *does* draw a chip sits **12.00px** below its title's first
+line, and always has. The body describes the 2.00px as though a chipped row
+were correct; it is not — the row centres its checkbox against the whole
+stacked block, so the offset is half the metadata line plus the gap. Fixing the
+empty case does not touch it and this change does not claim to. See
+`docs/decisions/2026-08-21-mobile-row-checkbox-against-a-stacked-block.md`.
+
+### What keeps it closed
+
+- `e2e/board-card-shape.spec.ts` — height by content shape, the actions on a
+  line of their own, no empty metadata line, and the card's own `Priority:`
+  announcement, which nothing covered before.
+- `e2e/card-row-parity.spec.ts` — now on both projects.
+- Six mutations were watched red before they were green, including removing the
+  `sr-only` announcement outright.

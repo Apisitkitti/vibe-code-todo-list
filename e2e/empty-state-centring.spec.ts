@@ -1,6 +1,9 @@
 import type { Page } from "@playwright/test";
 
-import { EMPTY_STATE_SYNTAX_HINT } from "./support/copy";
+import {
+  EMPTY_STATE_SYNTAX_HINT,
+  NO_MATCHING_FILTERS_HEADING,
+} from "./support/copy";
 import { expect, test } from "./support/fixtures";
 
 /**
@@ -43,6 +46,25 @@ import { expect, test } from "./support/fixtures";
  * it discriminate.
  */
 const WRAPPING_VIEWPORT = { width: 390, height: 844 };
+
+/**
+ * 320px — the narrowest width this app supports (`docs/DESIGN.md` §4.4,
+ * *"Three targets and 320px"*, and the viewport `e2e/reschedule.spec.ts`
+ * already measures at).
+ *
+ * It exists because of a coverage gap the previous change reported rather than
+ * hid: `align="center"` on the **heading** was asserted and not held. The
+ * heading never wrapped at any width this suite measured, and an unwrapped line
+ * looks centred whether or not it is aligned — the flex container shrinks the
+ * box to fit the text, so its centre is the text's centre either way. A
+ * mutation removing `align="center"` from the heading therefore survived.
+ *
+ * `Nothing here yet` is 144.28px at the `h4` step and cannot be made to wrap
+ * inside the 208px this viewport leaves; nothing short of a width nobody uses
+ * would do it. But it is not the only heading `TodoEmptyState` renders — see
+ * the test below.
+ */
+const NARROWEST_SUPPORTED_VIEWPORT = { width: 320, height: 844 };
 
 /**
  * Sub-pixel only. These are meant to be the same centre line, not two centres
@@ -189,6 +211,67 @@ test.describe("§4.7 — the empty state is centred, line by line", () => {
         .soft(
           Math.abs(line.centre - geometry.centre),
           `${line.owner} “${line.text.slice(0, 28)}…” line ${line.index} (${line.width.toFixed(2)}px wide) sits at ${line.centre.toFixed(2)}, container centre is ${geometry.centre.toFixed(2)}`,
+        )
+        .toBeLessThanOrEqual(CENTRE_TOLERANCE);
+    }
+  });
+
+  /**
+   * The **heading**, wrapped, and the gap this closes.
+   *
+   * The test above measures every rendered line in the empty state, so on paper
+   * it already covers the heading. It did not: at 390px the heading is one line
+   * — 144.28px of text in a 278px box — and a single line box is exactly as wide
+   * as its own text, sitting inside a flex child the container has already
+   * centred. Its centre is the container's centre whatever `text-align` says.
+   * Removing `align="center"` from the heading changed no pixel this suite
+   * looked at, and the mutation survived.
+   *
+   * Closing it does not need a viewport nobody uses. `TodoEmptyState`'s heading
+   * is a **prop**, and `resolveEmptyState` has five branches: the filter branch
+   * says `No todos match these filters`, which is 245.00px and wraps to two
+   * lines (191.63 / 49.31) inside the 208px that 320px leaves. Unaligned, the
+   * 49.31px second line starts at the content edge and lands 79.35px left of
+   * where the first line's centre is — the same failure the teaching line had,
+   * on the heading, at a width the app has committed to.
+   *
+   * The wrap is asserted rather than hoped for, for the reason the note at the
+   * top of this file gives: a heading that stopped wrapping would leave this
+   * passing while measuring nothing.
+   *
+   * Reached by filtering rather than by passing copy in — the branch, the
+   * wording and the width are all the product's, so nothing here is true only
+   * of the test.
+   */
+  test("the heading is centred line by line once it wraps, at the narrowest width the app supports", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await page.setViewportSize(NARROWEST_SUPPORTED_VIEWPORT);
+    await page.goto("/todos");
+
+    // One todo at the untriaged default, so a `high` filter matches none of it.
+    await todos.quickAdd("Sweep the porch");
+    await expect(todos.row("Sweep the porch")).toBeVisible();
+
+    await page.goto("/todos?priority=high");
+    await expect(page.getByText(NO_MATCHING_FILTERS_HEADING)).toBeVisible();
+
+    const geometry = await measureEmptyState(page);
+    const headingLines = geometry.lines.filter(
+      (line) => line.text === NO_MATCHING_FILTERS_HEADING,
+    );
+
+    expect(
+      headingLines.length,
+      `the heading must wrap at ${NARROWEST_SUPPORTED_VIEWPORT.width}px for this test to discriminate; it rendered on ${headingLines.length} line(s)`,
+    ).toBeGreaterThan(1);
+
+    for (const line of headingLines) {
+      expect
+        .soft(
+          Math.abs(line.centre - geometry.centre),
+          `heading line ${line.index} (${line.width.toFixed(2)}px wide) sits at ${line.centre.toFixed(2)}, container centre is ${geometry.centre.toFixed(2)}`,
         )
         .toBeLessThanOrEqual(CENTRE_TOLERANCE);
     }

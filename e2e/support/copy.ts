@@ -193,6 +193,12 @@ export const TRY_AGAIN_LABEL = "Try again";
 /** §7.7 — empty states. */
 export const EMPTY_HEADING = "Nothing here yet";
 export const NO_MATCHES_HEADING = "No matches";
+/**
+ * The heading `resolveEmptyState` reaches for when a status or priority filter
+ * matches none of the account's todos — the longest of the five, and the only
+ * one that wraps inside the 320px this app supports.
+ */
+export const NO_MATCHING_FILTERS_HEADING = "No todos match these filters";
 
 /**
  * §7.18 "Empty state teaching line" / §7.7 — the one worked example of the
