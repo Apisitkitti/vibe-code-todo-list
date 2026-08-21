@@ -67,7 +67,7 @@ import { TodoCard } from "./TodoCard";
  * ## What announces what
  *
  * The **gesture** is announced here, through a polite live region: picked up,
- * dropped, cancelled. The **mutation** is announced by the same §7.19 toast a
+ * dropped, cancelled. The **mutation** is announced by the same §7.21 toast a
  * menu press raises, from `TodoListScreen`. Splitting it that way is what keeps
  * a keyboard user — who never drags, and whose equivalent is the card's
  * reschedule menu — from hearing every move twice.
@@ -306,14 +306,29 @@ export const TodoBoard = ({
                 not reshape the heading tree. The count is `aria-hidden` for
                 the reason it is there: each column's `<ul>` reports its own
                 size natively and more precisely.
+
+                `px-3` for the same reason `SECTION_HEADING` takes `px-4`: the
+                heading starts where its cards start. A card is inset by this
+                column's `p-2` and then by its own `px-3`, so its content begins
+                21px from the column's edge and the heading began at 12. The
+                inset differs from the list's because the card's padding does;
+                the relationship is the same one and is now stated the same way
+                in both views.
               */}
-              <Typography.Heading level={2} className="px-1 text-sm leading-6">
+              <Typography.Heading level={2} className="px-3 text-sm leading-6">
                 {column.heading}
                 <span aria-hidden="true">{` · ${column.todos.length}`}</span>
               </Typography.Heading>
 
               {column.todos.length === 0 ? (
-                <Typography type="body-sm" color="muted" className="px-1 py-2">
+                /*
+                  `px-3` with the heading above it. This line stands where the
+                  cards would be, so it is the fourth place the same nine pixels
+                  showed up; in an empty column it and the heading are the only
+                  two things on screen, and moving one without the other would
+                  have traded a shared misalignment for a visible one.
+                */
+                <Typography type="body-sm" color="muted" className="px-3 py-2">
                   {BOARD_COLUMN_EMPTY[column.id]}
                 </Typography>
               ) : (

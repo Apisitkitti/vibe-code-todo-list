@@ -11,6 +11,7 @@ import { Button, Form, Spinner, Typography } from "@heroui/react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
+import { QUICK_ADD_EXAMPLE } from "@/app/todos/constants";
 import { FormTextField } from "@/components/ui";
 import {
   NO_RELEASE,
@@ -32,7 +33,12 @@ import { quickAddSchema, type QuickAddValues } from "./schema";
 
 /** Copy deck, `docs/DESIGN.md` §7.17. */
 const FIELD_LABEL = "Add a todo";
-const FIELD_PLACEHOLDER = 'Add a todo — try "pay rent friday high"';
+/*
+  Built from `QUICK_ADD_EXAMPLE` rather than written out, because the empty
+  state's syntax line shows the same example (§7.7) and the two must not drift
+  into teaching one parser two vocabularies.
+*/
+const FIELD_PLACEHOLDER = `Add a todo — try "${QUICK_ADD_EXAMPLE}"`;
 const SUBMIT_LABEL = "Add";
 const SUBMIT_PENDING_LABEL = "Adding…";
 const MORE_OPTIONS_LABEL = "More options";

@@ -242,7 +242,7 @@ export const createTodosScreen = (page: Page): TodosScreen => {
   /**
    * `itemLabel` is matched as a prefix rather than exactly: the three quick
    * days render their resolved date beside the word, so `Today`'s accessible
-   * name is `Today Aug 19` (§7.19).
+   * name is `Today Aug 19` (§7.21).
    */
   const reschedule = async (title: string, itemLabel: string) => {
     await openReschedule(title);

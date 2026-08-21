@@ -37,7 +37,7 @@ const todoDueSchema = z.object({ dueAt: z.string().nullable() }).strict();
  * mapping would happily attach one — but there is no form behind this route,
  * and a field error against an input that is not on screen is an error the user
  * cannot act on. They are shown through `toast.danger` instead
- * (`docs/DESIGN.md` §7.19).
+ * (`docs/DESIGN.md` §7.21).
  */
 const DUE_BODY_ONLY_MESSAGE =
   "Only the due date can be changed here. Save the todo's other fields separately.";

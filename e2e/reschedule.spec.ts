@@ -238,7 +238,7 @@ test.describe("the toast reverses exactly what the press changed", () => {
     /*
       Every Undo in the stack reads `Undo`, and the stack is the ordinary case
       at a 12s window — the name is the only thing separating a date revert from
-      a completion revert for a screen-reader user (§7.13, §7.19).
+      a completion revert for a screen-reader user (§7.13, §7.21).
     */
     await expect(
       todos.undoButton.and(

@@ -31,14 +31,14 @@ const boxOf = async (locator: Locator) => {
 
 const seed = async (
   page: Page,
-  seeds: { title: string; dueAt?: string }[],
+  seeds: { title: string; dueAt?: string; priority?: string; note?: string }[],
 ) => {
   for (const item of seeds) {
     const response = await page.request.post("/api/todos", {
       data: {
         title: item.title,
-        note: "",
-        priority: "high",
+        note: item.note ?? "",
+        priority: item.priority ?? "high",
         dueAt: item.dueAt ?? "",
       },
     });
@@ -120,6 +120,87 @@ test.describe("the row's metadata column", () => {
       .evaluate((element) => element.scrollWidth > element.clientWidth);
 
     expect(isTruncated, "the long title truncates inside its column").toBe(true);
+  });
+
+  /**
+   * The same right edge once the default level stopped drawing a chip
+   * (§4.4, §8.4.2).
+   *
+   * A row whose priority is `medium` now renders a `sr-only` `Priority: Medium`
+   * where the chip used to be. `sr-only` is `position: absolute`, so it is not
+   * a flex item and contributes neither width nor a `gap-2` step — but that is
+   * a claim about what the browser does with a utility class, and §1's promise
+   * that *"nothing reflows between rows"* is exactly the promise this project
+   * has previously asserted in prose and not delivered. So it is measured.
+   *
+   * Four rows, covering both axes of the cluster's contents:
+   *
+   * | Row | chip | date |
+   * |---|---|---|
+   * | `Milk` | yes | yes |
+   * | `Sweep` | yes | no |
+   * | `Rinse` | no | yes |
+   * | `Fold` | no | no (note marker only) |
+   *
+   * The last row is why the note is there at all: with neither a chip nor a
+   * date, the cluster has no child to locate it by, and a zero-width empty div
+   * is precisely the case where a stray gap would go unnoticed. The `✎` marker
+   * gives the cluster something to be found by without changing what is being
+   * measured.
+   */
+  test("lands at one right edge whether or not the row draws a chip", async ({
+    signedIn: page,
+    todos,
+  }) => {
+    await page.setViewportSize(DESKTOP);
+    await seed(page, [
+      { title: "Milk", dueAt: localDay(7), priority: "high" },
+      { title: "Sweep", priority: "high" },
+      { title: "Rinse", dueAt: localDay(7), priority: "medium" },
+      { title: "Fold", priority: "medium", note: "a note to find it by" },
+    ]);
+
+    await expect(todos.row("Fold")).toBeVisible();
+
+    /*
+      Each cluster located through whichever child that row actually has. The
+      cluster carries no `data-*` hook of its own and inventing one for a test
+      would be a styling hook wearing a contract's clothes — `data-slot` on the
+      chip, `<time>` and the note's own visually-hidden text are all things the
+      row publishes for its own reasons.
+    */
+    const clusters = {
+      "chip + date": todos
+        .row("Milk")
+        .locator('[data-slot="chip"]')
+        .locator("xpath=.."),
+      "chip, no date": todos
+        .row("Sweep")
+        .locator('[data-slot="chip"]')
+        .locator("xpath=.."),
+      "no chip, date": todos.row("Rinse").locator("time").locator("xpath=.."),
+      "no chip, no date": todos
+        .row("Fold")
+        .getByText("Has a note")
+        .locator("xpath=.."),
+    };
+
+    const rightEdges = new Map<string, number>();
+
+    for (const [label, locator] of Object.entries(clusters)) {
+      const box = await boxOf(locator);
+
+      rightEdges.set(label, box.x + box.width);
+    }
+
+    const reference = rightEdges.get("chip + date")!;
+
+    for (const [label, edge] of rightEdges) {
+      expect(
+        Math.abs(edge - reference),
+        `${label}: right edge ${edge.toFixed(2)} vs ${reference.toFixed(2)} — a row that draws no chip must not shift the column (§1)`,
+      ).toBeLessThan(1);
+    }
   });
 
   /**
