@@ -129,11 +129,48 @@ export const TodoFilters = ({
         </Select.Popover>
       </Select>
 
+      {/*
+        `min-w-0` here is the row-level twin of the one on the input below, and
+        it was missing: the input could yield inside the group, and the group
+        could not yield inside the row.
+
+        A flex item's automatic minimum size is its min-content size, so
+        `SearchField` refused to shrink below 242px however much the row needed.
+        That was survivable while the row held three controls and did not
+        survive the view toggle arriving at the end of it (§4.11,
+        `docs/decisions/2026-08-21-view-toggle-after-the-query-controls.md`).
+        Measured on that code, at `lg` and above: the row's contents were 688px
+        in a 608px box — the toggle's 111 plus a 12px gap, less the 43 the
+        priority select and the search field had left to give — and the surplus
+        painted 80px past the shell that the heading block, the quick-add bar
+        and the Card all end at. That record's "the search field's `sm:ml-auto`
+        still takes the row's slack" was the wrong half of the sentence: at `lg`
+        there is no slack, and `ml-auto` on a fully-compressed row distributes
+        nothing.
+
+        Every width from 1024 up, because `main` is `max-w-2xl`: the content box
+        is 608px at 1024 and at 1440 alike, so this never depended on the
+        viewport and 1280 was never a width at which it happened to fit.
+
+        The search field is the right control to take it. It is the only one in
+        the row whose usefulness degrades continuously with width — an input
+        scrolls its own text — where the two toggle groups and the select would
+        each have to drop or truncate a label to give up the same 80px. The cost
+        is that at `lg` the field settles at 162px instead of its 256px cap and
+        shows fewer characters of the query at once. `e2e/page-alignment.spec.ts`
+        holds the result on both axes.
+
+        **This makes the input's own `min-w-0` load-bearing at a width the app
+        actually renders**, where before it only mattered under
+        `e2e/a11y-targets.spec.ts`'s synthetic squeeze. Removing it now fails
+        that suite's natural-width sweep as well as the squeezed one — measured,
+        as a mutation, on this change.
+      */}
       <SearchField
         aria-label="Search todos"
         value={query}
         onChange={onQueryChange}
-        className="w-full sm:ml-auto sm:max-w-64"
+        className="w-full min-w-0 sm:ml-auto sm:max-w-64"
       >
         <SearchField.Group className={LABELLED_CONTROL_SIZING}>
           <SearchField.SearchIcon />
