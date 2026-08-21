@@ -31,6 +31,25 @@ const PRIORITY_CHIP_STYLES: Record<
   low: { color: "default", variant: "tertiary" },
 };
 
+/**
+ * Whether this level draws anything a sighted reader can see.
+ *
+ * `TodoRow` and `TodoCard` render their metadata line only when it has visible
+ * content, and "is there a chip" is half of that question — so they have to ask
+ * it. Derived from `PRIORITY_CHIP_STYLES` rather than written as
+ * `priority !== "medium"`, so this file stays the only one that knows which
+ * levels draw: give `medium` a chip, or add a fourth level, and both callers
+ * follow without being edited. The docblock above already warns that the
+ * `medium` case is the one somebody will change.
+ *
+ * It says nothing about the *announcement*, which every level carries — see the
+ * comment in the component below. A caller that skipped the chip on the strength
+ * of this and dropped the `sr-only` with it would be trading a visual absence a
+ * sighted user infers for silence a screen-reader user cannot.
+ */
+export const priorityDrawsChip = (priority: TodoPriority): boolean =>
+  priority in PRIORITY_CHIP_STYLES;
+
 export interface PriorityChipProps {
   priority: TodoPriority;
 }

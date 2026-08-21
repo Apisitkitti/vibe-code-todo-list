@@ -1458,6 +1458,12 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
       />
 
       {/*
+        The view toggle rides at the end of the filter row rather than on a
+        shell band of its own (§4.11, and `TodoFilters` for what that buys). It
+        is passed in rather than owned there because the view is a presentation
+        choice and the rest of that row is the query the API is asked — the same
+        split `page.tsx` makes when it reads the two apart.
+
         Not rendered below `lg`, where the board would not render even if it
         were chosen (`BOARD_MEDIA_QUERY`). A control that changes nothing is
         worse than an absent one: it would report `Board` as selected while the
@@ -1472,28 +1478,33 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
         filter's one. That was a real ambiguity and not only a test's problem —
         the mobile document was carrying a second, inert radiogroup named
         `Choose a view`, which is exactly the sort of thing that ends up
-        announced to somebody.
+        announced to somebody. `e2e/board.spec.ts` asserts the absence at the
+        DOM level for exactly that reason, so this must stay a render decision
+        even now that the toggle sits inside a row that is itself conditional.
 
         Safe against hydration because `isWideEnoughForBoard` is the same
         two-pass reading the board itself uses: false on the server and on the
         first client render, so the markup agrees before the layout effect
         flips it.
 
-        Gated on `hasTodos` like the filter bar beside it, and for the same
-        reason — there is nothing to look at two ways yet.
+        The `hasTodos` gate is now the filter row's own, which is where it
+        always pointed: both controls were gated on it separately and for the
+        same reason — there is nothing to look at two ways yet.
       */}
-      {hasTodos && isWideEnoughForBoard ? (
-        <div className="flex justify-end">
-          <ViewToggle view={view} onSelectView={(next) => urlSync.push({ view: next })} />
-        </div>
-      ) : null}
-
       {hasTodos ? (
         <TodoFilters
           filters={filters}
           query={urlSync.query}
           onQueryChange={urlSync.setQuery}
           onFilterChange={urlSync.push}
+          viewToggle={
+            isWideEnoughForBoard ? (
+              <ViewToggle
+                view={view}
+                onSelectView={(next) => urlSync.push({ view: next })}
+              />
+            ) : undefined
+          }
         />
       ) : null}
 

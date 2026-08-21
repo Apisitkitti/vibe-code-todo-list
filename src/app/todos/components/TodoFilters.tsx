@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 import {
   Label,
   ListBox,
@@ -30,6 +32,23 @@ export interface TodoFiltersProps {
   query: string;
   onQueryChange: (value: string) => void;
   onFilterChange: (change: UrlStateChange) => void;
+  /**
+   * The view toggle, which rides at the end of this row (§4.11) but is **not**
+   * one of these controls — hence a slot rather than a `view` prop.
+   *
+   * The view is a presentation choice; everything else in this row is part of
+   * the query the API is asked, which is why `page.tsx` reads the two apart in
+   * the first place. Taking `view` and `onSelectView` here would put a
+   * `TodoView` inside the component named after the filters and invite the two
+   * to be handed on together.
+   *
+   * `undefined` below `lg`, where the board does not exist. **Absent, not
+   * hidden**: a `display: none` radiogroup is still a radiogroup in the
+   * document, `getByRole` cannot see the difference, and one was found being
+   * announced as `Choose a view` on a phone that has no board. The owner makes
+   * that call — see `TodoListScreen`.
+   */
+  viewToggle?: ReactNode;
 }
 
 /**
@@ -47,6 +66,7 @@ export const TodoFilters = ({
   query,
   onQueryChange,
   onFilterChange,
+  viewToggle,
 }: TodoFiltersProps) => {
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -182,6 +202,28 @@ export const TodoFilters = ({
           />
         </SearchField.Group>
       </SearchField>
+
+      {/*
+        §4.11: "a `ToggleButtonGroup` above the list, matching the status filter
+        beside it". It shipped above this row instead, alone and right-aligned
+        on a band of its own, which cost 60px of chrome above the fold and left
+        the toggle and the search field as two right-aligned controls stacked
+        with nothing to their left.
+
+        Structurally free: both are `ToggleButtonGroup`s at
+        `LABELLED_CONTROL_SIZING`, so they already sat at the same height, and
+        both were already gated on `hasTodos`, so nothing changes about when
+        they appear. The search field's `sm:ml-auto` still takes the row's
+        slack, so the two of them close up at the end of it.
+
+        It also halves a jump: on the first todo `hasTodos` flips and this row
+        appears, and on desktop the toggle appeared with it, so the Card dropped
+        ~120px in one frame instead of ~60. The jump itself is accepted and not
+        fixed — `result.totalCount` is account-wide rather than filtered, so any
+        threshold above one todo produces a state where the URL is filtering and
+        the control that says so is off screen.
+      */}
+      {viewToggle}
     </div>
   );
 };
