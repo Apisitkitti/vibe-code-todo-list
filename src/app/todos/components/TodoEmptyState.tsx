@@ -5,6 +5,16 @@ import { LABELLED_CONTROL_SIZING } from "@/lib/styles";
 export interface TodoEmptyStateProps {
   heading: string;
   body: string;
+  /**
+   * One line teaching the quick-add vocabulary, under the body copy (§7.7).
+   *
+   * Optional, and only one of `resolveEmptyState`'s five branches passes it:
+   * the never-used account. `No matches` must not teach syntax — a user who has
+   * already typed a search is not meeting the parser for the first time, and
+   * answering "your search found nothing" with "here is how to write a due
+   * date" is the app talking about itself instead of about their question.
+   */
+  hint?: string;
   actionLabel?: string;
   onAction?: () => void;
 }
@@ -16,6 +26,7 @@ export interface TodoEmptyStateProps {
 export const TodoEmptyState = ({
   heading,
   body,
+  hint,
   actionLabel,
   onAction,
 }: TodoEmptyStateProps) => {
@@ -43,6 +54,19 @@ export const TodoEmptyState = ({
       <Typography type="body-sm" color="muted">
         {body}
       </Typography>
+      {/*
+        The one distinctive thing this product does was taught only in a
+        placeholder that vanishes on the first keystroke (§7.7). A tester put it
+        plainly: *"I have no idea what 'high' means. Is that the priority? …
+        Nobody told me, and I didn't figure it out."* This is where they are
+        told, once, on the one screen where nothing else is competing for the
+        space.
+      */}
+      {hint ? (
+        <Typography type="body-sm" color="muted">
+          {hint}
+        </Typography>
+      ) : null}
       {/*
         `secondary`, not `primary` (`docs/DESIGN.md` §1, §4.7).
 

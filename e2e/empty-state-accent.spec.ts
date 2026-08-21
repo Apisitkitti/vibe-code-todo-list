@@ -9,7 +9,6 @@ import {
   pinThemeBeforeLoad,
   THEMES,
   type Rgba,
-  type Theme,
 } from "./support/contrast";
 import { EMPTY_STATE_ACTION_LABEL, QUICK_ADD_SUBMIT_LABEL } from "./support/copy";
 import { expect, test } from "./support/fixtures";

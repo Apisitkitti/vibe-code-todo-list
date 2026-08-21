@@ -13,7 +13,11 @@ import {
 } from "@heroui/react";
 import { useFocusVisible } from "react-aria";
 
-import { PAGE_HEADING, TRY_AGAIN_LABEL } from "@/app/todos/constants";
+import {
+  PAGE_HEADING,
+  QUICK_ADD_EXAMPLE,
+  TRY_AGAIN_LABEL,
+} from "@/app/todos/constants";
 import { useTodoList } from "@/app/todos/hooks/useTodoList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDueDate } from "@/lib/date";
@@ -141,6 +145,34 @@ const UNDO_WINDOW_MS = 12_000;
 const ADD_TODO_LABEL = "Add a todo";
 
 /**
+ * The one place the quick-add vocabulary is taught (`docs/DESIGN.md` §7.18,
+ * "Empty state teaching line"; §7.7 for which state may carry it).
+ *
+ * The parser is the one distinctive thing this product does, and until now it
+ * was taught only in a placeholder that disappears on the first keystroke — so
+ * the people who most need it are the ones who never finish reading it. A
+ * tester reported it verbatim: *"I have no idea what 'high' means. Is that the
+ * priority? Is that part of the syntax? Nobody told me, and I didn't figure it
+ * out."*
+ *
+ * **The wording is the copy deck's, not this file's.** §7.18 already carried
+ * the string; it is reproduced here rather than improvised, which is the rule
+ * for every other string in this screen.
+ *
+ * `QUICK_ADD_EXAMPLE` is interpolated because the bar's placeholder shows the
+ * same example and the two must not teach one parser two vocabularies. **Only
+ * the example is shared, and the rest of this sentence is not
+ * example-agnostic**: `pay rent`, `Friday` and `High` are that example's own
+ * reading spelled out, so changing the constant means rewriting the deck entry
+ * and this line with it. Said plainly here because the interpolation otherwise
+ * reads like a promise that it adapts.
+ *
+ * Only the never-used branch of `resolveEmptyState` takes it — see the note on
+ * `TodoEmptyState`'s `hint` prop, and §7.7, for why `No matches` must not.
+ */
+const QUICK_ADD_SYNTAX_HINT = `A day and a priority at the end are read — “${QUICK_ADD_EXAMPLE}” becomes “pay rent”, due Friday, High priority.`;
+
+/**
  * Failure fallbacks from the copy deck (`docs/DESIGN.md` §7.9, §7.13, §7.15),
  * named because each is now read from more than one place: the toggle and its
  * Undo share one code path, and both kinds of Undo report the same wording.
@@ -192,6 +224,8 @@ interface RescheduleOutcome {
 interface EmptyStateCopy {
   heading: string;
   body: string;
+  /** Set by the never-used branch alone — see `resolveEmptyState`. */
+  hint?: string;
   actionLabel?: string;
   onAction?: () => void;
 }
@@ -1150,6 +1184,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
       return {
         heading: "Nothing here yet",
         body: "Add your first todo and it will show up here.",
+        hint: QUICK_ADD_SYNTAX_HINT,
         actionLabel: ADD_TODO_LABEL,
         // Signposts the bar rather than opening a second way to do the same
         // thing (`docs/DESIGN.md` §7.18).
@@ -1246,6 +1281,7 @@ export const TodoListScreen = ({ filters, view }: TodoListScreenProps) => {
         <TodoEmptyState
           heading={emptyState.heading}
           body={emptyState.body}
+          hint={emptyState.hint}
           actionLabel={emptyState.actionLabel}
           onAction={emptyState.onAction}
         />

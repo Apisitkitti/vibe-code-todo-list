@@ -5,10 +5,15 @@ import {
   CHIP_HINT,
   CREATE_FAILURE,
   CREATE_MODAL_HEADING,
+  EMPTY_HEADING,
   EMPTY_STATE_ACTION_LABEL,
+  EMPTY_STATE_SYNTAX_HINT,
   INTERNAL_ERROR_MESSAGE,
   MORE_OPTIONS_LABEL,
   NO_DATE_HEADING,
+  NO_MATCHES_HEADING,
+  QUICK_ADD_EXAMPLE,
+  QUICK_ADD_PLACEHOLDER,
   QUICK_ADD_SUBMIT_LABEL,
   TITLE_FIELD_LABEL,
   addedToast,
@@ -819,5 +824,83 @@ test.describe("quick-add bar", () => {
 
     await expect(page.getByText("No todos match these filters")).toBeVisible();
     await expect(todos.quickAddInput).toBeVisible();
+  });
+});
+
+/**
+ * §7.7 — the empty state teaches the vocabulary, **once**.
+ *
+ * The parser is the one distinctive thing this product does and it was taught
+ * only in a placeholder that vanishes on the first keystroke, so the people who
+ * most need it are the ones who never finish reading it. A tester put it
+ * verbatim: *"I have no idea what 'high' means. Is that the priority? Is that
+ * part of the syntax? Nobody told me, and I didn't figure it out."*
+ *
+ * Two halves, and the second is the one with teeth. `resolveEmptyState` has
+ * five branches and only the never-used one may teach syntax — a user who has
+ * already typed a search is not meeting the parser for the first time, and
+ * answering "your search found nothing" with "here is how to write a due date"
+ * is the app talking about itself instead of about their question.
+ */
+test.describe("§7.7 — the empty state teaches the quick-add vocabulary once", () => {
+  test("the never-used state names the syntax with the placeholder's own example", async ({
+    todos,
+    signedIn: page,
+  }) => {
+    await expect(
+      page.getByRole("heading", { name: EMPTY_HEADING, exact: true }),
+    ).toBeVisible();
+
+    const hint = page.getByText(EMPTY_STATE_SYNTAX_HINT, { exact: true });
+
+    await expect(hint).toBeVisible();
+
+    /*
+      One vocabulary, not two: the line and the bar's placeholder must show the
+      same example. Asserted against this suite's own copy of the string rather
+      than against the app's constant, so the two drifting apart is something a
+      test can still see.
+    */
+    await expect(hint).toContainText(QUICK_ADD_EXAMPLE);
+    await expect(todos.quickAddInput).toHaveAttribute(
+      "placeholder",
+      QUICK_ADD_PLACEHOLDER,
+    );
+
+    /*
+      One line and one example. A second worked example here would be the
+      feature documenting itself on the first screen a new account sees, which
+      is the thing §7.7 is refusing — so the count is pinned, not just the
+      presence.
+    */
+    const exampleCount = await hint.evaluate(
+      (element, example) =>
+        (element.textContent ?? "").split(example).length - 1,
+      QUICK_ADD_EXAMPLE,
+    );
+
+    expect(exampleCount, "the syntax line shows one example").toBe(1);
+  });
+
+  test("No matches does not teach syntax", async ({ todos, signedIn: page }) => {
+    await todos.quickAdd(TODO_TITLE);
+    await expect(todos.row(TODO_TITLE)).toBeVisible();
+
+    await page.goto("/todos?q=nothingmatchesthis");
+
+    await expect(
+      page.getByRole("heading", { name: NO_MATCHES_HEADING, exact: true }),
+    ).toBeVisible();
+
+    /*
+      Scoped to the Card, not the page: the bar's placeholder legitimately
+      carries the example a few pixels above, and an unscoped assertion would
+      be reporting the placeholder while claiming something about the empty
+      state.
+    */
+    await expectAbsentNow(
+      page.locator("main").getByText(EMPTY_STATE_SYNTAX_HINT),
+      "the No matches empty state taught the parser's syntax",
+    );
   });
 });

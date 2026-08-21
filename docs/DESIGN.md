@@ -2119,6 +2119,18 @@ a modal that is no longer what the button does. This row supersedes the
 | Empty state action (no todos) | `Add a todo` |
 | Empty state teaching line (no todos only) | `A day and a priority at the end are read — “pay rent friday high” becomes “pay rent”, due Friday, High priority.` |
 
+**Shipped.** `TodoEmptyState` takes an optional `hint`, rendered as a second
+`body-sm` `--muted` line under the body copy, and only `resolveEmptyState`'s
+never-used branch passes it. The example is held once as `QUICK_ADD_EXAMPLE`
+(`src/app/todos/constants`) and read by both this line and §7.17's placeholder,
+so the two cannot drift into teaching one parser two vocabularies — but **only
+the example is shared**: `pay rent`, `Friday` and `High` in the sentence above
+are that example's own reading spelled out, so changing the constant means
+rewriting this row with it. Pinned in `e2e/quick-add.spec.ts`, which asserts the
+line on the never-used state, that it shows exactly one example, that the
+placeholder still shows the same one, and that `No matches` carries no such
+line.
+
 Rendered as `<Typography type="body-sm" color="muted">`, below the body and
 above the action, and **only in the `Nothing here yet` state** (§7.7). It is
 one line and it carries one example, deliberately.

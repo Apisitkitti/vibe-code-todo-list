@@ -48,6 +48,12 @@ export const doneCount = (done: number, total: number) =>
  */
 export const QUICK_ADD_LABEL = "Add a todo";
 export const QUICK_ADD_PLACEHOLDER = 'Add a todo — try "pay rent friday high"';
+/*
+  Written out rather than built from `QUICK_ADD_EXAMPLE` below, and that is the
+  point: the app builds *both* of its two showings from one constant, so a test
+  that also shared one string could not catch the two drifting apart. This is
+  the independent copy.
+*/
 export const QUICK_ADD_SUBMIT_LABEL = "Add";
 export const MORE_OPTIONS_LABEL = "More options";
 export const CHIP_GROUP_LABEL = "Read from your text";
@@ -186,6 +192,23 @@ export const TRY_AGAIN_LABEL = "Try again";
 
 /** §7.7 — empty states. */
 export const EMPTY_HEADING = "Nothing here yet";
+export const NO_MATCHES_HEADING = "No matches";
+
+/**
+ * §7.18 "Empty state teaching line" / §7.7 — the one worked example of the
+ * quick-add vocabulary, and the one line that teaches it.
+ *
+ * The example is shared with the bar's placeholder in the app (`QUICK_ADD_EXAMPLE`
+ * in `src/app/todos/constants`), so it is written out once here too — a test
+ * that hard-coded a second example would pass while the product taught two.
+ *
+ * Curly quotes: this is prose in an empty state, so §7.19's punctuation note
+ * applies, where the placeholder is a field hint and uses straight quotes. The
+ * two are not interchangeable and asserting the wrong one silently matches
+ * nothing.
+ */
+export const QUICK_ADD_EXAMPLE = "pay rent friday high";
+export const EMPTY_STATE_SYNTAX_HINT = `A day and a priority at the end are read — ${quoted(QUICK_ADD_EXAMPLE)} becomes ${quoted("pay rent")}, due Friday, High priority.`;
 
 /** §7.16 — the list's section headings, in the order the list shows them. */
 export const OVERDUE_HEADING = "Overdue";
