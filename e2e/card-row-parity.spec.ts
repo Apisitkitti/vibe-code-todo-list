@@ -140,26 +140,25 @@ test.describe("a card's checkbox and its title", () => {
    * is asserted rather than taken on trust so that a "fix" reached by loosening
    * the row instead would fail in the same file that proposed it.
    *
-   * **Desktop only, and that is a finding rather than a convenience.** Below
-   * `sm:` the row stacks its title and its metadata cluster in a `flex-col`,
-   * and the cluster is rendered even when it is empty — an untriaged, undated,
-   * noteless todo draws a zero-height `div` that still takes the `gap-1` before
-   * it. The checkbox is then centred against a block 4px taller than the title,
-   * so a mobile row measures 2.00px rather than 0.00. That is the same defect
-   * class as the card's and it is older than this change; it is recorded in
-   * `docs/decisions/2026-08-21-board-card-metadata-line.md`, whose proposal —
-   * render a metadata line only when it has content — is the fix for both.
+   * **Both viewports, and the mobile half is the one this file used to skip.**
+   * Below `sm:` the row stacks its title and its metadata cluster in a
+   * `flex-col`. The cluster used to be rendered even when it had nothing to
+   * draw — an untriaged, undated, noteless todo emitted a zero-height `div`
+   * that still took the `gap-1` before it, so the checkbox was centred against
+   * a block 4px taller than the title and the row measured 2.00px instead of
+   * 0.00. `TodoRow` now renders the metadata line only when it has visible
+   * content, and this test runs on mobile as a result.
+   *
+   * The seed matters: `seed` posts `priority: "medium"` with no date and no
+   * note, which is exactly the shape that produced the 2.00px. A row that
+   * happened to carry a chip would measure the *stacked* offset instead and
+   * would not discriminate — see the note on the mobile-only test below, which
+   * is where that case is recorded.
    */
   test("the row it is meant to match already does", async ({
     signedIn: page,
     todos,
-    isMobile,
   }) => {
-    test.skip(
-      isMobile === true,
-      "below sm: the row centres against an empty metadata slot — see this test's note",
-    );
-
     await seed(page, [SHORT_TITLE]);
     await page.reload();
 
